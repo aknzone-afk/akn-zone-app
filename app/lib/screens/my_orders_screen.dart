@@ -213,8 +213,7 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                         ? TextButton(
                             // Owner: "SEE ORDER" (not Order again) → the full order.
                             onPressed: () => context.push('/order-detail/${Uri.encodeComponent(o.number)}'),
-                            child: const Text('SEE
-ORDER',
+                            child: const Text('SEE ORDER',
                                 textAlign: TextAlign.center,
                                 style: TextStyle(fontWeight: FontWeight.w900)),
                           )
