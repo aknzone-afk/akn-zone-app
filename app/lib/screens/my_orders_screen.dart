@@ -219,7 +219,7 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                         if (sent && (_st[o.number]?.lr ?? '').isNotEmpty)
                           Padding(
                             padding: const EdgeInsets.only(top: 4),
-                            child: Text('🚚 ${_st[o.number]!.lr}',
+                            child: Text('📄 ${_st[o.number]!.lr}',
                                 style: const TextStyle(fontWeight: FontWeight.w700)),
                           ),
                       ],
@@ -257,8 +257,8 @@ class _Steps extends StatelessWidget {
   final String? status;
   const _Steps({required this.status});
 
-  static const _keys = ['received', 'getting_ready', 'bill_sent', 'payment_received', 'dispatched', 'delivered'];
-  static const _names = ['Sent to shop', 'Getting order ready', 'Bill sent for payment', 'Payment received', 'Dispatched', 'Delivered'];
+  static const _keys = ['received', 'getting_ready', 'bill_sent', 'payment_received', 'dispatched', 'bilty'];
+  static const _names = ['Sent to shop', 'Getting order ready', 'Bill sent for payment', 'Payment received', 'Dispatched', 'Bilty'];
 
   @override
   Widget build(BuildContext context) {

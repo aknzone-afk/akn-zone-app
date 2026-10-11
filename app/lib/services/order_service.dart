@@ -252,14 +252,14 @@ class OrderService {
         'bill_sent' => '🧾 Bill sent for payment',
         'payment_received' => '💰 Payment received',
         'dispatched' => '🚚 Dispatched',
-        'delivered' => '✅ Delivered',
+        'bilty' => '📄 Bilty',
         _ => 'Sent to shop ✓',
       };
 
   /// Step row for My Orders (owner): every step, ticked once it happened.
   static String stepsLine(String? s) {
-    const steps = ['received', 'getting_ready', 'bill_sent', 'payment_received', 'dispatched', 'delivered'];
-    const names = ['Sent to shop', 'Getting order ready', 'Bill sent for payment', 'Payment received', 'Dispatched', 'Delivered'];
+    const steps = ['received', 'getting_ready', 'bill_sent', 'payment_received', 'dispatched', 'bilty'];
+    const names = ['Sent to shop', 'Getting order ready', 'Bill sent for payment', 'Payment received', 'Dispatched', 'Bilty'];
     final done = s == null ? 0 : steps.indexOf(s);
     return [
       for (var i = 0; i < steps.length; i++)

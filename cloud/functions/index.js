@@ -226,10 +226,13 @@ const TG_SECRET = defineSecret("BBAPP_TG_SECRET");
 // name); tapping the LATEST done step again undoes it.
 const STEPS = [
   { k: "g", status: "getting_ready", label: "🧺 Maal nikalna chalu", by: "readyBy", at: "readyAt" },
-  { k: "b", status: "bill_sent", label: "🧾 Bill sent for payment", by: "billBy", at: "billAt", auto: true },
+  { k: "b", status: "bill_sent", label: "🧾 Bill sent for payment", by: "billBy", at: "billAt", auto: true,
+    wait: "⏳ Waiting for bill (post it in the Bill group)" },
   { k: "y", status: "payment_received", label: "💰 Payment received", by: "paidBy", at: "paidAt" },
-  { k: "d", status: "dispatched", label: "🚚 Dispatched", by: "dispatchedBy", at: "dispatchedAt" },
-  { k: "v", status: "delivered", label: "✅ Delivered", by: "deliveredBy", at: "deliveredAt" },
+  { k: "d", status: "dispatched", label: "🚚 Dispatched", by: "dispatchedBy", at: "dispatchedAt", auto: true,
+    wait: "⏳ Dispatched ticks when the parcel date is in Daily Parcels" },
+  { k: "l", status: "bilty", label: "📄 Bilty", by: "biltyBy", at: "biltyAt", auto: true,
+    wait: "⏳ Bilty ticks when the bilty no. is entered" },
 ];
 const ORDER = ["received", ...STEPS.map((x) => x.status)];
 const PACK_AFTER_MS = 3 * 3600 * 1000;
@@ -271,7 +274,7 @@ function statusKeyboard(ref, d) {
   }
   const next = STEPS.find((x) => ORDER.indexOf(x.status) === ci + 1);
   if (next && next.auto) {
-    rows.push([{ text: "⏳ Waiting for bill (post it in the Bill group)", callback_data: "n" }]);
+    rows.push([{ text: next.wait || "⏳ Waiting", callback_data: "n" }]);
   } else if (next) {
     let show = true;
     if (next.status === "packed") {
@@ -561,6 +564,11 @@ const normName = (x) => String(x || "").toUpperCase().replace(/\(.*?\)/g, " ").r
 async function autoStep(db, ref, k, by, extra) {
   const step = STEPS.find((x) => x.k === k);
   const docRef = db.collection("bbapp_orders").doc(ref);
+  const before = (await docRef.get()).data() || {};
+  if (ORDER.indexOf(before.status || "received") >= ORDER.indexOf(step.status)) {
+    if (extra && Object.keys(extra).length) await docRef.set(extra, { merge: true });
+    return before;
+  }
   await docRef.set({ status: step.status, [step.by]: by, [step.at]: admin.firestore.FieldValue.serverTimestamp(),
     statusAt: admin.firestore.FieldValue.serverTimestamp(),
     log: admin.firestore.FieldValue.arrayUnion({ a: "do", k, by, at: Date.now(), uid: 0 }), ...(extra || {}) }, { merge: true });
@@ -636,5 +644,43 @@ exports.paymentProof = onRequest(
       await autoStep(db, ref, "y", d.billName || "party", {});
     }
     return res.json({ ok: true });
+  },
+);
+
+
+/* ───────────── DISPATCH + BILTY from the Daily Parcel Report (owner 11-Oct) ─────────────
+ * The shop PC (CLE\AKNZonePieces\dispatch_sync.py) reads the Daily Parcel
+ * Report Excel (read-only) every 15 min and posts {billNo, parcelDate, bilty}
+ * rows here. An order whose bill no. (read off the bill in the Bill group)
+ * shows a parcel date ticks Dispatched; a bilty no. ticks Bilty.
+ */
+const normBill = (x) => String(x || "").toUpperCase().replace(/\s+/g, "");
+exports.syncDispatch = onRequest(
+  { region: "asia-south1", secrets: [TG_TOKEN], timeoutSeconds: 120, memory: "256MiB", maxInstances: 1, invoker: "public" },
+  async (req, res) => {
+    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    const rows = (req.body && req.body.rows) || [];
+    const byBill = new Map();
+    for (const r of rows) if (r && r.billNo) byBill.set(normBill(r.billNo), r);
+    const db = admin.firestore();
+    const snap = await db.collection("bbapp_orders").where("status", "in", ["bill_sent", "payment_received", "dispatched"]).get();
+    let disp = 0, bil = 0;
+    for (const doc of snap.docs) {
+      const d = doc.data();
+      const r = d.billNo && byBill.get(normBill(d.billNo));
+      if (!r) continue;
+      if (r.parcelDate && ORDER.indexOf(d.status) < ORDER.indexOf("dispatched")) {
+        await autoStep(db, doc.id, "d", `Daily Parcels (${r.parcelDate})`, { parcelDate: String(r.parcelDate) });
+        disp++;
+      }
+      if (r.bilty) {
+        const cur = ((await doc.ref.get()).data() || {}).status;
+        if (ORDER.indexOf(cur) < ORDER.indexOf("bilty")) {
+          await autoStep(db, doc.id, "l", "Bilty entry", { lr: `Bilty ${r.bilty}`, bilty: String(r.bilty) });
+          bil++;
+        }
+      }
+    }
+    return res.json({ ok: true, checked: snap.size, dispatched: disp, bilty: bil });
   },
 );
