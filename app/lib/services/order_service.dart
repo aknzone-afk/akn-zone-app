@@ -534,6 +534,16 @@ class OrderService {
           'disable_web_page_preview': 'true',
         });
         order.detailsSent = true;
+        await _saveOrder(prefs, order);
+      }
+      // Separate message with two dots — closes this order in the group.
+      if (!order.dotsSent) {
+        await _post(dio, '$api/sendMessage', {
+          'chat_id': cfg.chatId,
+          'text': '.
+.',
+        });
+        order.dotsSent = true;
       }
       order.status = OrderStatus.sent;
       order.lastError = null;
@@ -683,12 +693,6 @@ class OrderService {
   /// The details message posted under the photos.
   static Future<String> detailsText(Order o) async {
     final c = o.customer;
-    String version = '';
-    try {
-      final info = await PackageInfo.fromPlatform();
-      version = 'App ${info.version}';
-    } catch (_) {}
-    final device = Platform.isIOS ? 'iPhone' : 'Android';
 
     final mobileDigits = c.isIndia
         ? (normalizeIndianMobile(c.mobile) ?? c.mobile)
@@ -728,11 +732,9 @@ class OrderService {
     }
     if (o.note.isNotEmpty) b.writeln('📝 <b>Note:</b> ${_esc(o.note)}');
     b.writeln();
-    b.writeln('🕐 ${formatWhen(o.createdAt)} · $device${version.isEmpty ? '' : ' · $version'}');
-    // Owner: "ORDER NO. 1" under the details, then two dots, then the next order.
-    b.writeln('<b>ORDER NO. ${o.serial ?? '-'}</b>');
-    b.writeln('.');
-    b.write('.');
+    // Owner: no date / phone / app version — just ORDER NO. The two dots go
+    // as their own message right after (see _trySend).
+    b.write('<b>ORDER NO. ${o.serial ?? '-'}</b>');
     return b.toString();
   }
 }

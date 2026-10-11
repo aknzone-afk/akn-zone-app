@@ -115,6 +115,7 @@ class Order {
   /// same photos to the group twice.
   int photoChunksSent;
   bool detailsSent;
+  bool dotsSent;
   String? lastError;
 
   Order({
@@ -128,6 +129,7 @@ class Order {
     this.status = OrderStatus.pending,
     this.photoChunksSent = 0,
     this.detailsSent = false,
+    this.dotsSent = false,
     this.lastError,
   });
 
@@ -157,6 +159,7 @@ class Order {
         'status': status.name,
         'chunks': photoChunksSent,
         'details': detailsSent,
+        'dots': dotsSent,
         'err': lastError,
       };
 
@@ -175,6 +178,7 @@ class Order {
             orElse: () => OrderStatus.pending),
         photoChunksSent: (j['chunks'] ?? 0) as int,
         detailsSent: (j['details'] ?? false) as bool,
+        dotsSent: (j['dots'] ?? j['details'] ?? false) as bool,
         lastError: j['err'] as String?,
       );
 }
