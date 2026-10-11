@@ -54,12 +54,12 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
     } catch (_) {}
   }
 
-  Future<void> _viewBill(String ref) async {
+  Future<void> _viewBill(String orderRef) async {
     showDialog<void>(
         context: context,
         barrierDismissible: false,
         builder: (_) => const Center(child: CircularProgressIndicator()));
-    final b = await OrderService.fetchBill(ref.read(dioProvider), ref)
+    final b = await OrderService.fetchBill(ref.read(dioProvider), orderRef)
         .catchError((_) => null);
     if (!mounted) return;
     Navigator.of(context, rootNavigator: true).pop();
@@ -101,7 +101,7 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
     ));
   }
 
-  Future<void> _sendPayment(String ref) async {
+  Future<void> _sendPayment(String orderRef) async {
     final x = await ImagePicker().pickImage(
         source: ImageSource.gallery, maxWidth: 1800, imageQuality: 85);
     if (x == null || !mounted) return;
@@ -110,7 +110,7 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
         barrierDismissible: false,
         builder: (_) => const Center(child: CircularProgressIndicator()));
     final ok = await OrderService.sendPaymentProof(
-            ref.read(dioProvider), ref, await x.readAsBytes())
+            ref.read(dioProvider), orderRef, await x.readAsBytes())
         .catchError((_) => false);
     if (!mounted) return;
     Navigator.of(context, rootNavigator: true).pop();
