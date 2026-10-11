@@ -255,56 +255,45 @@ class _FolderScaffold extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
+      // Owner 11-Oct: no folder name on top; plain words instead of icons.
+      // While photos are being selected (hold a photo → "1 selected" below)
+      // the bar shows ONLY "SELECT ALL".
       appBar: AppBar(
-        title: MarqueeText(title,
-            style: Theme.of(context).appBarTheme.titleTextStyle ??
-                Theme.of(context).textTheme.titleLarge),
+        titleSpacing: 0,
         actions: [
-          if (selectableIds.isNotEmpty)
-            Consumer(
-              builder: (context, ref, _) {
-                final sel = ref.watch(selectionProvider);
-                final allSel = selectableIds.every(sel.contains);
-                // Labelled (not icon-only) so customers immediately understand
-                // what it does without being told.
-                return TextButton.icon(
-                  style: TextButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
-                    padding: const EdgeInsets.symmetric(horizontal: 8),
-                  ),
-                  icon: Icon(
-                      allSel
-                          ? Icons.remove_done_rounded
-                          : Icons.done_all_rounded,
-                      size: 18),
-                  label: UText(allSel ? 'Unselect' : 'Select all',
-                      style: const TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w700)),
-                  onPressed: () {
-                    final n = ref.read(selectionProvider.notifier);
-                    if (allSel) {
-                      n.clear();
-                    } else {
-                      n.selectAll(selectableIds);
-                    }
-                  },
-                );
-              },
-            ),
-          IconButton(
-            tooltip: 'Search design number',
-            onPressed: () => context.push('/search'),
-            icon: const Icon(Icons.search_rounded),
-          ),
-          IconButton(
-            tooltip: 'Filter',
-            onPressed: () => FilterSheet.show(context),
-            icon: Badge(
-              isLabelVisible: ref.watch(filterProvider).isActive,
-              child: const Icon(Icons.tune_rounded),
-            ),
-          ),
-          _CartButton(),
+          Consumer(builder: (context, ref, _) {
+            final sel = ref.watch(selectionProvider);
+            const st = TextStyle(fontSize: 13, fontWeight: FontWeight.w800, letterSpacing: 0.6);
+            final compact = TextButton.styleFrom(
+                visualDensity: VisualDensity.compact,
+                padding: const EdgeInsets.symmetric(horizontal: 10));
+            if (sel.isNotEmpty) {
+              if (selectableIds.isEmpty) return const SizedBox.shrink();
+              final allSel = selectableIds.every(sel.contains);
+              return TextButton(
+                style: compact,
+                onPressed: () {
+                  final n = ref.read(selectionProvider.notifier);
+                  allSel ? n.clear() : n.selectAll(selectableIds);
+                },
+                child: Text(allSel ? 'UNSELECT ALL' : 'SELECT ALL', style: st),
+              );
+            }
+            final cart = ref.watch(favoritesProvider).length;
+            final filterOn = ref.watch(filterProvider).isActive;
+            return Row(mainAxisSize: MainAxisSize.min, children: [
+              TextButton(style: compact, onPressed: () => context.push('/search'), child: const Text('SEARCH', style: st)),
+              TextButton(
+                  style: compact,
+                  onPressed: () => FilterSheet.show(context),
+                  child: Text(filterOn ? 'SORT •' : 'SORT', style: st)),
+              TextButton(
+                  style: compact,
+                  onPressed: () => context.push('/favorites'),
+                  child: Text(cart > 0 ? 'MY CART ($cart)' : 'MY CART', style: st)),
+              const SizedBox(width: 4),
+            ]);
+          }),
         ],
       ),
       body: RefreshIndicator(
