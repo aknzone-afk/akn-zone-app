@@ -119,6 +119,9 @@ class Order {
   int photoChunksSent;
   bool detailsSent;
   bool dotsSent;
+
+  /// The separate "ORDER NO. N" message (owner 11-Oct) reached the group.
+  bool noSent;
   String? lastError;
 
   Order({
@@ -134,6 +137,7 @@ class Order {
     this.photoChunksSent = 0,
     this.detailsSent = false,
     this.dotsSent = false,
+    this.noSent = false,
     this.lastError,
   });
 
@@ -165,6 +169,7 @@ class Order {
         'chunks': photoChunksSent,
         'details': detailsSent,
         'dots': dotsSent,
+        'no': noSent,
         'err': lastError,
       };
 
@@ -185,6 +190,7 @@ class Order {
         photoChunksSent: (j['chunks'] ?? 0) as int,
         detailsSent: (j['details'] ?? false) as bool,
         dotsSent: (j['dots'] ?? j['details'] ?? false) as bool,
+        noSent: (j['no'] ?? j['dots'] ?? j['details'] ?? false) as bool,
         lastError: j['err'] as String?,
       );
 }

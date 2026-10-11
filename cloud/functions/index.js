@@ -262,7 +262,13 @@ function statusText(d, fallbackPlain) {
   return `${base}\n\n<b>STATUS</b>\n${lines.join("\n")}`;
 }
 
-/** Short buttons: ↩️ Undo (latest step, only its tapper) + the NEXT step. */
+/**
+ * Buttons (owner 11-Oct-2026): a done step's button shows just WHO + WHEN,
+ * e.g. "🧺 ✅ Akshay 11:10" (tap again = undo, only by that person). After an
+ * undo: a plain line "↩️ Undone Akshay 11:20" and the step's button again.
+ * Automatic steps show a ⏳ waiting line.
+ */
+const firstName = (x) => String(x || "").trim().split(/\s+/)[0] || "?";
 function statusKeyboard(ref, d) {
   const cur = (d && d.status) || "received";
   const ci = ORDER.indexOf(cur);
@@ -270,21 +276,20 @@ function statusKeyboard(ref, d) {
   const rows = [];
   const last = log[log.length - 1];
   const curStep = STEPS.find((x) => x.status === cur);
-  if (curStep && last && last.a === "do" && last.k === curStep.k) {
-    rows.push([{ text: `↩️ Undo (${last.by})`.slice(0, 40), callback_data: `s|${curStep.k}|${ref}`.slice(0, 64) }]);
-  } else if (curStep && !log.length) {
-    rows.push([{ text: `✔ ${curStep.label}`, callback_data: `s|${curStep.k}|${ref}`.slice(0, 64) }]);
+  if (curStep) {
+    const done = [...log].reverse().find((e) => e.a === "do" && e.k === curStep.k);
+    const icon = String(curStep.label).split(" ")[0];
+    const who = done ? `${firstName(done.by)} ${hhmm(done.at)}` : "";
+    rows.push([{ text: `${icon} ✅ ${who}`.trim().slice(0, 60), callback_data: `s|${curStep.k}|${ref}`.slice(0, 64) }]);
+  }
+  if (last && last.a === "undo") {
+    rows.push([{ text: `↩️ Undone ${firstName(last.by)} ${hhmm(last.at)}`.slice(0, 60), callback_data: "n" }]);
   }
   const next = STEPS.find((x) => ORDER.indexOf(x.status) === ci + 1);
   if (next && next.auto) {
     rows.push([{ text: next.wait || "⏳ Waiting", callback_data: "n" }]);
   } else if (next) {
-    let show = true;
-    if (next.status === "packed") {
-      const ready = d && d.readyAt ? d.readyAt.toMillis() : 0;
-      if (Date.now() - ready < PACK_AFTER_MS) show = false; // packTimer reveals it after 3 h
-    }
-    if (show) rows.push([{ text: next.label, callback_data: `s|${next.k}|${ref}`.slice(0, 64) }]);
+    rows.push([{ text: next.label, callback_data: `s|${next.k}|${ref}`.slice(0, 64) }]);
   }
   return { inline_keyboard: rows };
 }

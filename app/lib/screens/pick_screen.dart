@@ -370,11 +370,24 @@ class _PickScreenState extends ConsumerState<PickScreen> {
     }
   }
 
-  Future<void> _done() async {
+  Future<void> _done({bool leaving = false}) async {
+    final favs = ref.read(favoritesProvider);
+    if (_s.isEmpty) {
+      // Owner 11-Oct: nothing selected (no piece, no SET) = it can't be in the cart.
+      if (!leaving) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Select at least 1 piece (tap a saree) or 1 SET to add this design.')));
+        return;
+      }
+      if (favs.contains(widget.photoId)) {
+        await ref.read(favoritesProvider.notifier).toggle(widget.photoId); // also clears its pick
+      }
+      if (mounted) context.pop();
+      return;
+    }
     await ref.read(picksProvider.notifier).set(widget.photoId, _s);
     // Picking something puts the design in the cart.
-    final favs = ref.read(favoritesProvider);
-    if (!_s.isEmpty && !favs.contains(widget.photoId)) {
+    if (!favs.contains(widget.photoId)) {
       await ref.read(favoritesProvider.notifier).toggle(widget.photoId);
     }
     if (mounted) context.pop();
@@ -408,7 +421,7 @@ class _PickScreenState extends ConsumerState<PickScreen> {
       canPop: _undo.isEmpty,
       onPopInvokedWithResult: (didPop, _) async {
         if (didPop) return;
-        await _done(); // leaving with changes = keep them
+        await _done(leaving: true); // leaving with changes = keep them (empty = not in cart)
       },
       child: Scaffold(
         backgroundColor: Colors.black,

@@ -52,7 +52,9 @@ class _ChatBubbleState extends ConsumerState<ChatBubble> with WidgetsBindingObse
   }
 
   void _route() {
-    final p = appRouter.routerDelegate.currentConfiguration.uri.path;
+    // The TOP screen (a pushed route like /pick/… is the last match).
+    final cfg = appRouter.routerDelegate.currentConfiguration;
+    final p = cfg.isEmpty ? cfg.uri.path : cfg.last.matchedLocation;
     if (mounted && p != _path) {
       KeyboardHideButton.hide(); // a field on the last screen must not keep the keyboard up
       setState(() => _path = p);

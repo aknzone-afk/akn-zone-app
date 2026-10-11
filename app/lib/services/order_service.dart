@@ -644,7 +644,8 @@ class OrderService {
 
       // 2. The customer's details, closed with the divider line.
       // Serial ORDER NO. from the shared cloud counter (same number on retry).
-      if (order.serial == null && order.addOnTo == null) {
+      // Owner 11-Oct: an add-on order gets the NEXT serial too (ORDER NO. 3, 4…).
+      if (order.serial == null) {
         final res = await dio.post<dynamic>(
           'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net/nextOrderNo',
           data: {'ref': order.number},
@@ -719,6 +720,16 @@ class OrderService {
             );
           }
         } catch (_) {}
+      }
+      // Owner 11-Oct: photos → details → "ORDER NO. N" on its own → two dots.
+      if (!order.noSent) {
+        await _post(dio, '$api/sendMessage', {
+          'chat_id': cfg.chatId,
+          'text': '<b>ORDER NO. ${order.serial ?? '-'}</b>',
+          'parse_mode': 'HTML',
+        });
+        order.noSent = true;
+        await _saveOrder(prefs, order);
       }
       // Separate message with two dots — closes this order in the group.
       if (!order.dotsSent) {
@@ -893,8 +904,8 @@ class OrderService {
     }
     if ((o.lockNote ?? '').isNotEmpty) b.writeln(_esc(o.lockNote!));
     if (c.kind == 'old') {
-      // Owner: for an old customer only these — the rest is in Tally.
-      b.writeln('🟢 <b>OLD CUSTOMER</b>');
+      // Owner: for an old customer only these — the rest is in Tally (and no
+      // "OLD CUSTOMER" line; only a NEW customer is marked).
       b.writeln();
       b.writeln('👤 <b>Bill Name:</b> ${_esc(c.billName)}');
       b.writeln('📍 <b>Booking Place:</b> ${_esc(c.bookingPlace)}');
@@ -915,12 +926,8 @@ class OrderService {
       }
     }
     if (o.note.isNotEmpty) b.writeln('📝 <b>Note:</b> ${_esc(o.note)}');
-    b.writeln();
-    // Owner: no date / phone / app version — just ORDER NO. The two dots go
-    // as their own message right after (see _trySend).
-    b.write(o.addOnTo != null
-        ? '<b>ADD IN ORDER NO. ${mainSerial ?? '-'}</b>'
-        : '<b>ORDER NO. ${o.serial ?? '-'}</b>');
-    return b.toString();
+    // Owner: no date / phone / app version. "ORDER NO. N" and the two dots
+    // go as their own messages right after (see _trySend).
+    return b.toString().trimRight();
   }
 }

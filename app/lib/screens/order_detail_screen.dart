@@ -50,9 +50,9 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
     final mainSerial = o.addOnTo != null
         ? orders.where((x) => x.number == o.addOnTo).firstOrNull?.serial
         : o.serial;
-    final title = o.addOnTo != null
-        ? 'ADD IN ORDER NO. ${mainSerial ?? '-'}'
-        : (o.serial != null ? 'ORDER NO. ${o.serial}' : 'ORDER (sending…)');
+    final title = o.serial != null
+        ? 'ORDER NO. ${o.serial}${o.addOnTo != null ? ' (ADD IN NO. ${mainSerial ?? '-'})' : ''}'
+        : (o.addOnTo != null ? 'ADD IN ORDER NO. ${mainSerial ?? '-'}' : 'ORDER (sending…)');
     final c = o.customer;
     const bold = TextStyle(fontWeight: FontWeight.w800);
     return Scaffold(
