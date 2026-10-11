@@ -212,7 +212,7 @@ class PhotoCard extends ConsumerWidget {
                   size: 18,
                 ),
               ),
-            )
+            ),
           if (selectionMode && selected)
             Container(color: scheme.primary.withValues(alpha: 0.18)),
         ],
@@ -282,7 +282,6 @@ class PhotoCard extends ConsumerWidget {
                   ],
                 ],
               ),
-            ),
         ),
       ]),
     );
