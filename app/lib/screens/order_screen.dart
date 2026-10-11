@@ -12,6 +12,7 @@ import '../models/order.dart';
 import '../models/photo.dart';
 import '../providers/providers.dart';
 import '../services/order_service.dart';
+import '../services/transport_info.dart';
 import '../services/phone_lock.dart';
 import '../services/photo_freshness.dart';
 import '../services/marks_service.dart';
@@ -61,6 +62,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
   Timer? _pinDebounce;
 
   List<String> _transports = const [];
+  TransportInfo? _tInfo;
   bool _sending = false;
   String? _lockNote;
 
@@ -80,6 +82,10 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     OrderService.transports().then((t) {
       if (mounted) setState(() => _transports = t);
     });
+    TransportInfo.load(ref.read(sharedPreferencesProvider), ref.read(dioProvider)).then((i) {
+      if (mounted) setState(() => _tInfo = i);
+    });
+    _transport.addListener(() => setState(() {}));
     _pincode.addListener(_onPinChanged);
     _bookingPlace.addListener(() => setState(() {}));
     _taxId.addListener(() => setState(() {}));
@@ -828,12 +834,23 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                     controller: _transport,
                     focusNode: _transportFocus,
                     options: _transports,
+                    info: _tInfo,
+                    place: _bookingPlace.text,
                     decoration: _dec(t('Transport Name', 'ट्रांसपोर्ट का नाम'),
                         hint: t('Search or type your own', 'खोजें या खुद लिखें'),
                         suffix: const Icon(Icons.local_shipping_outlined)),
                     validator: (v) => (v ?? '').trim().length < 2
                         ? 'Enter transport name'
                         : null,
+                  ),
+                  _TransportHelp(
+                    info: _tInfo,
+                    place: _bookingPlace.text,
+                    transport: _transport.text,
+                    onPick: (t) {
+                      _transport.text = t;
+                      _transportFocus.unfocus();
+                    },
                   ),
                   const SizedBox(height: 12),
                   TextFormField(
@@ -1097,12 +1114,16 @@ class _TransportField extends StatelessWidget {
   final List<String> options;
   final InputDecoration decoration;
   final FormFieldValidator<String>? validator;
+  final TransportInfo? info;
+  final String place;
   const _TransportField({
     required this.controller,
     required this.focusNode,
     required this.options,
     required this.decoration,
     this.validator,
+    this.info,
+    this.place = '',
   });
 
   @override
@@ -1112,7 +1133,11 @@ class _TransportField extends StatelessWidget {
       focusNode: focusNode,
       optionsBuilder: (v) {
         final q = v.text.trim().toUpperCase();
-        if (q.isEmpty) return options.take(40);
+        if (q.isEmpty) {
+          // Transports the shop's parties use for this place come first.
+          final usual = [for (final e in info?.forPlace(place) ?? const <(String, int)>[]) e.$1];
+          return [...usual, ...options.where((o) => !usual.contains(o))].take(40);
+        }
         final words = q.split(RegExp(r'\s+'));
         final starts = <String>[], has = <String>[];
         for (final o in options) {
@@ -1144,16 +1169,74 @@ class _TransportField extends StatelessWidget {
                 padding: EdgeInsets.zero,
                 shrinkWrap: true,
                 itemCount: list.length,
-                itemBuilder: (_, i) => ListTile(
-                  dense: true,
-                  title: Text(list[i]),
-                  onTap: () => onSelected(list[i]),
-                ),
+                itemBuilder: (_, i) {
+                  final g = info?.gstOf(list[i]);
+                  return ListTile(
+                    dense: true,
+                    title: Text(list[i]),
+                    // Owner: GST no. beside the name so a new party isn't confused.
+                    subtitle: g != null
+                        ? Text('GST $g',
+                            style: const TextStyle(fontWeight: FontWeight.w700, color: Color(0xFF1B5E20)))
+                        : null,
+                    onTap: () => onSelected(list[i]),
+                  );
+                },
               ),
             ),
           ),
         );
       },
+    );
+  }
+}
+
+
+/// Under the transport box: the chosen transport's GST no. + where it goes,
+/// and the transports the shop's parties use for the booking place.
+class _TransportHelp extends StatelessWidget {
+  final TransportInfo? info;
+  final String place, transport;
+  final ValueChanged<String> onPick;
+  const _TransportHelp(
+      {required this.info, required this.place, required this.transport, required this.onPick});
+
+  @override
+  Widget build(BuildContext context) {
+    final i = info;
+    if (i == null) return const SizedBox.shrink();
+    final gst = transport.trim().isEmpty ? null : i.gstOf(transport);
+    final goes = transport.trim().isEmpty ? const <(String, int)>[] : i.placesOf(transport);
+    final usual = i.forPlace(place);
+    const green = Color(0xFF1B5E20);
+    if (gst == null && goes.isEmpty && usual.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 6, 4, 0),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (gst != null)
+          Text('✓ GST no. of this transport: $gst',
+              style: const TextStyle(fontWeight: FontWeight.w800, color: green)),
+        if (goes.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Text('Our parties use it for: ${goes.take(8).map((e) => e.$1).join(', ')}',
+                style: const TextStyle(fontSize: 12, color: Colors.black54)),
+          ),
+        if (usual.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Text('Transports going to ${place.trim().toUpperCase()} (tap to choose):',
+              style: const TextStyle(fontWeight: FontWeight.w700)),
+          const SizedBox(height: 4),
+          Wrap(spacing: 6, runSpacing: 4, children: [
+            for (final e in usual.take(8))
+              ActionChip(
+                visualDensity: VisualDensity.compact,
+                label: Text(e.$1, style: const TextStyle(fontSize: 12)),
+                onPressed: () => onPick(e.$1),
+              ),
+          ]),
+        ],
+      ]),
     );
   }
 }
