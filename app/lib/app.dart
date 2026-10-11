@@ -16,6 +16,7 @@ import 'screens/order_screen.dart';
 import 'screens/pick_screen.dart';
 import 'screens/tutorial_screen.dart';
 import 'screens/chat_screen.dart';
+import 'screens/order_detail_screen.dart';
 import 'widgets/chat_bubble.dart';
 import 'screens/whats_new_screen.dart';
 import 'services/order_service.dart';
@@ -46,6 +47,10 @@ final appRouter = GoRouter(
     GoRoute(path: '/favorites', builder: (_, __) => const FavoritesScreen()),
     GoRoute(path: '/order', builder: (_, __) => const OrderScreen()),
     GoRoute(path: '/chat', builder: (_, __) => const ChatScreen()),
+    GoRoute(
+      path: '/order-detail/:no',
+      builder: (_, s) => OrderDetailScreen(number: Uri.decodeComponent(s.pathParameters['no']!)),
+    ),
     GoRoute(
       path: '/tutorial',
       builder: (_, s) =>

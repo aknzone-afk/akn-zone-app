@@ -412,6 +412,31 @@ class OrderService {
 
   // ───────────────────────── placing an order ─────────────────────────
 
+  /// Folder with the order's photos as sent (small copies kept for the
+  /// order-details screen), or null when none were kept.
+  static Future<Directory?> viewDir(String number) async {
+    final root = await getApplicationSupportDirectory();
+    final d = Directory(p.join(root.path, 'orders', number));
+    return d.existsSync() ? d : null;
+  }
+
+  /// After sending: shrink the photos (~60 KB each) instead of deleting them.
+  static Future<void> _keepSmallCopies(Directory dir) async {
+    try {
+      for (final f in dir.listSync().whereType<File>()) {
+        if (!f.path.endsWith('.jpg')) continue;
+        final small = await FlutterImageCompress.compressWithList(
+          await f.readAsBytes(),
+          quality: 70,
+          minWidth: 700,
+          minHeight: 700,
+          format: CompressFormat.jpeg,
+        );
+        if (small.isNotEmpty) await f.writeAsBytes(small, flush: true);
+      }
+    } catch (_) {}
+  }
+
   static Future<Directory> _orderDir(String number) async {
     final root = await getApplicationSupportDirectory();
     final d = Directory(p.join(root.path, 'orders', number));
@@ -680,9 +705,7 @@ class OrderService {
       order.status = OrderStatus.sent;
       order.lastError = null;
       await _saveOrder(prefs, order);
-      try {
-        dir.deleteSync(recursive: true);
-      } catch (_) {}
+      await _keepSmallCopies(dir);
       return true;
     } catch (e) {
       order.lastError = e is DioException

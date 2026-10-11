@@ -190,6 +190,8 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                           '${o.customer.billName} · ${o.items.length} designs · ${o.totalPcs} pcs'
                           '${o.approxTotal != null ? ' · approx ${OrderService.formatRupees(o.approxTotal!)}' : ''}',
                         ),
+                        const Text('TAP TO SEE ORDER DETAILS ›',
+                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Color(0xFF1B8E3A))),
                         const SizedBox(height: 6),
                         if (sent)
                           _Steps(status: _st[o.number]?.status)
@@ -225,6 +227,8 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                       ],
                     ),
                     isThreeLine: true,
+                    // Owner: tap an order → all its designs, selections, pcs.
+                    onTap: () => context.push('/order-detail/${Uri.encodeComponent(o.number)}'),
                     trailing: sent
                         ? TextButton(
                             onPressed: () => _again(o),
