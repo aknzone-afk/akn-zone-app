@@ -79,6 +79,10 @@ ProviderContainer? _rootContainer;
 /// Opens the daily-update folder from a notification tap AND pulls the latest
 /// from Drive on the spot, so the folder reflects exactly what's there now.
 void _openDailyUpdate(String payload) {
+  if (payload == 'chat') {
+    appRouter.push('/chat'); // bill / shop message notification
+    return;
+  }
   // Open the folder immediately so the tap feels instant (cached view first),
   // then refresh in the background.
   appRouter.push('/folder/${Uri.encodeComponent(payload)}');

@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../app.dart';
 import '../providers/providers.dart';
 import '../services/chat_service.dart';
+import '../services/notification_service.dart';
 
 /// Floating chat bubble on every screen (owner, 11-Oct-2026): unread badge,
 /// and a pop-up card by itself when the shop sends something (bill, reply).
@@ -69,6 +70,9 @@ class _ChatBubbleState extends ConsumerState<ChatBubble> with WidgetsBindingObse
           _lastPopupAt = fresh.last.at;
         }
       });
+      // …and a phone notification (e.g. the bill: "Sir, please make the payment").
+      await ChatService.notifyNew(prefs, ref.read(dioProvider),
+          (t, b) => NotificationService.instance.showNow(t, b));
     } catch (_) {}
   }
 

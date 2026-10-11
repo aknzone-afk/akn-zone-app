@@ -102,6 +102,22 @@ class NotificationService {
         ),
       );
 
+  /// A notification right now (new message / bill from the shop).
+  Future<void> showNow(String title, String body, {String payload = 'chat'}) async {
+    if (!_ready) {
+      try {
+        await init();
+      } catch (_) {}
+    }
+    await _plugin.show(
+      id: 7777,
+      title: title,
+      body: body,
+      notificationDetails: _details,
+      payload: payload,
+    );
+  }
+
   /// Weekly Sunday 12:00 PM (local) repeating reminder.
   Future<void> scheduleDaily() async {
     if (!_ready) return;

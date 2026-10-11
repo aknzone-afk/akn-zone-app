@@ -1,3 +1,5 @@
+import 'chat_service.dart';
+import 'notification_service.dart';
 import 'package:dio/dio.dart';
 import 'photo_freshness.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -16,6 +18,7 @@ const String kBackgroundTaskName = 'catalog_periodic_refresh';
 /// flex period of up to the same duration, so the OS may fire anywhere in
 /// the window [period - flex, period]. 2 hours is the spec.
 const Duration kBackgroundPeriod = Duration(hours: 2);
+const String kChatTaskName = 'aknz.chat.check';
 
 /// The active refresh window in the device's local time zone.
 const int kWindowStartHour = 10; // 10:00 inclusive
@@ -34,6 +37,13 @@ bool _isInsideWindow(DateTime now) {
 @pragma('vm:entry-point')
 void backgroundCallbackDispatcher() {
   Workmanager().executeTask((taskName, inputData) async {
+    if (taskName == kChatTaskName) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        await ChatService.notifyNew(prefs, Dio(), (t, b) => NotificationService.instance.showNow(t, b));
+      } catch (_) {}
+      return true;
+    }
     if (taskName != kBackgroundTaskName) return true;
 
     final now = DateTime.now();
@@ -108,6 +118,14 @@ class BackgroundRefresh {
     await Workmanager().initialize(
       backgroundCallbackDispatcher,
       isInDebugMode: false,
+    );
+    // Shop messages (bill → "Sir, please make the payment") — every 15 min, any hour.
+    await Workmanager().registerPeriodicTask(
+      kChatTaskName,
+      kChatTaskName,
+      frequency: const Duration(minutes: 15),
+      constraints: Constraints(networkType: NetworkType.connected),
+      existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
     );
     await Workmanager().registerPeriodicTask(
       kBackgroundTaskName,

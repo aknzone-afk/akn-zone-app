@@ -610,14 +610,103 @@ async function handleBillPhoto(db, m) {
   cands.sort((a, c) => (c.statusAt ? c.statusAt.toMillis() : 0) - (a.statusAt ? a.statusAt.toMillis() : 0));
   const main = cands.find((o) => !o.addOnTo) || cands[0];
   const linked = [main, ...cands.filter((o) => o.addOnTo && (o.addOnTo === main.id))];
-  const extra = { billFileId: fileId, billMime: mime, billNo: b.billNo || null, billTotal: b.grandTotal || null };
+  const extra = { billFileId: fileId, billMime: mime, billNo: b.billNo || null, billTotal: b.grandTotal || null,
+    billSentAt: Date.now(), billGroup: main.id };
   for (const o of linked) {
     await autoStep(db, o.id, "b", "Bill group", extra);
-    await addChat(db, o.id, { from: "shop", text: "🧾 Your bill" + (b.billNo ? " " + b.billNo : "") +
-      (b.grandTotal ? " · ₹" + b.grandTotal : "") + " — please make the payment and send the screenshot here.", fileId, mime });
   }
+  // One message per customer chat (all linked orders share the mobile).
+  await addChat(db, main.id, { from: "shop", text: "🧾 Sir, please make the payment — Bill" + (b.billNo ? " " + b.billNo : "") +
+    (b.grandTotal ? " · " + inr(b.grandTotal) : "") + ". Send the payment screenshot here 🙏", fileId, mime });
   const no = main.serial ? `ORDER NO. ${main.serial}` : "the order";
   return reply(`✅ Bill sent to ${main.billName} — ${no}${b.billNo ? " · Bill " + b.billNo : ""}${b.grandTotal ? " · ₹" + b.grandTotal : ""}`);
+}
+
+const inr = (n) => "₹" + Math.round(Number(n) || 0).toLocaleString("en-IN");
+
+const PAY_PROMPT = "This should be a payment screenshot (UPI app like GPay/PhonePe/Paytm/BHIM, or a bank app NEFT/RTGS/IMPS). " +
+  "Return JSON: amount (number, rupees paid), date (YYYY-MM-DD of the payment as shown), time (HH:MM 24-hour as shown), " +
+  "txnId (UPI ref no. / UTR / transaction id, digits and letters only), success (true only if it clearly says successful/completed/paid), " +
+  "payee (receiver name). Use null when not shown. If it is not a payment screenshot, amount = null.";
+const PAY_SCHEMA = { type: "object", properties: {
+  amount: { type: ["number", "null"] }, date: { type: ["string", "null"] }, time: { type: ["string", "null"] },
+  txnId: { type: ["string", "null"] }, success: { type: ["boolean", "null"] }, payee: { type: ["string", "null"] } },
+  required: ["amount"] };
+
+/**
+ * Owner (11-Oct-2026): every payment screenshot is read and added up against
+ * the bill. Only payments made AFTER the bill was sent count; the same UTR
+ * never counts twice; short → "please pay ₹X more sir"; Payment received is
+ * ticked only when the bill is fully paid. Returns true when fully paid.
+ */
+async function checkPayment(db, ref, img) {
+  const first = (await db.collection("bbapp_orders").doc(ref).get()).data() || {};
+  const mainRef = first.billGroup || ref;
+  const mainDoc = db.collection("bbapp_orders").doc(mainRef);
+  const m = (await mainDoc.get()).data() || {};
+  const staff = (text) => m.chat && tg("sendMessage", { chat_id: m.chat, reply_to_message_id: m.msg || undefined, text });
+  const say = (text) => addChat(db, mainRef, { from: "shop", text });
+  const head = `${m.billName || "Party"}${m.serial ? " · ORDER NO. " + m.serial : ""}`;
+
+  const p = await geminiJson(img, "image/jpeg", PAY_PROMPT, PAY_SCHEMA);
+  if (!p || !p.amount || p.amount <= 0) {
+    await staff(`💰❓ ${head}: could not read an amount from this screenshot — please check it.`);
+    return false;
+  }
+  if (p.success === false) {
+    await say(`⚠️ This payment of ${inr(p.amount)} does not show as successful. Please send the screenshot of a successful payment.`);
+    await staff(`💰⚠️ ${head}: screenshot ${inr(p.amount)} is NOT successful — not counted.`);
+    return false;
+  }
+  // Time on the screenshot (India time) must be after the bill was sent.
+  const sentAt = m.billSentAt || (m.billAt && m.billAt.toMillis ? m.billAt.toMillis() : 0);
+  const nowIst = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
+  const tm = /^\d{1,2}:\d{2}$/.test(String(p.time || "")) ? String(p.time).padStart(5, "0") : null;
+  const dt = /^\d{4}-\d{2}-\d{2}$/.test(String(p.date || "")) ? p.date : (tm ? nowIst : null);
+  const paidAt = dt ? Date.parse(`${dt}T${tm || "23:59"}:00+05:30`) : NaN;
+  if (!isNaN(paidAt) && sentAt && paidAt < Math.floor(sentAt / 60000) * 60000) {
+    const when = new Date(sentAt + 5.5 * 3600e3).toISOString().slice(0, 16).replace("T", " ");
+    await say(`⚠️ This screenshot (${inr(p.amount)}, ${dt}${tm ? " " + tm : ""}) is from before the bill was sent (${when}). ` +
+      "Please send the screenshot of the payment made for this bill.");
+    await staff(`💰⛔ ${head}: old screenshot ${inr(p.amount)} dated ${dt}${tm ? " " + tm : ""} (bill sent ${when}) — not counted.`);
+    return false;
+  }
+  if (!isNaN(paidAt) && paidAt > Date.now() + 15 * 60e3) {
+    await staff(`💰❓ ${head}: screenshot ${inr(p.amount)} shows a future time ${dt} ${tm || ""} — please check it.`);
+    return false;
+  }
+  const txn = String(p.txnId || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  const r = await db.runTransaction(async (t) => {
+    const cur = (await t.get(mainDoc)).data() || {};
+    const pays = cur.payments || [];
+    if (txn && pays.some((x) => x.txn === txn)) return { dup: true, total: pays.reduce((a, x) => a + x.amt, 0) };
+    pays.push({ amt: Number(p.amount), txn, paidAt: isNaN(paidAt) ? null : paidAt, at: Date.now() });
+    const total = pays.reduce((a, x) => a + x.amt, 0);
+    t.set(mainDoc, { payments: pays, paidTotal: total }, { merge: true });
+    return { dup: false, total };
+  });
+  if (r.dup) {
+    await say(`ℹ️ This payment (${inr(p.amount)}) is already counted. Total received ${inr(r.total)}.`);
+    return false;
+  }
+  const bill = Number(m.billTotal) || 0;
+  if (!bill) {
+    await say(`✅ Payment ${inr(p.amount)} received. Our staff will confirm the bill amount.`);
+    await staff(`💰 ${head}: ${inr(p.amount)} received (total ${inr(r.total)}) — bill amount not known, please tick Payment received after checking.`);
+    return false;
+  }
+  const due = bill - r.total;
+  if (due > 1) {
+    await say(`✅ Received ${inr(p.amount)} — total ${inr(r.total)} of bill ${inr(bill)}. Sir, please pay ${inr(due)} more and send the screenshot 🙏`);
+    await staff(`💰 ${head}: +${inr(p.amount)} → ${inr(r.total)} / ${inr(bill)} · balance ${inr(due)}`);
+    return false;
+  }
+  await say(`✅ Full payment received — ${inr(r.total)} for bill ${inr(bill)}. Thank you sir 🙏`);
+  await staff(`💰✅ ${head}: FULL payment ${inr(r.total)} / ${inr(bill)}${due < -1 ? " (extra " + inr(-due) + ")" : ""}`);
+  const linked = await db.collection("bbapp_orders").where("billGroup", "==", mainRef).get();
+  const refs = new Set([mainRef, ...linked.docs.map((x) => x.id)]);
+  for (const id of refs) await autoStep(db, id, "y", "Payment check (screenshots)", {});
+  return true;
 }
 
 /** App: the bill image for an order (party taps VIEW BILL). */
@@ -637,7 +726,7 @@ exports.billImage = onRequest(
 
 /** App: party's payment screenshot → posted under the order → Payment received. */
 exports.paymentProof = onRequest(
-  { region: "asia-south1", secrets: [TG_TOKEN], timeoutSeconds: 60, memory: "512MiB", maxInstances: 3, invoker: "public", cors: true },
+  { region: "asia-south1", secrets: [TG_TOKEN, GEMINI_API_KEY], timeoutSeconds: 60, memory: "512MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
     if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
     const ref = String((req.body && req.body.ref) || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
@@ -652,10 +741,9 @@ exports.paymentProof = onRequest(
     fd.append("caption", `💰 Payment screenshot — ${d.billName || ""}${d.serial ? " · ORDER NO. " + d.serial : ""}`);
     fd.append("photo", new Blob([img], { type: "image/jpeg" }), "payment.jpg");
     await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/sendPhoto`, { method: "POST", body: fd });
-    if ((d.status || "received") === "bill_sent") {
-      await autoStep(db, ref, "y", d.billName || "party", {});
-    }
-    return res.json({ ok: true });
+    let paid = false;
+    if ((d.status || "received") === "bill_sent") paid = await checkPayment(db, ref, img);
+    return res.json({ ok: true, paid });
   },
 );
 
@@ -712,7 +800,7 @@ async function addChat(db, ref, m) {
 }
 
 exports.chatSend = onRequest(
-  { region: "asia-south1", secrets: [TG_TOKEN], timeoutSeconds: 60, memory: "512MiB", maxInstances: 3, invoker: "public", cors: true },
+  { region: "asia-south1", secrets: [TG_TOKEN, GEMINI_API_KEY], timeoutSeconds: 60, memory: "512MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
     if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
     const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
@@ -741,10 +829,7 @@ exports.chatSend = onRequest(
     const fileId = sent && sent.result && sent.result.photo ? sent.result.photo[sent.result.photo.length - 1].file_id : null;
     await addChat(db, ref, { from: "party", text, fileId, mime: fileId ? "image/jpeg" : null });
     let paid = false;
-    if (img && (d.status || "received") === "bill_sent") {
-      await autoStep(db, ref, "y", d.billName || "party", {});
-      paid = true;
-    }
+    if (img && (d.status || "received") === "bill_sent") paid = await checkPayment(db, ref, img);
     return res.json({ ok: true, paid });
   },
 );

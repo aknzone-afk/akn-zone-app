@@ -73,6 +73,24 @@ class ChatService {
     return _files[id] = base64Decode(d['data'] as String);
   }
 
+  static const _kNotified = 'chat_notified_v1';
+
+  /// New shop messages since the last notification → one system
+  /// notification (used by the background task and on app start).
+  static Future<void> notifyNew(SharedPreferences p, Dio dio,
+      Future<void> Function(String title, String body) show) async {
+    final mob = mobile(p);
+    if (mob == null) return;
+    final msgs = await list(dio, mob);
+    final last = p.getInt(_kNotified) ?? 0;
+    final seen = seenAt(p);
+    final fresh = msgs.where((m) => !m.mine && m.at > last && m.at > seen).toList();
+    if (fresh.isEmpty) return;
+    final m = fresh.last;
+    await show('AKN ZONE', m.text.isNotEmpty ? m.text : '📎 You have a new file from AKN ZONE');
+    await p.setInt(_kNotified, m.at);
+  }
+
   static int seenAt(SharedPreferences p) => p.getInt(_kSeen) ?? 0;
   static Future<void> markSeen(SharedPreferences p, int at) => p.setInt(_kSeen, at);
 }
