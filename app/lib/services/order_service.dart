@@ -529,7 +529,13 @@ class OrderService {
         onStep?.call('Sending details…');
         await _post(dio, '$api/sendMessage', {
           'chat_id': cfg.chatId,
-          'text': await detailsText(order),
+          'text': await detailsText(order,
+              mainSerial: order.addOnTo == null
+                  ? null
+                  : history(prefs)
+                      .where((x) => x.number == order.addOnTo)
+                      .firstOrNull
+                      ?.serial),
           'parse_mode': 'HTML',
           'disable_web_page_preview': 'true',
         });
@@ -583,7 +589,6 @@ class OrderService {
         '$api/sendPhoto',
         FormData.fromMap({
           'chat_id': chatId,
-          'caption': _caption(it, i, total),
           'photo': await MultipartFile.fromFile(p.join(dir.path, '$i.jpg'),
               filename: '$i.jpg'),
         }),
@@ -597,7 +602,6 @@ class OrderService {
       media.add({
         'type': 'photo',
         'media': 'attach://p$i',
-        'caption': _caption(it, i, total),
       });
       form.files.add(MapEntry(
         'p$i',
@@ -691,7 +695,7 @@ class OrderService {
   }
 
   /// The details message posted under the photos.
-  static Future<String> detailsText(Order o) async {
+  static Future<String> detailsText(Order o, {int? mainSerial}) async {
     final c = o.customer;
 
     final mobileDigits = c.isIndia
@@ -703,32 +707,36 @@ class OrderService {
 
     final b = StringBuffer();
     if (o.addOnTo != null) {
-      b.writeln('➕ <b>ADD-ON to order ${_esc(o.addOnTo!)}</b> — pack in the SAME parcel');
+      b.writeln('➕ <b>ADD-ON to ORDER NO. ${mainSerial ?? o.addOnTo}</b> — same parcel');
     }
-    b.writeln('🛒 <b>${o.addOnTo != null ? 'ADD-ON ORDER' : 'NEW ORDER'} · ${_esc(o.number)}</b>');
     final total = o.approxTotal;
     b.writeln('📦 ${o.items.length} design${o.items.length == 1 ? '' : 's'} · '
         '${o.totalPcs} pcs${total != null ? ' · approx ${formatRupees(total)}' : ''}');
     final unpriced = o.items.where((i) => i.price == null || i.price! <= 0).length;
     if (unpriced > 0) {
-      b.writeln('⚠️ <b>$unpriced design${unpriced == 1 ? '' : 's'} without price '
-          '— please check the ₹${kMinOrderValue ~/ 1000},000 minimum</b>');
+      b.writeln('⚠️ <b>$unpriced design${unpriced == 1 ? '' : 's'} without price</b>');
     }
-    if (!c.isIndia) b.writeln('🌍 <b>Country: ${_esc(c.country.toUpperCase())}</b>');
-    b.writeln(c.kind == 'old'
-        ? '🟢 <b>OLD CUSTOMER</b> (found in Tally by mobile)'
-        : '🆕 <b>NEW CUSTOMER</b>');
-    b.writeln();
-    b.writeln('👤 <b>Bill Name:</b> ${_esc(c.billName)}');
-    b.writeln('🏠 <b>Address:</b> ${_esc(c.address)}');
-    b.writeln('📍 <b>Booking Place:</b> ${_esc(c.bookingPlace)}');
-    b.writeln('📮 <b>${c.isIndia ? 'Pincode' : 'Postal Code'}:</b> ${_esc(c.pincode)}');
-    b.writeln('📱 <b>Mobile:</b> ${_esc(shownMobile)} · '
-        '<a href="https://wa.me/$waNumber">WhatsApp</a>');
-    b.writeln('🚚 <b>Transport:</b> ${_esc(c.transport.isEmpty ? '-' : c.transport)}');
-    if (c.taxId.trim().isNotEmpty) {
-      final label = (kind != null && !kind.startsWith('!')) ? kind : 'GST/PAN/Aadhaar';
-      b.writeln('🧾 <b>$label:</b> ${_esc(c.taxId.trim().toUpperCase())}');
+    if (c.kind == 'old') {
+      // Owner: for an old customer only these — the rest is in Tally.
+      b.writeln('🟢 <b>OLD CUSTOMER</b>');
+      b.writeln();
+      b.writeln('👤 <b>Bill Name:</b> ${_esc(c.billName)}');
+      b.writeln('📍 <b>Booking Place:</b> ${_esc(c.bookingPlace)}');
+    } else {
+      if (!c.isIndia) b.writeln('🌍 <b>Country: ${_esc(c.country.toUpperCase())}</b>');
+      b.writeln('🆕 <b>NEW CUSTOMER</b>');
+      b.writeln();
+      b.writeln('👤 <b>Bill Name:</b> ${_esc(c.billName)}');
+      b.writeln('🏠 <b>Address:</b> ${_esc(c.address)}');
+      b.writeln('📍 <b>Booking Place:</b> ${_esc(c.bookingPlace)}');
+      b.writeln('📮 <b>${c.isIndia ? 'Pincode' : 'Postal Code'}:</b> ${_esc(c.pincode)}');
+      b.writeln('📱 <b>Mobile:</b> ${_esc(shownMobile)} · '
+          '<a href="https://wa.me/$waNumber">WhatsApp</a>');
+      b.writeln('🚚 <b>Transport:</b> ${_esc(c.transport.isEmpty ? '-' : c.transport)}');
+      if (c.taxId.trim().isNotEmpty) {
+        final label = (kind != null && !kind.startsWith('!')) ? kind : 'GST/PAN/Aadhaar';
+        b.writeln('🧾 <b>$label:</b> ${_esc(c.taxId.trim().toUpperCase())}');
+      }
     }
     if (o.note.isNotEmpty) b.writeln('📝 <b>Note:</b> ${_esc(o.note)}');
     b.writeln();
