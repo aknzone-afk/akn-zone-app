@@ -1,0 +1,129 @@
+# iOS → TestFlight with no Mac (same pipeline as AKN Chat, 10-Oct-2026).
+# A GitHub-hosted macOS runner builds the Flutter app in app/ and uploads it to
+# TestFlight using ONLY an App Store Connect API key. Signing certificates are
+# created and kept by fastlane match in the private repo akn-chat-ios-certs.
+#
+# Runs ONLY when started by hand (Actions tab, or `gh workflow run`) or on an
+# ios-v* tag — macOS minutes are expensive (≈10x Linux), never on every push.
+name: iOS TestFlight
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["ios-v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ios-testflight
+  cancel-in-progress: false
+
+env:
+  LANG: en_US.UTF-8
+  LC_ALL: en_US.UTF-8
+  FASTLANE_SKIP_UPDATE_CHECK: "1"
+  FASTLANE_HIDE_CHANGELOG: "1"
+  # first run resolves ~20 Swift packages (Firebase, gRPC…) — give xcodebuild time
+  FASTLANE_XCODEBUILD_SETTINGS_TIMEOUT: "180"
+  FASTLANE_XCODEBUILD_SETTINGS_RETRIES: "6"
+
+jobs:
+  testflight:
+    name: Build IPA and upload to TestFlight
+    runs-on: macos-26            # Apple requires Xcode 26 / iOS 26 SDK for uploads since 28-Apr-2026
+    timeout-minutes: 90
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v7
+
+      - name: Select Xcode 26
+        run: |
+          if [ -d /Applications/Xcode_26.6.app ]; then sudo xcode-select -s /Applications/Xcode_26.6.app; fi
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Set up Flutter (same version the app was last built with)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.41.9
+          cache: true
+
+      - name: Set up Ruby + gems (fastlane, cocoapods)
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+          working-directory: app/ios
+
+      - name: SSH key for the signing store (akn-chat-ios-certs, shared)
+        uses: webfactory/ssh-agent@v0.9.1
+        with:
+          ssh-private-key: ${{ secrets.MATCH_SSH_KEY }}
+
+      - name: Trust github.com host key
+        run: ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts
+
+      - name: Flutter dependencies
+        working-directory: app
+        run: |
+          flutter config --no-analytics --enable-swift-package-manager
+          flutter --version
+          flutter pub get
+          flutter precache --ios
+
+      - name: Cache CocoaPods
+        uses: actions/cache@v6
+        with:
+          path: |
+            app/ios/Pods
+            ~/Library/Caches/CocoaPods
+          key: pods-${{ runner.os }}-${{ hashFiles('app/ios/Podfile.lock') }}-${{ hashFiles('app/pubspec.lock') }}
+          restore-keys: |
+            pods-${{ runner.os }}-
+
+      - name: Build and upload (fastlane beta)
+        working-directory: app/ios
+        env:
+          ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+          ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+          ASC_KEY_P8_BASE64: ${{ secrets.ASC_KEY_P8_BASE64 }}
+          MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          MATCH_READONLY_FLAG: ${{ vars.MATCH_READONLY || 'false' }}
+        run: bundle exec fastlane ios beta
+
+      - name: Upload IPA as artifact
+        if: success()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bb-synthetics-ios-${{ github.run_number }}
+          path: |
+            app/build/ios/ipa/*.ipa
+            app/build/ios/ipa/*.dSYM.zip
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload lockfiles (commit these after the first green run)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lockfiles-${{ github.run_number }}
+          path: |
+            app/ios/Podfile.lock
+            app/ios/Gemfile.lock
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Upload build logs (failure only)
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-logs-${{ github.run_number }}
+          path: |
+            app/ios/fastlane/logs
+            app/ios/fastlane/report.xml
+            app/ios/fastlane/*.log
+          if-no-files-found: ignore

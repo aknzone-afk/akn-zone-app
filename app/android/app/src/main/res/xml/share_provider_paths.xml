@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- Maps Context.getFilesDir() (which is what path_provider's
+         getApplicationSupportDirectory() returns on Android) to the "files"
+         URI prefix that WhatsAppShare.dart constructs. -->
+    <files-path name="files" path="." />
+</paths>

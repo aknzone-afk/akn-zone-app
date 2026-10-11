@@ -1,0 +1,11 @@
+{
+  "name": "bbapp-functions",
+  "description": "AKN Zone catalog app — reads the customer's marks on a design photo (same reader as AKN Chat)",
+  "private": true,
+  "main": "index.js",
+  "engines": { "node": "22" },
+  "dependencies": {
+    "firebase-admin": "^13.10.0",
+    "firebase-functions": "^7.3.0"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "339678542148",
+    "project_id": "bb-synthetics-catalog",
+    "storage_bucket": "bb-synthetics-catalog.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:339678542148:android:ac80ee7a8d5b9636bdbf11",
+        "android_client_info": {
+          "package_name": "com.bbsynthetics.catalog_app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD2pckKKUt-7bP6u7cOHcFy09P4kNHxc2U"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

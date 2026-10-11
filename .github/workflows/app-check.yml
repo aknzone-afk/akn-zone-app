@@ -1,0 +1,28 @@
+# Cheap Linux check of the Flutter app on every push that touches app/ —
+# catches compile errors BEFORE the expensive macOS TestFlight build.
+name: App check
+
+on:
+  push:
+    paths: ["app/**", ".github/workflows/app-check.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.41.9
+          cache: true
+      - name: flutter analyze
+        working-directory: app
+        run: |
+          flutter pub get
+          flutter analyze --no-fatal-infos --no-fatal-warnings

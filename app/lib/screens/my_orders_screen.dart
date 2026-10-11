@@ -1,0 +1,109 @@
+import 'package:catalog_app/widgets/caps_text.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import '../l10n.dart';
+
+import '../models/order.dart';
+import '../providers/providers.dart';
+import '../services/order_service.dart';
+
+/// Every order placed from this phone, newest first, with its delivery state.
+/// Orders that couldn't be sent (no internet) can be re-sent with one tap —
+/// they are also retried automatically whenever the app opens.
+class MyOrdersScreen extends ConsumerStatefulWidget {
+  const MyOrdersScreen({super.key});
+
+  @override
+  ConsumerState<MyOrdersScreen> createState() => _MyOrdersScreenState();
+}
+
+class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
+  String? _busy;
+
+  Future<void> _retry(String number) async {
+    setState(() => _busy = number);
+    final o = await OrderService.retryOne(
+        ref.read(sharedPreferencesProvider), ref.read(dioProvider), number);
+    if (!mounted) return;
+    setState(() => _busy = null);
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(o?.status == OrderStatus.sent
+          ? t('Order $number sent ✓', 'ऑर्डर $number भेज दिया ✓')
+          : t('Still no connection — will try again automatically.', 'अभी इंटरनेट नहीं — अपने आप फिर भेजेंगे।')),
+    ));
+  }
+
+  /// Puts that order's designs back in the cart (those still in the catalog).
+  Future<void> _again(Order o) async {
+    final all = ref.read(photosProvider).map((p) => p.id).toSet();
+    final favs = ref.read(favoritesProvider);
+    var added = 0;
+    for (final it in o.items) {
+      if (all.contains(it.photoId) && !favs.contains(it.photoId)) {
+        await ref.read(favoritesProvider.notifier).toggle(it.photoId);
+        added++;
+      }
+    }
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(t('$added designs added to cart — check pieces and order.',
+            '$added डिज़ाइन कार्ट में डाले — पीस जाँच कर ऑर्डर करें।'))));
+    context.push('/favorites');
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final orders = OrderService.history(ref.read(sharedPreferencesProvider));
+    final scheme = Theme.of(context).colorScheme;
+    return Scaffold(
+      appBar: AppBar(title: UText(t('My orders', 'मेरे ऑर्डर'))),
+      body: orders.isEmpty
+          ? Center(child: UText(t('No orders yet.', 'अभी कोई ऑर्डर नहीं।')))
+          : ListView.separated(
+              padding: const EdgeInsets.all(12),
+              itemCount: orders.length,
+              separatorBuilder: (_, __) => const SizedBox(height: 8),
+              itemBuilder: (_, i) {
+                final o = orders[i];
+                final sent = o.status == OrderStatus.sent;
+                return Card(
+                  margin: EdgeInsets.zero,
+                  child: ListTile(
+                    leading: Icon(
+                      sent ? Icons.check_circle_rounded : Icons.schedule_rounded,
+                      color: sent ? const Color(0xFF2E7D32) : Colors.orange,
+                    ),
+                    title: Text(o.number,
+                        style: const TextStyle(fontWeight: FontWeight.w700)),
+                    subtitle: Text(
+                      '${OrderService.formatWhen(o.createdAt)}\n'
+                      '${o.customer.billName} · ${o.items.length} designs · ${o.totalPcs} pcs\n'
+                      '${sent ? t('Sent to shop ✓', 'दुकान को मिल गया ✓') : (o.lastError ?? t('Waiting to send', 'भेजना बाकी'))}',
+                    ),
+                    isThreeLine: true,
+                    trailing: sent
+                        ? TextButton(
+                            onPressed: () => _again(o),
+                            child: Text(t('Order\nagain', 'फिर से\nऑर्डर'),
+                                textAlign: TextAlign.center),
+                          )
+                        : (_busy == o.number
+                            ? const SizedBox(
+                                width: 22,
+                                height: 22,
+                                child:
+                                    CircularProgressIndicator(strokeWidth: 2))
+                            : IconButton(
+                                tooltip: t('Send now', 'अभी भेजें'),
+                                icon: Icon(Icons.refresh_rounded,
+                                    color: scheme.primary),
+                                onPressed: () => _retry(o.number),
+                              )),
+                  ),
+                );
+              },
+            ),
+    );
+  }
+}

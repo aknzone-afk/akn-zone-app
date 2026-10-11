@@ -1,0 +1,125 @@
+# app/ios/fastlane/Fastfile — Mac-less TestFlight lane (copied from AKN Chat, 10-Oct-2026).
+#   Auth:    App Store Connect API key only (no Apple ID, no 2FA).
+#   Signing: fastlane match, git storage = private repo akn-chat-ios-certs (shared with AKN Chat, same team) (SSH deploy key).
+#            The FIRST run creates the Apple Distribution certificate + App Store profile.
+#   Build:   flutter --config-only → gym archive + export → pilot upload.
+# Directory rule: this file runs in app/ios/fastlane, actions run in app/ios.
+
+require "yaml"
+
+default_platform(:ios)
+
+APP_IDENTIFIER = "com.bbsynthetics.catalog"
+TEAM_ID        = "DWJM58G45V"
+XCODEPROJ      = "Runner.xcodeproj"
+WORKSPACE      = "Runner.xcworkspace"
+SCHEME         = "Runner"
+FLUTTER_DIR    = "../.."   # app/
+
+platform :ios do
+  desc "Build the Flutter iOS app with match-managed signing and upload it to TestFlight"
+  lane :beta do
+    # 1. Fresh, unlocked keychain (a GitHub runner's login keychain cannot be unlocked).
+    setup_ci(timeout: 0) if ENV["CI"]
+
+    # 2. App Store Connect API key (TEAM key, Admin role).
+    api_key = app_store_connect_api_key(
+      key_id:                ENV.fetch("ASC_KEY_ID"),
+      issuer_id:             ENV.fetch("ASC_ISSUER_ID"),
+      key_content:           ENV.fetch("ASC_KEY_P8_BASE64"),
+      is_key_content_base64: true,
+      duration:              1200,
+      in_house:              false
+    )
+
+    # 3. match: fetch OR create the Apple Distribution certificate + App Store profile.
+    #    MATCH_READONLY_FLAG is a repo variable; set it to "true" after the first green run.
+    readonly = ENV.fetch("MATCH_READONLY_FLAG", "false") == "true"
+    match(
+      type:                 "appstore",
+      app_identifier:       [APP_IDENTIFIER],
+      team_id:              TEAM_ID,
+      api_key:              api_key,
+      readonly:             readonly,
+      generate_apple_certs: true,
+      storage_mode:         "git",
+      git_url:              ENV.fetch("MATCH_GIT_URL"),
+      git_branch:           "main",
+      skip_docs:            true
+    )
+    profile_name = lane_context[SharedValues::MATCH_PROVISIONING_PROFILE_MAPPING][APP_IDENTIFIER]
+    UI.user_error!("match returned no App Store profile for #{APP_IDENTIFIER}") if profile_name.to_s.empty?
+
+    # 4. Build number = latest TestFlight build of this version + 1.
+    pubspec_version   = YAML.load_file(File.join(FLUTTER_DIR, "pubspec.yaml")).fetch("version").to_s
+    marketing_version = pubspec_version.split("+").first
+    build_number = latest_testflight_build_number(
+      api_key:              api_key,
+      app_identifier:       APP_IDENTIFIER,
+      version:              marketing_version,
+      initial_build_number: 0
+    ) + 1
+    UI.message("Building #{APP_IDENTIFIER} #{marketing_version} (#{build_number})")
+
+    # 5. Runner target only: Automatic → Manual signing with the match profile.
+    update_code_signing_settings(
+      path:                  XCODEPROJ,
+      use_automatic_signing: false,
+      team_id:               TEAM_ID,
+      targets:               ["Runner"],
+      code_sign_identity:    "Apple Distribution",
+      sdk:                   "iphoneos*",
+      profile_name:          profile_name,
+      bundle_identifier:     APP_IDENTIFIER
+    )
+
+    # 6. Flutter writes Generated.xcconfig + Swift package + pods; nothing compiled twice.
+    Dir.chdir(FLUTTER_DIR) do
+      sh("flutter", "build", "ios", "--release", "--config-only", "--no-codesign",
+         "--build-name=#{marketing_version}", "--build-number=#{build_number}")
+    end
+
+    # 6b. Download all Swift packages once, so -showBuildSettings / archive do not time out.
+    sh("cd .. && xcodebuild -resolvePackageDependencies -workspace #{WORKSPACE} -scheme #{SCHEME} -clonedSourcePackagesDirPath ../build/ios/SourcePackages")
+
+    # 7. Archive + export.
+    build_app(
+      workspace:              WORKSPACE,
+      scheme:                 SCHEME,
+      configuration:          "Release",
+      export_method:          "app-store",
+      export_team_id:         TEAM_ID,
+      export_options: {
+        signingStyle:         "manual",
+        teamID:               TEAM_ID,
+        provisioningProfiles: { APP_IDENTIFIER => profile_name },
+        uploadSymbols:        true,
+        compileBitcode:       false
+      },
+      skip_profile_detection: true,
+      include_bitcode:        false,
+      include_symbols:        true,
+      xcargs:                 "COMPILER_INDEX_STORE_ENABLE=NO",
+      output_directory:       "../build/ios/ipa",
+      output_name:            "bb_synthetics",
+      buildlog_path:          "fastlane/logs",
+      cloned_source_packages_path: "../build/ios/SourcePackages"
+    )
+
+    # 8. Upload; do not wait for Apple's processing (saves macOS minutes). The shop PC's
+    #    testflight_distribute.py attaches each processed build to the internal group.
+    upload_to_testflight(
+      api_key:                           api_key,
+      app_identifier:                    APP_IDENTIFIER,
+      ipa:                               lane_context[SharedValues::IPA_OUTPUT_PATH],
+      skip_waiting_for_build_processing: true,
+      distribute_external:               false
+    )
+
+    UI.success("Uploaded #{APP_IDENTIFIER} #{marketing_version} (#{build_number}) to TestFlight.")
+  end
+
+  error do |lane, exception|
+    UI.error("Lane #{lane} failed: #{exception.message}")
+  end
+end

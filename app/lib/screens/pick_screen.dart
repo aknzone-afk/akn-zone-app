@@ -1,0 +1,539 @@
+import 'dart:async';
+import 'dart:math' as math;
+
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:catalog_app/widgets/caps_text.dart';
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
+import '../l10n.dart';
+
+import '../models/photo.dart';
+import '../providers/providers.dart';
+import '../services/photo_freshness.dart';
+import '../services/picks_service.dart';
+import '../services/pieces_service.dart';
+
+/// TAP-TO-SELECT: tap a saree = +1 of that colour, tap the background = +1 SET
+/// (one of every colour), long-press a number = pick / type any quantity.
+class PickScreen extends ConsumerStatefulWidget {
+  final String photoId;
+  const PickScreen({super.key, required this.photoId});
+
+  @override
+  ConsumerState<PickScreen> createState() => _PickScreenState();
+}
+
+class _PickScreenState extends ConsumerState<PickScreen> {
+  PickState _s = const PickState();
+  final List<PickState> _undo = [];
+  double? _aspect; // width / height of the photo
+  bool _crossMode = false; // ✕: tap a colour = do NOT send it
+  List<List<int>>? _points;
+
+  @override
+  void initState() {
+    super.initState();
+    _s = ref.read(picksProvider)[widget.photoId] ?? const PickState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _guideOnce());
+  }
+
+  /// First time only: a big, simple picture-guide of how to select.
+  Future<void> _guideOnce() async {
+    final prefs = ref.read(sharedPreferencesProvider);
+    if (prefs.getBool('pick_guide_v1') == true || !mounted) return;
+    await prefs.setBool('pick_guide_v1', true);
+    if (!mounted) return;
+    Widget row(String icon, String text) => Padding(
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          child: Row(children: [
+            Text(icon, style: const TextStyle(fontSize: 30)),
+            const SizedBox(width: 14),
+            Expanded(child: Text(text, style: const TextStyle(fontSize: 17, height: 1.3))),
+          ]),
+        );
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(t('How to select', 'कैसे चुनें'), textAlign: TextAlign.center),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          row('👆', t('Tap the saree colour you want = 1 piece', 'जो रंग चाहिए उस साड़ी पर टैप करें = 1 पीस')),
+          row('👆👆', t('Tap again = 2, 3, 4…', 'फिर टैप करें = 2, 3, 4…')),
+          row('✋', t('Hold a number = type any quantity', 'नंबर दबाकर रखें = कोई भी संख्या लिखें')),
+          row('➕', t('SET + below = one of EVERY colour', 'नीचे SET + = हर रंग का एक पीस')),
+          row('✅', t('Press DONE', 'आखिर में "हो गया" दबाएँ')),
+        ]),
+        actions: [
+          SizedBox(
+            width: double.infinity,
+            height: 50,
+            child: FilledButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text(t('OK, start', 'ठीक है, शुरू करें'), style: const TextStyle(fontSize: 18)),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Photo? get _photo =>
+      ref.read(photosProvider).where((p) => p.id == widget.photoId).firstOrNull;
+
+  void _resolveAspect(ImageProvider img) {
+    if (_aspect != null) return;
+    final stream = img.resolve(const ImageConfiguration());
+    late ImageStreamListener l;
+    l = ImageStreamListener((info, _) {
+      if (mounted) {
+        setState(() => _aspect = info.image.width / info.image.height);
+      }
+      stream.removeListener(l);
+    }, onError: (_, __) => stream.removeListener(l));
+    stream.addListener(l);
+  }
+
+  void _push(PickState next) {
+    HapticFeedback.selectionClick();
+    setState(() {
+      _undo.add(_s);
+      _s = next;
+    });
+  }
+
+  /// Which detected saree (index) contains the point, preferring the one whose
+  /// centre is nearest (folded sarees overlap).
+  int? _hitBox(List<List<int>>? boxes, double x, double y) {
+    if (boxes == null) return null;
+    int? best;
+    var bestD = double.infinity;
+    for (var i = 0; i < boxes.length; i++) {
+      final b = boxes[i]; // ymin xmin ymax xmax (0-1000)
+      final y0 = b[0] / 1000,
+          x0 = b[1] / 1000,
+          y1 = b[2] / 1000,
+          x1 = b[3] / 1000;
+      if (x < x0 || x > x1 || y < y0 || y > y1) continue;
+      final cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+      final d = (cx - x) * (cx - x) + (cy - y) * (cy - y);
+      if (d < bestD) {
+        bestD = d;
+        best = i;
+      }
+    }
+    return best;
+  }
+
+  int? _markAt(double x, double y, double radius) {
+    for (var i = 0; i < _s.marks.length; i++) {
+      final m = _s.marks[i];
+      if (math.sqrt(math.pow(m.x - x, 2) + math.pow(m.y - y, 2)) < radius)
+        return i;
+    }
+    return null;
+  }
+
+  /// Where a saree's number goes: the cloud's label point (centre of a plain,
+  /// single-colour part), else a spot inside its box that is as far as
+  /// possible from every OTHER saree's box — never on a shared edge.
+  Offset _labelSpot(int i, List<List<int>> boxes, List<List<int>>? points) {
+    if (points != null && i < points.length && points[i].length == 2) {
+      return Offset(points[i][1] / 1000, points[i][0] / 1000);
+    }
+    final b = boxes[i];
+    var best = Offset((b[1] + b[3]) / 2000, (b[0] + b[2]) / 2000);
+    var bestScore = -1.0;
+    for (var gy = 1; gy < 12; gy++) {
+      for (var gx = 1; gx < 12; gx++) {
+        final y = b[0] + (b[2] - b[0]) * gy / 12;
+        final x = b[1] + (b[3] - b[1]) * gx / 12;
+        var score = math.min(math.min(x - b[1], b[3] - x), math.min(y - b[0], b[2] - y));
+        for (var j = 0; j < boxes.length; j++) {
+          if (j == i) continue;
+          final o = boxes[j];
+          final inside = x >= o[1] && x <= o[3] && y >= o[0] && y <= o[2];
+          if (inside) {
+            score = -1;
+            break;
+          }
+          final dx = math.max(math.max(o[1] - x, 0), x - o[3]);
+          final dy = math.max(math.max(o[0] - y, 0), y - o[2]);
+          score = math.min(score, math.sqrt(dx * dx + dy * dy).toDouble());
+        }
+        if (score > bestScore) {
+          bestScore = score;
+          best = Offset(x / 1000, y / 1000);
+        }
+      }
+    }
+    return best;
+  }
+
+  void _tap(double x, double y, List<List<int>>? boxes) {
+    final marks = [..._s.marks];
+    final box = _hitBox(boxes, x, y);
+    if (box != null) {
+      final i = marks.indexWhere((m) => m.box == box);
+      if (_crossMode) {
+        // ✕ toggles: cross this colour / take the cross off again.
+        if (i >= 0 && marks[i].n < 0) {
+          marks.removeAt(i);
+        } else if (i >= 0) {
+          marks[i] = marks[i].withN(-1);
+        } else {
+          final spot = _labelSpot(box, boxes!, _points);
+          marks.add(PickMark(spot.dx, spot.dy, -1, box));
+        }
+      } else if (i >= 0) {
+        // A crossed colour tapped normally becomes 1 again.
+        marks[i] = marks[i].withN(marks[i].n < 0 ? 1 : marks[i].n + 1);
+      } else {
+        final spot = _labelSpot(box, boxes!, _points);
+        marks.add(PickMark(spot.dx, spot.dy, 1, box));
+      }
+      _push(_s.copy(marks: marks));
+      return;
+    }
+    if (boxes != null && boxes.isNotEmpty) {
+      // Owner: numbers go ONLY on sarees — floor, grass, cards do nothing.
+      // (Sets come from the − SET + buttons.)
+      final near = _markAt(x, y, 0.06);
+      if (near != null) {
+        marks[near] = marks[near].withN(marks[near].n + 1);
+        _push(_s.copy(marks: marks));
+      } else {
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(
+              duration: Duration(milliseconds: 1200),
+              content: Text(t('Tap on a saree', 'साड़ी पर टैप करें'))));
+      }
+      return;
+    }
+    // Layout not known yet: a tap near an existing number adds to it, else
+    // starts a new colour. SET comes from the button below.
+    final near = _markAt(x, y, 0.08);
+    if (_crossMode) {
+      if (near != null && marks[near].n < 0) {
+        marks.removeAt(near);
+      } else if (near != null) {
+        marks[near] = marks[near].withN(-1);
+      } else {
+        marks.add(PickMark(x, y, -1));
+      }
+    } else if (near != null) {
+      marks[near] = marks[near].withN(marks[near].n < 0 ? 1 : marks[near].n + 1);
+    } else {
+      marks.add(PickMark(x, y, 1));
+    }
+    _push(_s.copy(marks: marks));
+  }
+
+  Future<int?> _askQty(String title, int current) {
+    final ctrl = TextEditingController(text: '$current');
+    const quick = [0, 1, 2, 3, 4, 5, 6, 8, 10, 12, 15, 20, 25, 30, 50, 100];
+    return showModalBottomSheet<int>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.fromLTRB(
+            16, 16, 16, 16 + MediaQuery.of(ctx).viewInsets.bottom),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Text(title, style: Theme.of(ctx).textTheme.titleMedium),
+            const SizedBox(height: 12),
+            Row(children: [
+              Expanded(
+                child: TextField(
+                  controller: ctrl,
+                  autofocus: false,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.digitsOnly,
+                    LengthLimitingTextInputFormatter(4)
+                  ],
+                  decoration: InputDecoration(
+                      labelText: t('Type quantity', 'संख्या लिखें'),
+                      border: OutlineInputBorder(),
+                      isDense: true),
+                  onSubmitted: (v) => Navigator.pop(ctx, int.tryParse(v)),
+                ),
+              ),
+              const SizedBox(width: 10),
+              FilledButton(
+                onPressed: () => Navigator.pop(ctx, int.tryParse(ctrl.text)),
+                child: const Text('OK'),
+              ),
+            ]),
+            const SizedBox(height: 14),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final q in quick)
+                  ChoiceChip(
+                    label: Text(q == 0 ? t('Remove', 'हटाएँ') : '$q'),
+                    selected: q == current,
+                    onSelected: (_) => Navigator.pop(ctx, q),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _editMark(int i) async {
+    final v = await _askQty(t('Pieces of this colour', 'इस रंग के पीस'), _s.marks[i].n);
+    if (v == null || !mounted) return;
+    final marks = [..._s.marks];
+    if (v <= 0) {
+      marks.removeAt(i);
+    } else {
+      marks[i] = marks[i].withN(v);
+    }
+    _push(_s.copy(marks: marks));
+  }
+
+  Future<void> _editSets() async {
+    final v = await _askQty(t('Sets (1 set = one of every colour)', 'सेट (1 सेट = हर रंग का एक पीस)'), _s.sets);
+    if (v == null || !mounted) return;
+    _push(_s.copy(sets: math.max(0, v)));
+  }
+
+  Future<void> _done() async {
+    await ref.read(picksProvider.notifier).set(widget.photoId, _s);
+    // Picking something puts the design in the cart.
+    final favs = ref.read(favoritesProvider);
+    if (!_s.isEmpty && !favs.contains(widget.photoId)) {
+      await ref.read(favoritesProvider.notifier).toggle(widget.photoId);
+    }
+    if (mounted) context.pop();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final photo = _photo;
+    ref.watch(piecesProvider);
+    final pc = ref.read(piecesProvider.notifier);
+    if (photo == null) {
+      return Scaffold(
+          appBar: AppBar(),
+          body: const Center(child: UText('Photo not found.')));
+    }
+    final boxes = pc.boxesFor(photo);
+    _points = pc.pointsFor(photo);
+    final count = pc.piecesFor(photo);
+    // Instant: the grid thumbnail is already on the phone — show it at once
+    // and let the sharp copy (the same one the full-photo view uses, so
+    // usually cached too) fade in on top. No spinner.
+    final low = CachedNetworkImageProvider(photo.thumbUrl(),
+        cacheManager: photoCacheManager);
+    final img = CachedNetworkImageProvider(photo.detailUrl(),
+        cacheManager: photoCacheManager);
+    _resolveAspect(low);
+    _resolveAspect(img);
+    final total = _s.total(count);
+
+    return PopScope(
+      canPop: _undo.isEmpty,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (didPop) return;
+        await _done(); // leaving with changes = keep them
+      },
+      child: Scaffold(
+        backgroundColor: Colors.black,
+        appBar: AppBar(
+          backgroundColor: Colors.black,
+          foregroundColor: Colors.white,
+          title: UText(photo.designNumber ?? t('Select pieces', 'पीस चुनें'),
+              style: const TextStyle(color: Colors.white)),
+          actions: [
+            IconButton(
+              tooltip: t('Undo', 'वापस'),
+              icon: const Icon(Icons.undo_rounded),
+              onPressed: _undo.isEmpty
+                  ? null
+                  : () => setState(() => _s = _undo.removeLast()),
+            ),
+            IconButton(
+              tooltip: t('Clear', 'सब हटाएँ'),
+              icon: const Icon(Icons.delete_sweep_outlined),
+              onPressed: _s.isEmpty ? null : () => _push(const PickState()),
+            ),
+          ],
+        ),
+        body: Column(
+          children: [
+            if (!_s.isEmpty)
+              Container(
+                width: double.infinity,
+                color: const Color(0xFF111111),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                child: Text(
+                  _s.summary(count),
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.w900, fontSize: 17),
+                ),
+              ),
+            // SET − / + and ✕ right under the summary (owner, 11-Oct-2026).
+            Container(
+              width: double.infinity,
+              color: const Color(0xFF1B1A18),
+              padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+              child: Row(
+                children: [
+                // SET: − / + so a wrong tap is easy to take back; tap the
+                // number to type any amount.
+                Container(
+                  decoration: BoxDecoration(
+                    border: Border.all(color: Colors.white54),
+                    borderRadius: BorderRadius.circular(24),
+                  ),
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    IconButton(
+                      tooltip: t('One set less', 'एक सेट कम'),
+                      visualDensity: VisualDensity.compact,
+                      color: Colors.white,
+                      disabledColor: Colors.white24,
+                      icon: const Icon(Icons.remove_rounded),
+                      onPressed: _s.sets > 0
+                          ? () => _push(_s.copy(sets: _s.sets - 1))
+                          : null,
+                    ),
+                    InkWell(
+                      onTap: _editSets,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 6),
+                        child: Text('${_s.sets} SET',
+                            style: const TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w800)),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: t('One set more', 'एक सेट ज़्यादा'),
+                      visualDensity: VisualDensity.compact,
+                      color: Colors.white,
+                      icon: const Icon(Icons.add_rounded),
+                      onPressed: () => _push(_s.copy(sets: _s.sets + 1)),
+                    ),
+                  ]),
+                ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: Center(
+                child: _aspect == null
+                    ? const SizedBox.shrink()
+                    : AspectRatio(
+                        aspectRatio: _aspect!,
+                        child: LayoutBuilder(builder: (context, c) {
+                          final w = c.maxWidth, h = c.maxHeight;
+                          final r = math.min(w, h) * 0.06;
+                          return GestureDetector(
+                            behavior: HitTestBehavior.opaque,
+                            onTapUp: (d) => _tap(d.localPosition.dx / w,
+                                d.localPosition.dy / h, boxes),
+                            onLongPressStart: (d) {
+                              final i = _markAt(d.localPosition.dx / w,
+                                  d.localPosition.dy / h, 0.08);
+                              if (i != null) {
+                                _editMark(i);
+                              }
+                            },
+                            child: Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                Image(image: low, fit: BoxFit.fill, gaplessPlayback: true),
+                                Image(
+                                  image: img,
+                                  fit: BoxFit.fill,
+                                  gaplessPlayback: true,
+                                  frameBuilder: (_, child, frame, sync) =>
+                                      sync || frame != null
+                                          ? AnimatedOpacity(
+                                              opacity: frame == null ? 0 : 1,
+                                              duration: const Duration(milliseconds: 180),
+                                              child: child)
+                                          : const SizedBox.shrink(),
+                                ),
+                                for (final m in _s.marks)
+                                  if (m.n != 0)
+                                    Positioned(
+                                      left: m.x * w - r,
+                                      top: m.y * h - r,
+                                      width: r * 2,
+                                      height: r * 2,
+                                      child: IgnorePointer(
+                                        child: Container(
+                                          alignment: Alignment.center,
+                                          decoration: BoxDecoration(
+                                            color: m.n < 0
+                                                ? const Color(0xFFD32F2F)
+                                                : const Color(0xFF1B8E3A),
+                                            shape: BoxShape.circle,
+                                            border: Border.all(
+                                                color: Colors.white, width: 2),
+                                            boxShadow: const [
+                                              BoxShadow(
+                                                  color: Colors.black54,
+                                                  blurRadius: 4)
+                                            ],
+                                          ),
+                                          child: Text(m.n < 0 ? '✕' : '${m.n}',
+                                              style: TextStyle(
+                                                  color: Colors.white,
+                                                  fontWeight: FontWeight.w900,
+                                                  fontSize: r * 0.95)),
+                                        ),
+                                      ),
+                                    ),
+                              ],
+                            ),
+                          );
+                        }),
+                      ),
+              ),
+            ),
+          ],
+        ),
+        bottomNavigationBar: Material(
+          color: const Color(0xFF1B1A18),
+          child: SafeArea(
+            top: false,
+            minimum: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    _s.isEmpty
+                        ? t('Nothing selected', 'कुछ नहीं चुना')
+                        : (total != null
+                            ? t('$total pcs', '$total पीस')
+                            : '${_s.markPieces} pcs + ${_s.sets} SET'),
+                    style: const TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.w700),
+                  ),
+                ),
+                FilledButton(
+                  style: FilledButton.styleFrom(
+                      backgroundColor: const Color(0xFF1B8E3A)),
+                  onPressed: _done,
+                  child: Text(t('DONE', 'हो गया')),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
