@@ -49,7 +49,7 @@ class PhotoGrid extends ConsumerWidget {
           maxCrossAxisExtent: 200,
           mainAxisSpacing: 8,
           crossAxisSpacing: 8,
-          childAspectRatio: 0.78,
+          childAspectRatio: 0.66,
         ),
         itemCount: photos.length,
         itemBuilder: (context, i) {

@@ -137,7 +137,7 @@ class _FolderScreenState extends ConsumerState<FolderScreen> {
                     maxCrossAxisExtent: 200,
                     mainAxisSpacing: 8,
                     crossAxisSpacing: 8,
-                    childAspectRatio: 0.78,
+                    childAspectRatio: 0.66,
                   ),
                   itemCount: filteredDirect.length,
                   itemBuilder: (context, i) => _GridTile(

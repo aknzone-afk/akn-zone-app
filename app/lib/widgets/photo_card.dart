@@ -65,7 +65,11 @@ class PhotoCard extends ConsumerWidget {
               ? () => context.push('/pick/${Uri.encodeComponent(photo.id)}')
               : onTap),
       onLongPress: onLongPress,
-      child: Stack(
+      // Owner 11-Oct: the select box sits UNDER the photo (not on it), so the
+      // rate and design no. stay visible on the picture.
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        Expanded(
+          child: Stack(
         fit: StackFit.expand,
         children: [
           Container(
@@ -95,13 +99,12 @@ class PhotoCard extends ConsumerWidget {
                     ),
                   ),
           ),
-          // Full selection text, readable, at the top of the photo (the
-          // select box sits at the bottom — owner 11-Oct).
+          // Full selection text, readable, at the bottom of the photo.
           if (pickSummary != null)
             Positioned(
               left: 0,
               right: 0,
-              top: 0,
+              bottom: 0,
               child: Container(
                 color: const Color(0xEE111111),
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
@@ -122,16 +125,16 @@ class PhotoCard extends ConsumerWidget {
             Positioned(
               left: 0,
               right: 0,
-              top: 0,
+              bottom: 0,
               child: Container(
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
-                    begin: Alignment.topCenter,
-                    end: Alignment.bottomCenter,
+                    begin: Alignment.bottomCenter,
+                    end: Alignment.topCenter,
                     colors: [Color(0xCC000000), Color(0x00000000)],
                   ),
                 ),
-                padding: const EdgeInsets.fromLTRB(8, 6, 8, 16),
+                padding: const EdgeInsets.fromLTRB(8, 16, 8, 6),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
@@ -174,7 +177,7 @@ class PhotoCard extends ConsumerWidget {
             ),
           if (!removeMode && ref.watch(newDesignIdsProvider).contains(photo.id))
             Positioned(
-              bottom: 48,
+              top: 8,
               left: 8,
               child: IgnorePointer(
                 child: Container(
@@ -210,14 +213,15 @@ class PhotoCard extends ConsumerWidget {
                 ),
               ),
             )
-          else
-            // Owner, 11-Oct-2026: no round icons — one clear box that opens
-            // TAP-TO-SELECT. Shows what's picked once something is chosen.
-            Positioned(
-              bottom: 6,
-              left: 6,
-              right: 6,
-              child: Row(
+          if (selectionMode && selected)
+            Container(color: scheme.primary.withValues(alpha: 0.18)),
+        ],
+      ),
+        ),
+        const SizedBox(height: 5),
+        SizedBox(
+          height: 38,
+          child: Row(
                 children: [
                   Expanded(
                     child: Material(
@@ -279,10 +283,8 @@ class PhotoCard extends ConsumerWidget {
                 ],
               ),
             ),
-          if (selectionMode && selected)
-            Container(color: scheme.primary.withValues(alpha: 0.18)),
-        ],
-      ),
+        ),
+      ]),
     );
   }
 }
