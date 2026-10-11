@@ -8,6 +8,7 @@ import '../providers/providers.dart';
 import '../services/chat_service.dart';
 import '../services/notification_service.dart';
 import 'keyboard_hide.dart';
+import 'helpline_icon.dart';
 import '../services/app_badge.dart';
 import '../services/push_service.dart';
 
@@ -119,7 +120,7 @@ class _ChatBubbleState extends ConsumerState<ChatBubble> with WidgetsBindingObse
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(14, 12, 6, 12),
                 child: Row(children: [
-                  const Icon(Icons.chat_rounded, color: Color(0xFF25D366)),
+                  const HelplineIcon(size: 30, color: Color(0xFF25D366)),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
@@ -150,7 +151,7 @@ class _ChatBubbleState extends ConsumerState<ChatBubble> with WidgetsBindingObse
             backgroundColor: const Color(0xFF1B8E3A),
             foregroundColor: Colors.white,
             onPressed: _open,
-            child: const Icon(Icons.chat_rounded),
+            child: const HelplineIcon(size: 34), // lady with headset = helpline
           ),
         ),
       ),
