@@ -375,14 +375,14 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     );
   }
 
-  /// Same designs + pieces sent in the last 10 minutes?
+  /// Same designs + pieces sent in the last 24 hours (owner)?
   bool _isDuplicate(List<Photo> photos) {
     String sig(Iterable<(String, int)> it) {
       final l = it.map((e) => '${e.$1}x${e.$2}').toList()..sort();
       return l.join(',');
     }
     final now = sig(photos.map((p) => (p.id, _qtyFor(p))));
-    final cutoff = DateTime.now().subtract(const Duration(minutes: 10));
+    final cutoff = DateTime.now().subtract(const Duration(hours: 24));
     return OrderService.history(ref.read(sharedPreferencesProvider)).any((o) =>
         o.createdAt.isAfter(cutoff) &&
         sig(o.items.map((i) => (i.photoId, i.qty))) == now);
@@ -395,7 +395,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         builder: (ctx) => AlertDialog(
           title: const Text('Already sent'),
           content: const Text(
-              'You sent this same order a few minutes ago. Send it again?'),
+              'You sent this same order in the last 24 hours. Send it again?'),
           actions: [
             TextButton(
                 onPressed: () => Navigator.pop(ctx, false),
