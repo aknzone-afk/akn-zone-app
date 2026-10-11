@@ -186,6 +186,28 @@ class OrderService {
 
   static const _cloud = 'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net';
 
+  /// New customer: the same checks the shop's NewPartyBot does before it makes
+  /// the Tally ledger (owner 11-Oct-2026). Null = could not check (never blocks).
+  static Future<({List<Map> errors, List<Map> soft})?> checkNewParty(
+      Dio dio, CustomerDetails c) async {
+    try {
+      final res = await dio.post<dynamic>('$_cloud/checkNewParty',
+          data: {'cust': c.toJson()},
+          options: Options(
+              headers: {'x-app-key': 'akn-zone-app-2026'},
+              contentType: Headers.jsonContentType,
+              receiveTimeout: const Duration(seconds: 15)));
+      final d = res.data is String ? jsonDecode(res.data as String) : res.data;
+      if (d is! Map || d['ok'] != true) return null;
+      return (
+        errors: [for (final e in (d['errors'] as List? ?? const [])) e as Map],
+        soft: [for (final e in (d['soft'] as List? ?? const [])) e as Map],
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Shop status per order (received → getting ready → packed → dispatched)
   /// and the LR / dispatch text the shop replied with.
   static Future<Map<String, ({String? status, String? lr, bool bill})>> fetchStatuses(

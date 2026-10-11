@@ -394,6 +394,77 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         sig(o.items.map((i) => (i.photoId, i.qty))) == now);
   }
 
+  /// True = go ahead and send. Problems → a clear message; a mobile / GST
+  /// already with us → one tap to search as OLD CUSTOMER; transport / place
+  /// not in our list → tap the right name (or keep what was typed).
+  Future<bool> _newPartyCheck(CustomerDetails customer) async {
+    final r = await OrderService.checkNewParty(ref.read(dioProvider), customer);
+    if (r == null || !mounted) return true; // offline check never blocks an order
+    if (r.errors.isNotEmpty) {
+      final known = r.errors.any((e) => e['field'] == 'mobile' || e['field'] == 'taxId');
+      final goOld = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          icon: const Icon(Icons.error_outline_rounded, color: Color(0xFFD32F2F), size: 44),
+          title: const Text('Please check'),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            for (final e in r.errors)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Text('${e['msg']}', style: const TextStyle(fontSize: 16, height: 1.35)),
+              ),
+          ]),
+          actions: [
+            if (known)
+              FilledButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('SEARCH AS OLD CUSTOMER'))
+            else
+              FilledButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('OK, I WILL FIX')),
+          ],
+        ),
+      );
+      if (goOld == true && mounted) {
+        setState(() {
+          _old = true;
+          _oldMobile.text = customer.mobile.replaceAll(RegExp(r'\D'), '');
+        });
+        await _findParty();
+      }
+      return false;
+    }
+    if (r.soft.isEmpty) return true;
+    var changed = false;
+    for (final e in r.soft) {
+      if (!mounted) return false;
+      final sugg = [for (final x in (e['suggest'] as List? ?? const [])) '$x'];
+      final pick = await showDialog<String>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text('${e['msg']}', style: const TextStyle(fontSize: 17)),
+          content: Wrap(spacing: 8, runSpacing: 8, children: [
+            for (final x in sugg)
+              ActionChip(label: Text(x), onPressed: () => Navigator.pop(ctx, x)),
+          ]),
+          actions: [
+            TextButton(onPressed: () => Navigator.pop(ctx, ''), child: const Text('KEEP WHAT I TYPED')),
+          ],
+        ),
+      );
+      if (pick == null) return false;
+      if (pick.isNotEmpty) {
+        (e['field'] == 'transport' ? _transport : _bookingPlace).text = pick;
+        changed = true;
+      }
+    }
+    if (changed && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Updated ✓ — please check and press ORDER again.')));
+      return false;
+    }
+    return true;
+  }
+
   Future<void> _send(List<Photo> photos, CustomerDetails customer) async {
     if (_isDuplicate(photos)) {
       final again = await showDialog<bool>(
@@ -433,6 +504,11 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         ),
       );
       return;
+    }
+    // New customer: tell them NOW what the shop's Tally would refuse (owner).
+    if (customer.kind != 'old' &&
+        OrderService.activeParcel(ref.read(sharedPreferencesProvider)) == null) {
+      if (!await _newPartyCheck(customer) || !mounted) return;
     }
     final lockNote = [
       if (lock.newPhone) '⚠️ NEW PHONE for this number',

@@ -1010,3 +1010,73 @@ exports.newParties = onRequest(
     return res.json({ ok: true, parties: out });
   },
 );
+
+/* ───────────── New customer: check BEFORE the order is sent (owner, 11-Oct-2026) ─────────────
+ * Same checks NewPartyBot does before it makes the Tally ledger, so the
+ * customer fixes things right there instead of the shop later:
+ *   hard (must fix): mobile already a party → use OLD CUSTOMER; bill name
+ *     already a ledger; GSTIN already with another party.
+ *   soft (can keep): transport / booking place not in Tally's lists → nearest
+ *     names offered to tap.
+ * Data = newparty_check.json (PRIVATE, bundled; written by parties_sync.py).
+ */
+let NPCHECK = null;
+const npNorm = (x) => String(x || "").toUpperCase().replace(/\s+/g, " ").trim();
+function nearest(q, list, n = 5) {
+  const Q = npNorm(q);
+  const words = Q.split(" ").filter((w) => w.length >= 3);
+  const score = (x) => {
+    if (x === Q) return 100;
+    let s = 0;
+    if (x.startsWith(Q) || Q.startsWith(x)) s += 50;
+    for (const w of words) if (x.includes(w)) s += 10 + w.length;
+    // shared leading letters (spelling slips: AHEMDABAD / AHMEDABAD)
+    let i = 0;
+    while (i < x.length && i < Q.length && x[i] === Q[i]) i++;
+    return s + i * 3;
+  };
+  return list.filter((x) => !/CLOSED/.test(x)).map((x) => [x, score(x)]).filter((e) => e[1] >= 12).sort((a, b) => b[1] - a[1]).slice(0, n).map((e) => e[0]);
+}
+exports.checkNewParty = onRequest(
+  { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
+  async (req, res) => {
+    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
+    if (limited("n:" + ip)) return res.status(429).json({ ok: false });
+    try {
+      if (!NPCHECK) NPCHECK = require("./newparty_check.json");
+      if (!PARTIES) PARTIES = require("./parties.json");
+    } catch (e) {
+      return res.json({ ok: true, errors: [], soft: [] }); // no data yet → don't block orders
+    }
+    const c = (req.body && req.body.cust) || {};
+    const errors = [], soft = [];
+    const mob = String(c.mobile || "").replace(/\D/g, "").slice(-10);
+    const byMob = (mob && ((PARTIES[mob] || [])[0] || {}).name) || (mob && NPCHECK.mobiles[mob]);
+    if (byMob) {
+      errors.push({ field: "mobile", msg: `We already have a ledger with this mobile number: ${byMob}. ` +
+        "Please choose OLD CUSTOMER and search with this mobile number." });
+    }
+    const nm = String(c.billName || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (!byMob && nm && NPCHECK.ledgers.includes(nm)) {
+      errors.push({ field: "billName", msg: `The bill name "${String(c.billName).trim().toUpperCase()}" is already used. ` +
+        "If this is you, choose OLD CUSTOMER and search with your mobile. Otherwise add your city, e.g. NAME (CITY)." });
+    }
+    const gst = String(c.taxId || "").toUpperCase().replace(/\s/g, "");
+    if (/^\d{2}[A-Z]{5}\d{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/.test(gst) && NPCHECK.gstins[gst] && !byMob) {
+      errors.push({ field: "taxId", msg: `This GST number is already with us: ${NPCHECK.gstins[gst]}. ` +
+        "Please choose OLD CUSTOMER and search with your mobile number." });
+    }
+    const tr = npNorm(c.transport);
+    if (tr && !NPCHECK.transports.includes(tr)) {
+      soft.push({ field: "transport", msg: `Transport "${tr}" is not in our list. Please choose one:`,
+        suggest: nearest(tr, NPCHECK.transports) });
+    }
+    const pl = npNorm(c.bookingPlace);
+    if (pl && (c.country || "India") === "India" && !NPCHECK.dests.includes(pl)) {
+      soft.push({ field: "bookingPlace", msg: `Booking place "${pl}" is not in our list. Please choose the nearest:`,
+        suggest: nearest(pl, NPCHECK.dests) });
+    }
+    return res.json({ ok: true, errors, soft });
+  },
+);

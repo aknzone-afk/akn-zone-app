@@ -1,2 +1,3 @@
 node_modules/
 functions/parties.json
+functions/newparty_check.json
