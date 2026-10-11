@@ -100,11 +100,26 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                                 ? 'ORDER NO. ${o.serial}'
                                 : 'ORDER (sending…)'),
                         style: const TextStyle(fontWeight: FontWeight.w700)),
-                    subtitle: Text(
-                      '${OrderService.formatWhen(o.createdAt)}\n'
-                      '${o.customer.billName} · ${o.items.length} designs · ${o.totalPcs} pcs'
-                      '${o.approxTotal != null ? ' · approx ${OrderService.formatRupees(o.approxTotal!)}' : ''}\n'
-                      '${sent ? OrderService.stepsLine(_st[o.number]?.status) + ((_st[o.number]?.lr ?? '').isNotEmpty ? '\n🚚 ${_st[o.number]!.lr}' : '') : (o.lastError ?? t('Waiting to send', 'भेजना बाकी'))}',
+                    subtitle: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          '${OrderService.formatWhen(o.createdAt)}\n'
+                          '${o.customer.billName} · ${o.items.length} designs · ${o.totalPcs} pcs'
+                          '${o.approxTotal != null ? ' · approx ${OrderService.formatRupees(o.approxTotal!)}' : ''}',
+                        ),
+                        const SizedBox(height: 6),
+                        if (sent)
+                          _Steps(status: _st[o.number]?.status)
+                        else
+                          Text(o.lastError ?? t('Waiting to send', 'भेजना बाकी')),
+                        if (sent && (_st[o.number]?.lr ?? '').isNotEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text('🚚 ${_st[o.number]!.lr}',
+                                style: const TextStyle(fontWeight: FontWeight.w700)),
+                          ),
+                      ],
                     ),
                     isThreeLine: true,
                     trailing: sent
@@ -129,6 +144,38 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                 );
               },
             ),
+    );
+  }
+}
+
+
+/// Order steps; a big GREEN tick on each one that has happened (owner).
+class _Steps extends StatelessWidget {
+  final String? status;
+  const _Steps({required this.status});
+
+  static const _keys = ['received', 'getting_ready', 'packed', 'dispatched', 'delivered'];
+  static const _names = ['Sent to shop', 'Getting order ready', 'Packed', 'Dispatched', 'Delivered'];
+
+  @override
+  Widget build(BuildContext context) {
+    final done = status == null ? 0 : _keys.indexOf(status!);
+    return Wrap(
+      spacing: 10,
+      runSpacing: 6,
+      children: [
+        for (var i = 0; i < _keys.length; i++)
+          Row(mainAxisSize: MainAxisSize.min, children: [
+            Icon(i <= done ? Icons.check_circle_rounded : Icons.radio_button_unchecked,
+                size: 22,
+                color: i <= done ? const Color(0xFF1B8E3A) : Colors.black26),
+            const SizedBox(width: 4),
+            Text(_names[i],
+                style: TextStyle(
+                    fontWeight: i <= done ? FontWeight.w700 : FontWeight.w400,
+                    color: i <= done ? const Color(0xFF1B8E3A) : Colors.black45)),
+          ]),
+      ],
     );
   }
 }

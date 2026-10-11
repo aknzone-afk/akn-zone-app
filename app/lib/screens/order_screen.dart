@@ -498,11 +498,10 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       return;
     }
     HapticFeedback.mediumImpact();
-    final clear = await _showDone(order);
+    // Owner: the cart empties by itself once the order is placed.
+    await ref.read(favoritesProvider.notifier).clear();
     if (!mounted) return;
-    if (clear == true) {
-      await ref.read(favoritesProvider.notifier).clear();
-    }
+    await _showDone(order);
     if (!mounted) return;
     context.go('/');
   }
@@ -536,12 +535,13 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
           ],
         ),
         actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(ctx, false),
-              child: Text(t('Keep cart', 'कार्ट रखें'))),
-          FilledButton(
-              onPressed: () => Navigator.pop(ctx, true),
-              child: Text(t('Empty cart', 'कार्ट खाली करें'))),
+          SizedBox(
+            width: double.infinity,
+            height: 48,
+            child: FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('OK')),
+          ),
         ],
       ),
     );
