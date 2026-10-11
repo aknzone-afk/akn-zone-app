@@ -7,6 +7,7 @@ import '../app.dart';
 import '../providers/providers.dart';
 import '../services/chat_service.dart';
 import '../services/notification_service.dart';
+import 'keyboard_hide.dart';
 
 /// Floating chat bubble on every screen (owner, 11-Oct-2026): unread badge,
 /// and a pop-up card by itself when the shop sends something (bill, reply).
@@ -49,6 +50,7 @@ class _ChatBubbleState extends ConsumerState<ChatBubble> with WidgetsBindingObse
   void _route() {
     final p = appRouter.routerDelegate.currentConfiguration.uri.path;
     if (mounted && p != _path) {
+      KeyboardHideButton.hide(); // a field on the last screen must not keep the keyboard up
       setState(() => _path = p);
       if (p == '/chat') setState(() { _unread = 0; _popup = null; });
     }
