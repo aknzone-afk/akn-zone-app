@@ -93,6 +93,7 @@ jobs:
           MATCH_GIT_URL: ${{ secrets.MATCH_GIT_URL }}
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
           MATCH_READONLY_FLAG: ${{ vars.MATCH_READONLY || 'false' }}
+          MATCH_FORCE_FLAG: ${{ vars.MATCH_FORCE || 'false' }}
         run: bundle exec fastlane ios beta
 
       - name: Upload IPA as artifact

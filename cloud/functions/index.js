@@ -814,6 +814,7 @@ async function addChat(db, ref, m) {
   await db.collection("bbapp_chat").add({ ref, cust: o.mobile || "", from: m.from, text: m.text || "",
     fileId: m.fileId || null, storagePath: m.fileId ? null : storagePath, mime: m.mime || null,
     by: m.by || "", at: Date.now(), mirrored: true });
+  if (m.from === "shop" && o.mobile) await pushTo(db, String(o.mobile).replace(/\D/g, "").slice(-10), m.text || "📎 Sent you a file");
 }
 
 /* ───────────── AKN Chat "AKN App" tab (owner, 11-Oct-2026) ─────────────
@@ -908,6 +909,7 @@ exports.aknChatOut = onDocumentCreated(
     await db.collection("bbapp_chat").add({ ref: latest ? latest.id : "", cust: mob, from: "shop", text,
       fileId: null, storagePath: d.mediaPath || null, mime: d.mediaPath ? (d.mediaMime || "image/jpeg") : null,
       by, at: Date.now(), aknChatMsg: msgId });
+    await pushTo(db, mob, text || "📷 Sent you a photo");
     // Tick it (AKN Chat's sendMessage also marks it sent for the AKN App tab).
     await event.data.ref.set({ status: "sent", statusRank: 1, wamid: `aknzone_${msgId}` }, { merge: true });
     await db.collection("chats").doc(chatId).set({ unreadCount: 0, needsAttention: false,
@@ -1080,3 +1082,46 @@ exports.checkNewParty = onRequest(
     return res.json({ ok: true, errors, soft });
   },
 );
+
+/* ───────────── PUSH to the customer's phone (owner, 11-Oct-2026) ─────────────
+ * The app registers its FCM token with the customer mobiles it follows
+ * (bbapp_push/{token}). Every shop → customer chat message (bill, payment
+ * note, staff reply) rings those phones, even with the app closed.
+ */
+exports.registerPush = onRequest(
+  { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
+  async (req, res) => {
+    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    const token = String((req.body && req.body.token) || "").slice(0, 400);
+    const mobiles = ((req.body && req.body.mobiles) || []).map((m) => String(m).replace(/\D/g, "").slice(-10))
+      .filter((m) => m.length === 10).slice(0, 3);
+    if (token.length < 20 || !mobiles.length) return res.status(400).json({ ok: false });
+    const id = require("crypto").createHash("sha1").update(token).digest("hex");
+    await admin.firestore().collection("bbapp_push").doc(id).set({ token, mobiles,
+      platform: String((req.body && req.body.platform) || "").slice(0, 10), at: Date.now() });
+    return res.json({ ok: true });
+  },
+);
+
+async function pushTo(db, mobile, body) {
+  try {
+    const snap = await db.collection("bbapp_push").where("mobiles", "array-contains", mobile).get();
+    if (snap.empty) return;
+    const tokens = snap.docs.map((d) => d.get("token"));
+    const r = await admin.messaging().sendEachForMulticast({
+      tokens,
+      notification: { title: "AKN ZONE", body: String(body || "New message").slice(0, 180) },
+      data: { route: "/chat" },
+      apns: { payload: { aps: { sound: "default", badge: 1 } } },
+      android: { priority: "high", notification: { sound: "default" } },
+    });
+    r.responses.forEach((x, i) => {
+      const code = x.error && x.error.code;
+      if (code === "messaging/registration-token-not-registered" || code === "messaging/invalid-registration-token") {
+        snap.docs[i].ref.delete().catch(() => {});
+      }
+    });
+  } catch (e) {
+    logger.warn("push failed", { mobile, error: e.message });
+  }
+}

@@ -9,6 +9,7 @@ import '../services/chat_service.dart';
 import '../services/notification_service.dart';
 import 'keyboard_hide.dart';
 import '../services/app_badge.dart';
+import '../services/push_service.dart';
 
 /// Floating chat bubble on every screen (owner, 11-Oct-2026): unread badge,
 /// and a pop-up card by itself when the shop sends something (bill, reply).
@@ -32,12 +33,14 @@ class _ChatBubbleState extends ConsumerState<ChatBubble> with WidgetsBindingObse
     WidgetsBinding.instance.addObserver(this);
     appRouter.routerDelegate.addListener(_route);
     _t = Timer.periodic(const Duration(seconds: 30), (_) => _check());
+    PushService.tick.addListener(_check); // a push arrived while the app is open
     WidgetsBinding.instance.addPostFrameCallback((_) => _check());
   }
 
   @override
   void dispose() {
     _t?.cancel();
+    PushService.tick.removeListener(_check);
     appRouter.routerDelegate.removeListener(_route);
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
@@ -63,6 +66,8 @@ class _ChatBubbleState extends ConsumerState<ChatBubble> with WidgetsBindingObse
   Future<void> _check() async {
     final prefs = ref.read(sharedPreferencesProvider);
     if (ChatService.mobiles(prefs).isEmpty || _path == '/chat') return;
+    // ignore: unawaited_futures
+    PushService.register(prefs, ref.read(dioProvider)); // phone ↔ its customer numbers
     try {
       // Every number this phone ordered for (owner 11-Oct: a reply in the
       // phone's other number's chat was never shown).

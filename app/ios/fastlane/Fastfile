@@ -41,6 +41,9 @@ platform :ios do
       team_id:              TEAM_ID,
       api_key:              api_key,
       readonly:             readonly,
+      # MATCH_FORCE=true (repo variable, one run) remakes the profile after an
+      # App ID capability change (11-Oct-2026: Push Notifications added).
+      force:                ENV.fetch("MATCH_FORCE_FLAG", "false") == "true",
       generate_apple_certs: true,
       storage_mode:         "git",
       git_url:              ENV.fetch("MATCH_GIT_URL"),

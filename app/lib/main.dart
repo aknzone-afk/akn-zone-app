@@ -1,3 +1,4 @@
+import 'services/push_service.dart';
 import 'package:flutter/material.dart';
 
 import 'l10n.dart';
@@ -65,6 +66,12 @@ Future<void> main() async {
       child: const CatalogApp(),
     ),
   );
+
+  // Real push (owner 11-Oct): the bill / a shop reply rings the phone; a tap
+  // opens the chat. Non-fatal if Firebase is unavailable.
+  // ignore: unawaited_futures
+  PushService.init(() => WidgetsBinding.instance
+      .addPostFrameCallback((_) => appRouter.push('/chat')));
 
   // Cold-launched by tapping the notification → open the folder after frame 1.
   if (launchPayload != null && launchPayload.isNotEmpty) {
