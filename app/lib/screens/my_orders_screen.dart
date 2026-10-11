@@ -134,24 +134,6 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
     ));
   }
 
-  /// Puts that order's designs back in the cart (those still in the catalog).
-  Future<void> _again(Order o) async {
-    final all = ref.read(photosProvider).map((p) => p.id).toSet();
-    final favs = ref.read(favoritesProvider);
-    var added = 0;
-    for (final it in o.items) {
-      if (all.contains(it.photoId) && !favs.contains(it.photoId)) {
-        await ref.read(favoritesProvider.notifier).toggle(it.photoId);
-        added++;
-      }
-    }
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-        content: Text(t('$added designs added to cart — check pieces and order.',
-            '$added डिज़ाइन कार्ट में डाले — पीस जाँच कर ऑर्डर करें।'))));
-    context.push('/favorites');
-  }
-
   @override
   Widget build(BuildContext context) {
     final orders = OrderService.history(ref.read(sharedPreferencesProvider));
@@ -190,8 +172,6 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                           '${o.customer.billName} · ${o.items.length} designs · ${o.totalPcs} pcs'
                           '${o.approxTotal != null ? ' · approx ${OrderService.formatRupees(o.approxTotal!)}' : ''}',
                         ),
-                        const Text('TAP TO SEE ORDER DETAILS ›',
-                            style: TextStyle(fontSize: 12, fontWeight: FontWeight.w800, color: Color(0xFF1B8E3A))),
                         const SizedBox(height: 6),
                         if (sent)
                           _Steps(status: _st[o.number]?.status)
@@ -231,9 +211,12 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                     onTap: () => context.push('/order-detail/${Uri.encodeComponent(o.number)}'),
                     trailing: sent
                         ? TextButton(
-                            onPressed: () => _again(o),
-                            child: Text(t('Order\nagain', 'फिर से\nऑर्डर'),
-                                textAlign: TextAlign.center),
+                            // Owner: "SEE ORDER" (not Order again) → the full order.
+                            onPressed: () => context.push('/order-detail/${Uri.encodeComponent(o.number)}'),
+                            child: const Text('SEE
+ORDER',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(fontWeight: FontWeight.w900)),
                           )
                         : (_busy == o.number
                             ? const SizedBox(
