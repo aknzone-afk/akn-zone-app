@@ -226,7 +226,8 @@ const TG_SECRET = defineSecret("BBAPP_TG_SECRET");
 // name); tapping the LATEST done step again undoes it.
 const STEPS = [
   { k: "g", status: "getting_ready", label: "🧺 Maal nikalna chalu", by: "readyBy", at: "readyAt" },
-  { k: "p", status: "packed", label: "📦 Packed", by: "packedBy", at: "packedAt" },
+  { k: "b", status: "bill_sent", label: "🧾 Bill sent for payment", by: "billBy", at: "billAt", auto: true },
+  { k: "y", status: "payment_received", label: "💰 Payment received", by: "paidBy", at: "paidAt" },
   { k: "d", status: "dispatched", label: "🚚 Dispatched", by: "dispatchedBy", at: "dispatchedAt" },
   { k: "v", status: "delivered", label: "✅ Delivered", by: "deliveredBy", at: "deliveredAt" },
 ];
@@ -234,24 +235,50 @@ const ORDER = ["received", ...STEPS.map((x) => x.status)];
 const PACK_AFTER_MS = 3 * 3600 * 1000;
 const STATUSES = Object.fromEntries(STEPS.map((x) => [x.k, x.status]));
 
-/** Done steps (ticked, with name) + only the NEXT step when it is allowed. */
+function hhmm(ms) {
+  return new Date(ms).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit" });
+}
+const escH = (x) => String(x).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/** The order message = original details + a STATUS section with every tap
+ *  and undo, full name and time (owner: nothing cut off). */
+function statusText(d, fallbackPlain) {
+  const base = (d && d.text) || escH(String(fallbackPlain || "").split("\n\nSTATUS")[0]);
+  const log = (d && d.log) || [];
+  if (!log.length) return base;
+  const lines = log.map((e) => {
+    const st = STEPS.find((x) => x.k === e.k);
+    const name = st ? st.label : e.k;
+    return e.a === "undo"
+      ? `↩️ Undone ${escH(name)} — by ${escH(e.by)} · ${hhmm(e.at)}`
+      : `✔ ${escH(name)} — by ${escH(e.by)} · ${hhmm(e.at)}`;
+  });
+  return `${base}\n\n<b>STATUS</b>\n${lines.join("\n")}`;
+}
+
+/** Short buttons: ↩️ Undo (latest step, only its tapper) + the NEXT step. */
 function statusKeyboard(ref, d) {
   const cur = (d && d.status) || "received";
   const ci = ORDER.indexOf(cur);
+  const log = (d && d.log) || [];
   const rows = [];
-  for (const st of STEPS) {
-    const si = ORDER.indexOf(st.status);
-    if (si <= ci) {
-      const who = d && d[st.by] ? ` — by ${d[st.by]}` : "";
-      rows.push([{ text: `✔ ${st.label}${who}`, callback_data: `s|${st.k}|${ref}`.slice(0, 64) }]);
-    } else if (si === ci + 1) {
-      if (st.status === "packed") {
-        const ready = d && d.readyAt ? d.readyAt.toMillis() : 0;
-        if (Date.now() - ready < PACK_AFTER_MS) break; // shown by packTimer after 3 h
-      }
-      rows.push([{ text: st.label, callback_data: `s|${st.k}|${ref}`.slice(0, 64) }]);
-      break;
+  const last = log[log.length - 1];
+  const curStep = STEPS.find((x) => x.status === cur);
+  if (curStep && last && last.a === "do" && last.k === curStep.k) {
+    rows.push([{ text: `↩️ Undo (${last.by})`.slice(0, 40), callback_data: `s|${curStep.k}|${ref}`.slice(0, 64) }]);
+  } else if (curStep && !log.length) {
+    rows.push([{ text: `✔ ${curStep.label}`, callback_data: `s|${curStep.k}|${ref}`.slice(0, 64) }]);
+  }
+  const next = STEPS.find((x) => ORDER.indexOf(x.status) === ci + 1);
+  if (next && next.auto) {
+    rows.push([{ text: "⏳ Waiting for bill (post it in the Bill group)", callback_data: "n" }]);
+  } else if (next) {
+    let show = true;
+    if (next.status === "packed") {
+      const ready = d && d.readyAt ? d.readyAt.toMillis() : 0;
+      if (Date.now() - ready < PACK_AFTER_MS) show = false; // packTimer reveals it after 3 h
     }
+    if (show) rows.push([{ text: next.label, callback_data: `s|${next.k}|${ref}`.slice(0, 64) }]);
   }
   return { inline_keyboard: rows };
 }
@@ -264,7 +291,7 @@ async function tg(method, body) {
 }
 
 exports.tgWebhook = onRequest(
-  { region: "asia-south1", secrets: [TG_TOKEN, TG_SECRET], timeoutSeconds: 30, memory: "256MiB", maxInstances: 3, invoker: "public" },
+  { region: "asia-south1", secrets: [TG_TOKEN, TG_SECRET, GEMINI_API_KEY], timeoutSeconds: 120, memory: "256MiB", maxInstances: 3, invoker: "public" },
   async (req, res) => {
     if (req.get("x-telegram-bot-api-secret-token") !== TG_SECRET.value().trim()) return res.status(403).send("no");
     const u = req.body || {};
@@ -272,8 +299,16 @@ exports.tgWebhook = onRequest(
     try {
       if (u.callback_query) {
         const q = u.callback_query;
+        if (q.data === "n") {
+          await tg("answerCallbackQuery", { callback_query_id: q.id });
+          return res.status(200).send("ok");
+        }
         const [tag, k, ref] = String(q.data || "").split("|");
         const step = STEPS.find((x) => x.k === k);
+        if (tag === "s" && step && step.auto) {
+          await tg("answerCallbackQuery", { callback_query_id: q.id, text: "This step ticks by itself." });
+          return res.status(200).send("ok");
+        }
         if (tag === "s" && step && ref) {
           const docRef = db.collection("bbapp_orders").doc(ref);
           const name = [q.from && q.from.first_name, q.from && q.from.last_name].filter(Boolean).join(" ")
@@ -284,9 +319,15 @@ exports.tgWebhook = onRequest(
             const ci = ORDER.indexOf(cur), ni = ORDER.indexOf(step.status);
             const del = admin.firestore.FieldValue.delete();
             if (ni === ci) {
-              // Undo the latest step.
+              // Undo the latest step — only by the person who tapped it.
+              const lg = d.get("log") || [];
+              const lastDo = [...lg].reverse().find((e) => e.a === "do" && e.k === step.k);
+              if (lastDo && lastDo.uid && q.from && lastDo.uid !== q.from.id) {
+                return { ok: false, msg: `Only ${lastDo.by} can undo this.` };
+              }
               const upd = { status: ORDER[ci - 1], [step.by]: del, [step.at]: del,
-                statusAt: admin.firestore.FieldValue.serverTimestamp() };
+                statusAt: admin.firestore.FieldValue.serverTimestamp(),
+                log: admin.firestore.FieldValue.arrayUnion({ a: "undo", k: step.k, by: name, at: Date.now(), uid: (q.from && q.from.id) || 0 }) };
               if (step.status === "getting_ready") upd.packShown = del;
               tx.set(docRef, upd, { merge: true });
               return { ok: true, msg: `Undone: ${step.label}` };
@@ -303,20 +344,27 @@ exports.tgWebhook = onRequest(
             }
             tx.set(docRef, { status: step.status, [step.by]: name,
               [step.at]: admin.firestore.FieldValue.serverTimestamp(),
-              statusAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+              statusAt: admin.firestore.FieldValue.serverTimestamp(),
+              log: admin.firestore.FieldValue.arrayUnion({ a: "do", k: step.k, by: name, at: Date.now(), uid: (q.from && q.from.id) || 0 }) },
+              { merge: true });
             return { ok: true, msg: `${step.label} — by ${name}` };
           });
           await tg("answerCallbackQuery", { callback_query_id: q.id, text: verdict.msg, show_alert: !verdict.ok });
           if (verdict.ok && q.message) {
             const fresh = (await docRef.get()).data() || {};
-            await tg("editMessageReplyMarkup", {
+            await tg("editMessageText", {
               chat_id: q.message.chat.id, message_id: q.message.message_id,
+              text: statusText(fresh, q.message.text), parse_mode: "HTML",
+              disable_web_page_preview: true,
               reply_markup: statusKeyboard(ref, fresh),
             });
           }
         } else {
           await tg("answerCallbackQuery", { callback_query_id: q.id });
         }
+      } else if (u.message && /bill/i.test(String((u.message.chat && u.message.chat.title) || ""))
+                 && (u.message.photo || (u.message.document && /image|pdf/.test(u.message.document.mime_type || "")))) {
+        await handleBillPhoto(db, u.message);
       } else if (u.message && /^\/reset(\s|$)/i.test(String(u.message.text || ""))) {
         // "/reset 98xxxxxxxx" — free this number from every phone lock.
         let m = String(u.message.text).replace(/\D/g, "");
@@ -359,12 +407,17 @@ exports.registerOrder = onRequest(
     const ref = String((req.body && req.body.ref) || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
     const chat = String((req.body && req.body.chat) || "").replace(/[^0-9-]/g, "");
     const msg = Number(req.body && req.body.msg) || 0;
+    const text = String((req.body && req.body.text) || "").slice(0, 3500);
+    const mobile = String((req.body && req.body.mobile) || "").replace(/\D/g, "").slice(-10);
+    const billName = String((req.body && req.body.billName) || "").slice(0, 120);
+    const serial = Number(req.body && req.body.serial) || null;
+    const addOnTo = String((req.body && req.body.addOnTo) || "").slice(0, 40) || null;
     if (!ref || !chat || !msg) return res.status(400).json({ ok: false });
     const db = admin.firestore();
     await db.collection("bbapp_msgmap").doc(`${chat}_${msg}`).set({ ref });
     const docRef = db.collection("bbapp_orders").doc(ref);
     const d = await docRef.get();
-    await docRef.set({ msg, chat, ...(d.exists && d.get("status") ? {} : {
+    await docRef.set({ msg, chat, mobile, billName, serial, addOnTo, ...(text ? { text } : {}), ...(d.exists && d.get("status") ? {} : {
       status: "received", statusAt: admin.firestore.FieldValue.serverTimestamp() }) }, { merge: true });
     return res.json({ ok: true });
   },
@@ -380,9 +433,24 @@ exports.orderStatus = onRequest(
     const refs = ((req.body && req.body.refs) || []).map((r) => String(r).replace(/[^A-Z0-9-]/gi, "").slice(0, 40)).filter(Boolean).slice(0, 60);
     const db = admin.firestore();
     const snaps = refs.length ? await db.getAll(...refs.map((r) => db.collection("bbapp_orders").doc(r))) : [];
+    // The app also sends who each order is for — fills orders registered
+    // before this was stored, so their bills can be matched.
+    const info = (req.body && req.body.info) || {};
+    for (const sn of snaps) {
+      const i = info[sn.id];
+      if (sn.exists && i && !sn.get("mobile")) {
+        await sn.ref.set({
+          mobile: String(i.mobile || "").replace(/\D/g, "").slice(-10),
+          billName: String(i.billName || "").slice(0, 120),
+          serial: Number(i.serial) || null,
+          addOnTo: String(i.addOnTo || "").slice(0, 40) || null,
+        }, { merge: true });
+      }
+    }
     const out = {};
     for (const s of snaps) {
-      if (s.exists) out[s.id] = { status: s.get("status") || null, lr: s.get("lr") || null };
+      if (s.exists) out[s.id] = { status: s.get("status") || null, lr: s.get("lr") || null,
+        bill: !!s.get("billFileId"), billNo: s.get("billNo") || null, billTotal: s.get("billTotal") || null };
     }
     return res.json({ ok: true, orders: out });
   },
@@ -442,5 +510,131 @@ exports.packTimer = onSchedule(
       await tg("editMessageReplyMarkup", { chat_id: d.chat, message_id: d.msg, reply_markup: statusKeyboard(doc.id, d) });
       await doc.ref.set({ packShown: true }, { merge: true });
     }
+  },
+);
+
+
+/* ───────────── BILL GROUP + PAYMENT (owner, 11-Oct-2026) ─────────────
+ * A bill photo posted in any group with "Bill" in its name is read (party
+ * name, mobile, GSTIN, bill no., total), matched to that party's open order,
+ * linked to it (status Bill sent for payment) and shown in the party's app.
+ * The party sends a payment screenshot from the app → it is posted under the
+ * order in the Party order group and the order ticks Payment received.
+ */
+async function tgFileBytes(fileId) {
+  const f = await tg("getFile", { file_id: fileId });
+  const path = f && f.result && f.result.file_path;
+  if (!path) return null;
+  const r = await fetch(`https://api.telegram.org/file/bot${TG_TOKEN.value()}/${path}`);
+  return r.ok ? Buffer.from(await r.arrayBuffer()) : null;
+}
+
+const BILL_PROMPT =
+  "This is a SALES BILL / TAX INVOICE from B.B. SYNTHETICS (AKN ZONE), Surat. Read the BUYER (Bill to / party) details — " +
+  "NOT the seller. Return JSON: buyerName (as printed), buyerMobile (digits, may be inside the address), buyerGstin, " +
+  "billNo (as printed, e.g. 4231/S), billDate, grandTotal (number, rupees). Use null when not printed.";
+const BILL_SCHEMA = { type: "object", properties: {
+  buyerName: { type: ["string", "null"] }, buyerMobile: { type: ["string", "null"] }, buyerGstin: { type: ["string", "null"] },
+  billNo: { type: ["string", "null"] }, billDate: { type: ["string", "null"] }, grandTotal: { type: ["number", "null"] } },
+  required: ["buyerName"] };
+
+async function geminiJson(bytes, mime, prompt, schema) {
+  const { MODELS } = require("./orderVision");
+  for (const model of MODELS) {
+    try {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: "POST", headers: { "x-goog-api-key": GEMINI_API_KEY.value(), "Content-Type": "application/json" },
+        body: JSON.stringify({ contents: [{ role: "user", parts: [{ inlineData: { mimeType: mime, data: bytes.toString("base64") } }, { text: prompt }] }],
+          generationConfig: { responseMimeType: "application/json", responseJsonSchema: schema, temperature: 0 } }),
+      });
+      if (!r.ok) continue;
+      const j = await r.json();
+      return JSON.parse(j.candidates[0].content.parts.map((p) => p.text || "").join(""));
+    } catch (e) { /* next model */ }
+  }
+  return null;
+}
+
+const normName = (x) => String(x || "").toUpperCase().replace(/\(.*?\)/g, " ").replace(/[^A-Z0-9]/g, "");
+
+/** Moves an order to a step automatically and redraws its group message. */
+async function autoStep(db, ref, k, by, extra) {
+  const step = STEPS.find((x) => x.k === k);
+  const docRef = db.collection("bbapp_orders").doc(ref);
+  await docRef.set({ status: step.status, [step.by]: by, [step.at]: admin.firestore.FieldValue.serverTimestamp(),
+    statusAt: admin.firestore.FieldValue.serverTimestamp(),
+    log: admin.firestore.FieldValue.arrayUnion({ a: "do", k, by, at: Date.now(), uid: 0 }), ...(extra || {}) }, { merge: true });
+  const d = (await docRef.get()).data() || {};
+  if (d.chat && d.msg) {
+    await tg("editMessageText", { chat_id: d.chat, message_id: d.msg, text: statusText(d, ""), parse_mode: "HTML",
+      disable_web_page_preview: true, reply_markup: statusKeyboard(ref, d) });
+  }
+  return d;
+}
+
+async function handleBillPhoto(db, m) {
+  const reply = (text) => tg("sendMessage", { chat_id: m.chat.id, reply_to_message_id: m.message_id, text });
+  const fileId = m.photo ? m.photo[m.photo.length - 1].file_id : m.document.file_id;
+  const mime = m.photo ? "image/jpeg" : (m.document.mime_type || "image/jpeg");
+  const bytes = await tgFileBytes(fileId);
+  if (!bytes) return reply("⚠️ Could not download this bill.");
+  const b = await geminiJson(bytes, mime, BILL_PROMPT, BILL_SCHEMA);
+  if (!b) return reply("⚠️ Could not read this bill (AI busy) — please send it again in a few minutes.");
+  const mob = String(b.buyerMobile || "").replace(/\D/g, "").slice(-10);
+  const nm = normName(b.buyerName);
+  // Open orders (not yet billed), newest first; main orders before add-ons.
+  const snap = await db.collection("bbapp_orders").where("status", "in", ["received", "getting_ready"]).get();
+  const cands = snap.docs.map((x) => ({ id: x.id, ...x.data() }))
+    .filter((o) => (mob && o.mobile && o.mobile === mob) || (nm && o.billName && normName(o.billName) === nm)
+      || (nm && o.billName && (normName(o.billName).includes(nm) || nm.includes(normName(o.billName)))));
+  if (!cands.length) {
+    return reply(`❓ No open app order found for ${b.buyerName || "this party"}${mob ? " (" + mob + ")" : ""}. Bill not sent.`);
+  }
+  cands.sort((a, c) => (c.statusAt ? c.statusAt.toMillis() : 0) - (a.statusAt ? a.statusAt.toMillis() : 0));
+  const main = cands.find((o) => !o.addOnTo) || cands[0];
+  const linked = [main, ...cands.filter((o) => o.addOnTo && (o.addOnTo === main.id))];
+  const extra = { billFileId: fileId, billMime: mime, billNo: b.billNo || null, billTotal: b.grandTotal || null };
+  for (const o of linked) await autoStep(db, o.id, "b", "Bill group", extra);
+  const no = main.serial ? `ORDER NO. ${main.serial}` : "the order";
+  return reply(`✅ Bill sent to ${main.billName} — ${no}${b.billNo ? " · Bill " + b.billNo : ""}${b.grandTotal ? " · ₹" + b.grandTotal : ""}`);
+}
+
+/** App: the bill image for an order (party taps VIEW BILL). */
+exports.billImage = onRequest(
+  { region: "asia-south1", secrets: [TG_TOKEN], timeoutSeconds: 30, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
+  async (req, res) => {
+    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    const ref = String((req.body && req.body.ref) || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
+    const d = ref ? (await admin.firestore().collection("bbapp_orders").doc(ref).get()).data() : null;
+    if (!d || !d.billFileId) return res.json({ ok: false, error: "no bill yet" });
+    const bytes = await tgFileBytes(d.billFileId);
+    if (!bytes) return res.json({ ok: false });
+    return res.json({ ok: true, mime: d.billMime || "image/jpeg", billNo: d.billNo || null, total: d.billTotal || null,
+      data: bytes.toString("base64") });
+  },
+);
+
+/** App: party's payment screenshot → posted under the order → Payment received. */
+exports.paymentProof = onRequest(
+  { region: "asia-south1", secrets: [TG_TOKEN], timeoutSeconds: 60, memory: "512MiB", maxInstances: 3, invoker: "public", cors: true },
+  async (req, res) => {
+    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    const ref = String((req.body && req.body.ref) || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
+    const img = Buffer.from(String((req.body && req.body.image) || ""), "base64");
+    if (!ref || !img.length || img.length > 6 * 1024 * 1024) return res.status(400).json({ ok: false });
+    const db = admin.firestore();
+    const d = (await db.collection("bbapp_orders").doc(ref).get()).data();
+    if (!d || !d.chat) return res.json({ ok: false, error: "order not found" });
+    const fd = new FormData();
+    fd.append("chat_id", String(d.chat));
+    if (d.msg) fd.append("reply_to_message_id", String(d.msg));
+    fd.append("caption", `💰 Payment screenshot — ${d.billName || ""}${d.serial ? " · ORDER NO. " + d.serial : ""}`);
+    fd.append("photo", new Blob([img], { type: "image/jpeg" }), "payment.jpg");
+    await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/sendPhoto`, { method: "POST", body: fd });
+    const cur = d.status || "received";
+    if (ORDER.indexOf(cur) < ORDER.indexOf("payment_received")) {
+      await autoStep(db, ref, "y", d.billName || "party", {});
+    }
+    return res.json({ ok: true });
   },
 );

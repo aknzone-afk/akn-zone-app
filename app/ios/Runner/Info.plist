@@ -68,6 +68,10 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Choose your payment screenshot to send to the shop.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Take a photo of your payment to send to the shop.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

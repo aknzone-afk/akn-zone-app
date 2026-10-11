@@ -188,33 +188,69 @@ class OrderService {
 
   /// Shop status per order (received → getting ready → packed → dispatched)
   /// and the LR / dispatch text the shop replied with.
-  static Future<Map<String, ({String? status, String? lr})>> fetchStatuses(
-      Dio dio, List<String> refs) async {
+  static Future<Map<String, ({String? status, String? lr, bool bill})>> fetchStatuses(
+      Dio dio, List<String> refs, {Map<String, Map<String, dynamic>> info = const {}}) async {
     if (refs.isEmpty) return {};
     final res = await dio.post<dynamic>(
       '$_cloud/orderStatus',
-      data: {'refs': refs},
+      data: {'refs': refs, 'info': info},
       options: Options(
           headers: {'x-app-key': 'akn-zone-app-2026'},
           contentType: Headers.jsonContentType,
           receiveTimeout: const Duration(seconds: 20)),
     );
     final d = res.data is String ? jsonDecode(res.data as String) : res.data;
-    final out = <String, ({String? status, String? lr})>{};
+    final out = <String, ({String? status, String? lr, bool bill})>{};
     if (d is Map && d['orders'] is Map) {
       (d['orders'] as Map).forEach((k, v) {
         if (v is Map) {
-          out['$k'] = (status: v['status'] as String?, lr: v['lr'] as String?);
+          out['$k'] = (
+            status: v['status'] as String?,
+            lr: v['lr'] as String?,
+            bill: v['bill'] == true
+          );
         }
       });
     }
     return out;
   }
 
+  /// The shop's bill for an order (posted in the Bill group).
+  static Future<({List<int> bytes, String mime, String? billNo})?> fetchBill(
+      Dio dio, String ref) async {
+    final res = await dio.post<dynamic>('$_cloud/billImage',
+        data: {'ref': ref},
+        options: Options(
+            headers: {'x-app-key': 'akn-zone-app-2026'},
+            contentType: Headers.jsonContentType,
+            receiveTimeout: const Duration(seconds: 40)));
+    final d = res.data is String ? jsonDecode(res.data as String) : res.data;
+    if (d is! Map || d['ok'] != true) return null;
+    return (
+      bytes: base64Decode(d['data'] as String),
+      mime: '${d['mime'] ?? 'image/jpeg'}',
+      billNo: d['billNo'] as String?
+    );
+  }
+
+  /// Party's payment screenshot → posted under the order in the shop group.
+  static Future<bool> sendPaymentProof(Dio dio, String ref, List<int> jpg) async {
+    final res = await dio.post<dynamic>('$_cloud/paymentProof',
+        data: {'ref': ref, 'image': base64Encode(jpg)},
+        options: Options(
+            headers: {'x-app-key': 'akn-zone-app-2026'},
+            contentType: Headers.jsonContentType,
+            sendTimeout: const Duration(seconds: 60),
+            receiveTimeout: const Duration(seconds: 60)));
+    final d = res.data is String ? jsonDecode(res.data as String) : res.data;
+    return d is Map && d['ok'] == true;
+  }
+
   static String statusLabel(String? s) => switch (s) {
         'received' => '✅ Received by shop',
         'getting_ready' => '🧺 Getting your order ready',
-        'packed' => '📦 Packed',
+        'bill_sent' => '🧾 Bill sent for payment',
+        'payment_received' => '💰 Payment received',
         'dispatched' => '🚚 Dispatched',
         'delivered' => '✅ Delivered',
         _ => 'Sent to shop ✓',
@@ -222,8 +258,8 @@ class OrderService {
 
   /// Step row for My Orders (owner): every step, ticked once it happened.
   static String stepsLine(String? s) {
-    const steps = ['received', 'getting_ready', 'packed', 'dispatched', 'delivered'];
-    const names = ['Sent to shop', 'Getting order ready', 'Packed', 'Dispatched', 'Delivered'];
+    const steps = ['received', 'getting_ready', 'bill_sent', 'payment_received', 'dispatched', 'delivered'];
+    const names = ['Sent to shop', 'Getting order ready', 'Bill sent for payment', 'Payment received', 'Dispatched', 'Delivered'];
     final done = s == null ? 0 : steps.indexOf(s);
     return [
       for (var i = 0; i < steps.length; i++)
@@ -610,7 +646,22 @@ class OrderService {
           if (msgId != null) {
             await dio.post<dynamic>(
               '$_cloud/registerOrder',
-              data: {'ref': order.number, 'chat': cfg.chatId, 'msg': msgId},
+              data: {
+                'ref': order.number,
+                'chat': cfg.chatId,
+                'msg': msgId,
+                'text': await detailsText(order,
+                    mainSerial: order.addOnTo == null
+                        ? null
+                        : history(prefs)
+                            .where((x) => x.number == order.addOnTo)
+                            .firstOrNull
+                            ?.serial),
+                'mobile': order.customer.mobile,
+                'billName': order.customer.billName,
+                'serial': order.serial,
+                'addOnTo': order.addOnTo,
+              },
               options: Options(
                   headers: {'x-app-key': 'akn-zone-app-2026'},
                   contentType: Headers.jsonContentType),

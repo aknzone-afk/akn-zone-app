@@ -1,6 +1,12 @@
 import 'package:catalog_app/widgets/caps_text.dart';
 import 'package:flutter/material.dart';
+import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:go_router/go_router.dart';
 import '../l10n.dart';
 
@@ -20,7 +26,7 @@ class MyOrdersScreen extends ConsumerStatefulWidget {
 
 class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
   String? _busy;
-  Map<String, ({String? status, String? lr})> _st = {};
+  Map<String, ({String? status, String? lr, bool bill})> _st = {};
 
   @override
   void initState() {
@@ -30,13 +36,89 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
 
   Future<void> _loadStatus() async {
     try {
-      final refs = OrderService.history(ref.read(sharedPreferencesProvider))
+      final sentOrders = OrderService.history(ref.read(sharedPreferencesProvider))
           .where((o) => o.status == OrderStatus.sent)
-          .map((o) => o.number)
           .toList();
-      final st = await OrderService.fetchStatuses(ref.read(dioProvider), refs);
+      final refs = sentOrders.map((o) => o.number).toList();
+      final info = {
+        for (final o in sentOrders)
+          o.number: {
+            'mobile': o.customer.mobile,
+            'billName': o.customer.billName,
+            'serial': o.serial,
+            'addOnTo': o.addOnTo,
+          }
+      };
+      final st = await OrderService.fetchStatuses(ref.read(dioProvider), refs, info: info);
       if (mounted) setState(() => _st = st);
     } catch (_) {}
+  }
+
+  Future<void> _viewBill(String ref) async {
+    showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const Center(child: CircularProgressIndicator()));
+    final b = await OrderService.fetchBill(ref.read(dioProvider), ref)
+        .catchError((_) => null);
+    if (!mounted) return;
+    Navigator.of(context, rootNavigator: true).pop();
+    if (b == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Bill not available yet. Please try again.')));
+      return;
+    }
+    if (b.mime.contains('pdf')) {
+      final dir = await getTemporaryDirectory();
+      final f = File('${dir.path}/BILL${b.billNo != null ? ' ' + b.billNo!.replaceAll('/', '-') : ''}.pdf');
+      await f.writeAsBytes(b.bytes, flush: true);
+      await Share.shareXFiles([XFile(f.path, mimeType: 'application/pdf')]);
+      return;
+    }
+    await Navigator.of(context).push(MaterialPageRoute<void>(
+      builder: (_) => Scaffold(
+        backgroundColor: Colors.black,
+        appBar: AppBar(
+          backgroundColor: Colors.black,
+          foregroundColor: Colors.white,
+          title: Text(b.billNo != null ? 'BILL ${b.billNo}' : 'BILL'),
+          actions: [
+            IconButton(
+              icon: const Icon(Icons.share_rounded),
+              onPressed: () async {
+                final dir = await getTemporaryDirectory();
+                final f = File('${dir.path}/bill.jpg');
+                await f.writeAsBytes(b.bytes, flush: true);
+                await Share.shareXFiles([XFile(f.path, mimeType: 'image/jpeg')]);
+              },
+            ),
+          ],
+        ),
+        body: InteractiveViewer(
+            maxScale: 6,
+            child: Center(child: Image.memory(Uint8List.fromList(b.bytes)))),
+      ),
+    ));
+  }
+
+  Future<void> _sendPayment(String ref) async {
+    final x = await ImagePicker().pickImage(
+        source: ImageSource.gallery, maxWidth: 1800, imageQuality: 85);
+    if (x == null || !mounted) return;
+    showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (_) => const Center(child: CircularProgressIndicator()));
+    final ok = await OrderService.sendPaymentProof(
+            ref.read(dioProvider), ref, await x.readAsBytes())
+        .catchError((_) => false);
+    if (!mounted) return;
+    Navigator.of(context, rootNavigator: true).pop();
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(ok
+            ? 'Payment screenshot sent ✓'
+            : 'Could not send. Please try again.')));
+    if (ok) _loadStatus();
   }
 
   Future<void> _retry(String number) async {
@@ -113,6 +195,27 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                           _Steps(status: _st[o.number]?.status)
                         else
                           Text(o.lastError ?? t('Waiting to send', 'भेजना बाकी')),
+                        if (sent && (_st[o.number]?.bill ?? false))
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Wrap(spacing: 8, runSpacing: 6, children: [
+                              FilledButton.icon(
+                                style: FilledButton.styleFrom(
+                                    visualDensity: VisualDensity.compact),
+                                onPressed: () => _viewBill(o.number),
+                                icon: const Icon(Icons.receipt_long_rounded, size: 18),
+                                label: const Text('VIEW BILL'),
+                              ),
+                              if (_st[o.number]?.status == 'bill_sent')
+                                OutlinedButton.icon(
+                                  style: OutlinedButton.styleFrom(
+                                      visualDensity: VisualDensity.compact),
+                                  onPressed: () => _sendPayment(o.number),
+                                  icon: const Icon(Icons.upload_rounded, size: 18),
+                                  label: const Text('SEND PAYMENT SCREENSHOT'),
+                                ),
+                            ]),
+                          ),
                         if (sent && (_st[o.number]?.lr ?? '').isNotEmpty)
                           Padding(
                             padding: const EdgeInsets.only(top: 4),
@@ -154,8 +257,8 @@ class _Steps extends StatelessWidget {
   final String? status;
   const _Steps({required this.status});
 
-  static const _keys = ['received', 'getting_ready', 'packed', 'dispatched', 'delivered'];
-  static const _names = ['Sent to shop', 'Getting order ready', 'Packed', 'Dispatched', 'Delivered'];
+  static const _keys = ['received', 'getting_ready', 'bill_sent', 'payment_received', 'dispatched', 'delivered'];
+  static const _names = ['Sent to shop', 'Getting order ready', 'Bill sent for payment', 'Payment received', 'Dispatched', 'Delivered'];
 
   @override
   Widget build(BuildContext context) {
