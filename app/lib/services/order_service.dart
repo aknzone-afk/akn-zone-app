@@ -385,6 +385,7 @@ class OrderService {
     Map<String, String> pickLabels = const {},
     required CustomerDetails customer,
     required String note,
+    String? lockNote,
     void Function(String step)? onStep,
   }) async {
     final parcel = activeParcel(prefs);
@@ -405,6 +406,7 @@ class OrderService {
       ],
       customer: customer,
       note: note.trim(),
+      lockNote: lockNote,
     );
 
     // Freeze the photos NOW: emptying the cart later wipes the markup, and a
@@ -779,6 +781,7 @@ class OrderService {
     if (unpriced > 0) {
       b.writeln('⚠️ <b>$unpriced design${unpriced == 1 ? '' : 's'} without price</b>');
     }
+    if ((o.lockNote ?? '').isNotEmpty) b.writeln(_esc(o.lockNote!));
     if (c.kind == 'old') {
       // Owner: for an old customer only these — the rest is in Tally.
       b.writeln('🟢 <b>OLD CUSTOMER</b>');

@@ -294,6 +294,21 @@ exports.tgWebhook = onRequest(
         } else {
           await tg("answerCallbackQuery", { callback_query_id: q.id });
         }
+      } else if (u.message && /^\/reset(\s|$)/i.test(String(u.message.text || ""))) {
+        // "/reset 98xxxxxxxx" — free this number from every phone lock.
+        let m = String(u.message.text).replace(/\D/g, "");
+        if (m.length === 12 && m.startsWith("91")) m = m.slice(2);
+        let freed = 0;
+        if (m.length >= 7) {
+          const ds = await db.collection("bbapp_devices").where("mobiles", "array-contains", m).get();
+          for (const d of ds.docs) {
+            await d.ref.set({ mobiles: (d.get("mobiles") || []).filter((x) => x !== m) }, { merge: true });
+            freed++;
+          }
+          await db.collection("bbapp_mobiles").doc(m).delete().catch(() => {});
+        }
+        await tg("sendMessage", { chat_id: u.message.chat.id, reply_to_message_id: u.message.message_id,
+          text: m.length >= 7 ? `✅ ${m} reset — removed from ${freed} phone lock(s).` : "Send: /reset 98xxxxxxxx" });
       } else if (u.message && u.message.reply_to_message && u.message.text) {
         // A reply to an order message = dispatch info (LR no., transport).
         const m = u.message;
@@ -347,5 +362,44 @@ exports.orderStatus = onRequest(
       if (s.exists) out[s.id] = { status: s.get("status") || null, lr: s.get("lr") || null };
     }
     return res.json({ ok: true, orders: out });
+  },
+);
+
+/* ───────────── PHONE LOCK (owner, 11-Oct-2026) ─────────────
+ * One phone (app-made id kept in the iOS Keychain / Android secure store)
+ * may use at most 2 mobile numbers. The 3rd is refused. A number seen before
+ * on another phone is allowed but flagged ("new phone"). Shop resets with
+ * "/reset 98xxxxxxxx" in the orders group (see tgWebhook).
+ */
+exports.phoneLock = onRequest(
+  { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
+  async (req, res) => {
+    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
+    if (limited("l:" + ip)) return res.status(429).json({ ok: false });
+    const device = String((req.body && req.body.device) || "").replace(/[^a-z0-9-]/gi, "").slice(0, 64);
+    let m = String((req.body && req.body.mobile) || "").replace(/\D/g, "");
+    if (m.length === 12 && m.startsWith("91")) m = m.slice(2);
+    if (!device || m.length < 7) return res.status(400).json({ ok: false });
+    const db = admin.firestore();
+    const dRef = db.collection("bbapp_devices").doc(device);
+    const mRef = db.collection("bbapp_mobiles").doc(m);
+    const out = await db.runTransaction(async (tx) => {
+      const d = await tx.get(dRef);
+      const mm = await tx.get(mRef);
+      const mobiles = (d.exists && d.get("mobiles")) || [];
+      const devices = (mm.exists && mm.get("devices")) || [];
+      const newPhone = devices.length > 0 && !devices.includes(device);
+      if (!mobiles.includes(m)) {
+        if (mobiles.length >= 2) return { allowed: false, mobiles };
+        mobiles.push(m);
+        tx.set(dRef, { mobiles, at: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      }
+      if (!devices.includes(device)) {
+        tx.set(mRef, { devices: [...devices, device] }, { merge: true });
+      }
+      return { allowed: true, index: mobiles.indexOf(m) + 1, first: mobiles[0], newPhone, phone: device.slice(-4).toUpperCase() };
+    });
+    return res.json({ ok: true, ...out });
   },
 );

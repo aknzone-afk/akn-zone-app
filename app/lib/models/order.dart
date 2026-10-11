@@ -103,6 +103,9 @@ class Order {
   final CustomerDetails customer;
   final String note;
 
+  /// Phone-lock warning for the shop ("NEW PHONE…", "2nd number…").
+  final String? lockNote;
+
   /// Set when this order is an ADD-ON to an earlier order's parcel (placed
   /// within its 2-day window, no minimum).
   final String? addOnTo;
@@ -124,6 +127,7 @@ class Order {
     required this.items,
     required this.customer,
     this.note = '',
+    this.lockNote,
     this.addOnTo,
     this.serial,
     this.status = OrderStatus.pending,
@@ -154,6 +158,7 @@ class Order {
         'items': items.map((e) => e.toJson()).toList(),
         'customer': customer.toJson(),
         'note': note,
+        if (lockNote != null) 'lock': lockNote,
         if (addOnTo != null) 'addOnTo': addOnTo,
         if (serial != null) 'serial': serial,
         'status': status.name,
@@ -172,6 +177,7 @@ class Order {
         customer:
             CustomerDetails.fromJson(Map<String, dynamic>.from(j['customer'])),
         note: (j['note'] ?? '') as String,
+        lockNote: j['lock'] as String?,
         addOnTo: j['addOnTo'] as String?,
         serial: j['serial'] as int?,
         status: OrderStatus.values.firstWhere((s) => s.name == j['status'],

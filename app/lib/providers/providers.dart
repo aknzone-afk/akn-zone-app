@@ -1382,6 +1382,16 @@ final filteredPhotosProvider = Provider<List<Photo>>((ref) {
   return filtered;
 });
 
+/// Owner, 11-Oct-2026: the 50 NEWEST designs carry a NEW badge; when a new
+/// design arrives the oldest of the 50 drops out.
+const int kNewBadgeCount = 50;
+final newDesignIdsProvider = Provider<Set<String>>((ref) {
+  final photos = [...ref.watch(photosProvider)];
+  photos.sort((a, b) => (b.driveModified ?? b.lastSeen)
+      .compareTo(a.driveModified ?? a.lastSeen));
+  return photos.take(kNewBadgeCount).map((p) => p.id).toSet();
+});
+
 /// Multi-selection state.
 class SelectionNotifier extends StateNotifier<Set<String>> {
   SelectionNotifier() : super(const {});

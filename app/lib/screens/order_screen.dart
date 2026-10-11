@@ -12,6 +12,7 @@ import '../models/order.dart';
 import '../models/photo.dart';
 import '../providers/providers.dart';
 import '../services/order_service.dart';
+import '../services/phone_lock.dart';
 import '../services/photo_freshness.dart';
 import '../services/marks_service.dart';
 import '../services/picks_service.dart';
@@ -61,6 +62,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
 
   List<String> _transports = const [];
   bool _sending = false;
+  String? _lockNote;
 
   bool get _india => _country == 'India';
 
@@ -108,6 +110,16 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       _matches = [];
       _party = null;
     });
+    final lock = await PhoneLock.check(ref.read(dioProvider), m);
+    if (!lock.allowed) {
+      if (mounted) {
+        setState(() {
+          _looking = false;
+          _lookErr = 'This phone is already linked to 2 numbers. To change, call us.';
+        });
+      }
+      return;
+    }
     try {
       final list = await OrderService.lookupParty(ref.read(dioProvider), m);
       if (!mounted) return;
@@ -363,7 +375,64 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     );
   }
 
+  /// Same designs + pieces sent in the last 10 minutes?
+  bool _isDuplicate(List<Photo> photos) {
+    String sig(Iterable<(String, int)> it) {
+      final l = it.map((e) => '${e.$1}x${e.$2}').toList()..sort();
+      return l.join(',');
+    }
+    final now = sig(photos.map((p) => (p.id, _qtyFor(p))));
+    final cutoff = DateTime.now().subtract(const Duration(minutes: 10));
+    return OrderService.history(ref.read(sharedPreferencesProvider)).any((o) =>
+        o.createdAt.isAfter(cutoff) &&
+        sig(o.items.map((i) => (i.photoId, i.qty))) == now);
+  }
+
   Future<void> _send(List<Photo> photos, CustomerDetails customer) async {
+    if (_isDuplicate(photos)) {
+      final again = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Already sent'),
+          content: const Text(
+              'You sent this same order a few minutes ago. Send it again?'),
+          actions: [
+            TextButton(
+                onPressed: () => Navigator.pop(ctx, false),
+                child: const Text('No')),
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx, true),
+                child: const Text('Send again')),
+          ],
+        ),
+      );
+      if (again != true || !mounted) return;
+    }
+    // Phone lock: at most 2 numbers per phone.
+    final digits = customer.mobile.replaceAll(RegExp(r'\D'), '');
+    final lock = await PhoneLock.check(ref.read(dioProvider), digits);
+    if (!mounted) return;
+    if (!lock.allowed) {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          icon: const Icon(Icons.block_rounded, color: Color(0xFFD32F2F), size: 44),
+          title: const Text('Number limit reached'),
+          content: const Text(
+              'This phone is already linked to 2 mobile numbers. To change, please call us.'),
+          actions: [
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+          ],
+        ),
+      );
+      return;
+    }
+    final lockNote = [
+      if (lock.newPhone) '⚠️ NEW PHONE for this number',
+      if (lock.index == 2) '⚠️ 2nd number on this phone (1st: ${lock.first ?? '-'})',
+    ].join('\n');
+    _lockNote = lockNote.isEmpty ? null : lockNote;
     setState(() => _sending = true);
     final step = ValueNotifier<String>('Preparing…');
     // ignore: unawaited_futures
@@ -413,6 +482,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         },
         customer: customer,
         note: _note.text,
+        lockNote: _lockNote,
         onStep: (s) => step.value = s,
       );
     } catch (e) {
