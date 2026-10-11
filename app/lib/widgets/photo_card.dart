@@ -57,7 +57,13 @@ class PhotoCard extends ConsumerWidget {
         (pick == null || pick.isEmpty) ? null : pick.summary(count);
 
     return GestureDetector(
-      onTap: selectionMode ? onSelectToggle : onTap,
+      // Owner 11-Oct: a SELECTED design opens straight into its selection
+      // (numbers / SETS) for editing — not the plain photo view.
+      onTap: selectionMode
+          ? onSelectToggle
+          : (pickLabel != null
+              ? () => context.push('/pick/${Uri.encodeComponent(photo.id)}')
+              : onTap),
       onLongPress: onLongPress,
       child: Stack(
         fit: StackFit.expand,
