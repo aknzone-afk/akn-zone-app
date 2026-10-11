@@ -184,6 +184,41 @@ class OrderService {
 
   // ───────────────────────── old customer ─────────────────────────
 
+  static const _cloud = 'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net';
+
+  /// Shop status per order (received → getting ready → packed → dispatched)
+  /// and the LR / dispatch text the shop replied with.
+  static Future<Map<String, ({String? status, String? lr})>> fetchStatuses(
+      Dio dio, List<String> refs) async {
+    if (refs.isEmpty) return {};
+    final res = await dio.post<dynamic>(
+      '$_cloud/orderStatus',
+      data: {'refs': refs},
+      options: Options(
+          headers: {'x-app-key': 'akn-zone-app-2026'},
+          contentType: Headers.jsonContentType,
+          receiveTimeout: const Duration(seconds: 20)),
+    );
+    final d = res.data is String ? jsonDecode(res.data as String) : res.data;
+    final out = <String, ({String? status, String? lr})>{};
+    if (d is Map && d['orders'] is Map) {
+      (d['orders'] as Map).forEach((k, v) {
+        if (v is Map) {
+          out['$k'] = (status: v['status'] as String?, lr: v['lr'] as String?);
+        }
+      });
+    }
+    return out;
+  }
+
+  static String statusLabel(String? s) => switch (s) {
+        'received' => '✅ Received by shop',
+        'getting_ready' => '🧺 Getting your order ready',
+        'packed' => '📦 Packed',
+        'dispatched' => '🚚 Dispatched',
+        _ => 'Sent to shop ✓',
+      };
+
   static const _lookupUrl =
       'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net/lookupParty';
 
@@ -530,8 +565,19 @@ class OrderService {
       }
       if (!order.detailsSent) {
         onStep?.call('Sending details…');
-        await _post(dio, '$api/sendMessage', {
+        final sent = await _post(dio, '$api/sendMessage', {
           'chat_id': cfg.chatId,
+          'reply_markup': jsonEncode({
+            'inline_keyboard': [
+              [
+                {'text': '🧺 Getting order ready', 'callback_data': 's|g|${order.number}'}
+              ],
+              [
+                {'text': '📦 Packed', 'callback_data': 's|p|${order.number}'},
+                {'text': '🚚 Dispatched', 'callback_data': 's|d|${order.number}'},
+              ],
+            ]
+          }),
           'text': await detailsText(order,
               mainSerial: order.addOnTo == null
                   ? null
@@ -544,6 +590,21 @@ class OrderService {
         });
         order.detailsSent = true;
         await _saveOrder(prefs, order);
+        // Link this Telegram message to the order (status + LR replies).
+        try {
+          final msgId = (sent is Map && sent['result'] is Map)
+              ? sent['result']['message_id']
+              : null;
+          if (msgId != null) {
+            await dio.post<dynamic>(
+              '$_cloud/registerOrder',
+              data: {'ref': order.number, 'chat': cfg.chatId, 'msg': msgId},
+              options: Options(
+                  headers: {'x-app-key': 'akn-zone-app-2026'},
+                  contentType: Headers.jsonContentType),
+            );
+          }
+        } catch (_) {}
       }
       // Separate message with two dots — closes this order in the group.
       if (!order.dotsSent) {
@@ -627,12 +688,12 @@ class OrderService {
   }
 
   /// POST with Telegram's flood-control handling (429 → wait retry_after).
-  static Future<void> _post(Dio dio, String url, Object data,
+  static Future<dynamic> _post(Dio dio, String url, Object data,
       {Future<Object> Function()? rebuild}) async {
     var body = data;
     for (var attempt = 0; attempt < 4; attempt++) {
       try {
-        await dio.post<dynamic>(
+        final res = await dio.post<dynamic>(
           url,
           data: body,
           options: Options(
@@ -643,7 +704,7 @@ class OrderService {
                 : Headers.formUrlEncodedContentType,
           ),
         );
-        return;
+        return res.data is String ? jsonDecode(res.data as String) : res.data;
       } on DioException catch (e) {
         final code = e.response?.statusCode;
         if (code == 429 && attempt < 3) {

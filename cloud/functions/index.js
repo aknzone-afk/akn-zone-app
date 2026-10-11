@@ -207,3 +207,145 @@ exports.nextOrderNo = onRequest(
     return res.json({ ok: true, no });
   },
 );
+
+/* ───────────── ORDER STATUS (owner, 11-Oct-2026) ─────────────
+ * Each order's details message in the Telegram group carries buttons
+ * ✅ Received · 📦 Packed · 🚚 Dispatched. A tap lands here (bot webhook),
+ * the status is stored on bbapp_orders/{ref}, the buttons are redrawn with a
+ * tick, and the customer's app shows it in My Orders. Replying to the order
+ * message with text ("LR 4521 DRT") attaches that as the dispatch info.
+ */
+const TG_TOKEN = defineSecret("BBAPP_TG_TOKEN");
+const TG_SECRET = defineSecret("BBAPP_TG_SECRET");
+// Owner: RECEIVED is automatic (set when the order reaches the group).
+// Buttons in strict order: Getting order ready → (2 h later) Packed → Dispatched.
+const STATUSES = { g: "getting_ready", p: "packed", d: "dispatched" };
+const LABELS = { g: "🧺 Getting order ready", p: "📦 Packed", d: "🚚 Dispatched" };
+const ORDER = ["received", "getting_ready", "packed", "dispatched"];
+const PACK_AFTER_MS = 2 * 3600 * 1000;
+
+function statusKeyboard(ref, current) {
+  const btn = (k) => ({
+    text: LABELS[k],
+    callback_data: `s|${k}|${ref}`.slice(0, 64),
+  });
+  const done = ORDER.indexOf(current || "received");
+  const b2 = (k) => {
+    const x = btn(k);
+    if (ORDER.indexOf(STATUSES[k]) <= done) x.text = "✔ " + LABELS[k];
+    return x;
+  };
+  return { inline_keyboard: [[b2("g")], [b2("p"), b2("d")]] };
+}
+
+async function tg(method, body) {
+  const r = await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/${method}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  return r.json().catch(() => ({}));
+}
+
+exports.tgWebhook = onRequest(
+  { region: "asia-south1", secrets: [TG_TOKEN, TG_SECRET], timeoutSeconds: 30, memory: "256MiB", maxInstances: 3, invoker: "public" },
+  async (req, res) => {
+    if (req.get("x-telegram-bot-api-secret-token") !== TG_SECRET.value().trim()) return res.status(403).send("no");
+    const u = req.body || {};
+    const db = admin.firestore();
+    try {
+      if (u.callback_query) {
+        const q = u.callback_query;
+        const [tag, k, ref] = String(q.data || "").split("|");
+        if (tag === "s" && STATUSES[k] && ref) {
+          const status = STATUSES[k];
+          const docRef = db.collection("bbapp_orders").doc(ref);
+          // Strict order + 2-hour gap before Packed (checked in a transaction).
+          const verdict = await db.runTransaction(async (tx) => {
+            const d = await tx.get(docRef);
+            const cur = (d.exists && d.get("status")) || "received";
+            const ci = ORDER.indexOf(cur), ni = ORDER.indexOf(status);
+            if (ni <= ci) return { ok: false, msg: `Already ${cur.replace("_", " ")}.`, cur };
+            if (ni !== ci + 1) {
+              return { ok: false, msg: `First tap "${LABELS[{ received: "g", getting_ready: "p", packed: "d" }[cur]]}".`, cur };
+            }
+            if (status === "packed") {
+              const g = d.get("readyAt");
+              const since = g ? Date.now() - g.toMillis() : 0;
+              if (since < PACK_AFTER_MS) {
+                const at = new Date((g ? g.toMillis() : Date.now()) + PACK_AFTER_MS);
+                const hhmm = at.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit" });
+                return { ok: false, msg: `Packed can be marked after ${hhmm} (2 hours after Getting order ready).`, cur };
+              }
+            }
+            const upd = { status, statusAt: admin.firestore.FieldValue.serverTimestamp(),
+              statusBy: (q.from && (q.from.first_name || q.from.username)) || "" };
+            if (status === "getting_ready") upd.readyAt = admin.firestore.FieldValue.serverTimestamp();
+            tx.set(docRef, upd, { merge: true });
+            return { ok: true, cur: status };
+          });
+          await tg("answerCallbackQuery", { callback_query_id: q.id,
+            text: verdict.ok ? `Marked ${LABELS[k]}` : verdict.msg, show_alert: !verdict.ok });
+          if (!verdict.ok) return res.status(200).send("ok");
+          if (q.message) {
+            await tg("editMessageReplyMarkup", {
+              chat_id: q.message.chat.id, message_id: q.message.message_id,
+              reply_markup: statusKeyboard(ref, status),
+            });
+          }
+        } else {
+          await tg("answerCallbackQuery", { callback_query_id: q.id });
+        }
+      } else if (u.message && u.message.reply_to_message && u.message.text) {
+        // A reply to an order message = dispatch info (LR no., transport).
+        const m = u.message;
+        const map = await db.collection("bbapp_msgmap").doc(`${m.chat.id}_${m.reply_to_message.message_id}`).get();
+        if (map.exists) {
+          const ref = map.get("ref");
+          await db.collection("bbapp_orders").doc(ref).set({
+            lr: String(m.text).slice(0, 120), lrAt: admin.firestore.FieldValue.serverTimestamp(),
+          }, { merge: true });
+          await tg("setMessageReaction", { chat_id: m.chat.id, message_id: m.message_id, reaction: [{ type: "emoji", emoji: "👍" }] });
+        }
+      }
+    } catch (e) {
+      logger.warn("tgWebhook", { error: e.message });
+    }
+    return res.status(200).send("ok");
+  },
+);
+
+/** The app registers the order's Telegram message (so replies map to it). */
+exports.registerOrder = onRequest(
+  { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
+  async (req, res) => {
+    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    const ref = String((req.body && req.body.ref) || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
+    const chat = String((req.body && req.body.chat) || "").replace(/[^0-9-]/g, "");
+    const msg = Number(req.body && req.body.msg) || 0;
+    if (!ref || !chat || !msg) return res.status(400).json({ ok: false });
+    const db = admin.firestore();
+    await db.collection("bbapp_msgmap").doc(`${chat}_${msg}`).set({ ref });
+    const docRef = db.collection("bbapp_orders").doc(ref);
+    const d = await docRef.get();
+    await docRef.set({ msg, chat, ...(d.exists && d.get("status") ? {} : {
+      status: "received", statusAt: admin.firestore.FieldValue.serverTimestamp() }) }, { merge: true });
+    return res.json({ ok: true });
+  },
+);
+
+/** My Orders: statuses for this phone's orders. */
+exports.orderStatus = onRequest(
+  { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
+  async (req, res) => {
+    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
+    if (limited("s:" + ip)) return res.status(429).json({ ok: false });
+    const refs = ((req.body && req.body.refs) || []).map((r) => String(r).replace(/[^A-Z0-9-]/gi, "").slice(0, 40)).filter(Boolean).slice(0, 60);
+    const db = admin.firestore();
+    const snaps = refs.length ? await db.getAll(...refs.map((r) => db.collection("bbapp_orders").doc(r))) : [];
+    const out = {};
+    for (const s of snaps) {
+      if (s.exists) out[s.id] = { status: s.get("status") || null, lr: s.get("lr") || null };
+    }
+    return res.json({ ok: true, orders: out });
+  },
+);

@@ -20,6 +20,24 @@ class MyOrdersScreen extends ConsumerStatefulWidget {
 
 class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
   String? _busy;
+  Map<String, ({String? status, String? lr})> _st = {};
+
+  @override
+  void initState() {
+    super.initState();
+    _loadStatus();
+  }
+
+  Future<void> _loadStatus() async {
+    try {
+      final refs = OrderService.history(ref.read(sharedPreferencesProvider))
+          .where((o) => o.status == OrderStatus.sent)
+          .map((o) => o.number)
+          .toList();
+      final st = await OrderService.fetchStatuses(ref.read(dioProvider), refs);
+      if (mounted) setState(() => _st = st);
+    } catch (_) {}
+  }
 
   Future<void> _retry(String number) async {
     setState(() => _busy = number);
@@ -86,7 +104,7 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                       '${OrderService.formatWhen(o.createdAt)}\n'
                       '${o.customer.billName} · ${o.items.length} designs · ${o.totalPcs} pcs'
                       '${o.approxTotal != null ? ' · approx ${OrderService.formatRupees(o.approxTotal!)}' : ''}\n'
-                      '${sent ? t('Sent to shop ✓', 'दुकान को मिल गया ✓') : (o.lastError ?? t('Waiting to send', 'भेजना बाकी'))}',
+                      '${sent ? OrderService.statusLabel(_st[o.number]?.status) + ((_st[o.number]?.lr ?? '').isNotEmpty ? ' · ${_st[o.number]!.lr}' : '') : (o.lastError ?? t('Waiting to send', 'भेजना बाकी'))}',
                     ),
                     isThreeLine: true,
                     trailing: sent
