@@ -134,37 +134,78 @@ class _PickScreenState extends ConsumerState<PickScreen> {
     return null;
   }
 
-  /// Where a saree's number goes: the cloud's label point (centre of a plain,
-  /// single-colour part), else a spot inside its box that is as far as
-  /// possible from every OTHER saree's box — never on a shared edge.
+  /// Where a saree's number goes (owner: in the MIDDLE of the saree's own
+  /// visible part — never on a border or an edge).
+  ///
+  /// Sarees lower in the photo lie IN FRONT of the ones above them, so the
+  /// visible part of saree i = its box minus the boxes in front. The number
+  /// goes at the centre of the biggest visible part (point farthest from any
+  /// hidden area or edge). The AI's label point is used only when it falls
+  /// well inside that visible part.
   Offset _labelSpot(int i, List<List<int>> boxes, List<List<int>>? points) {
-    if (points != null && i < points.length && points[i].length == 2) {
-      return Offset(points[i][1] / 1000, points[i][0] / 1000);
-    }
     final b = boxes[i];
+    const n = 24;
+    final bw = (b[3] - b[1]).toDouble(), bh = (b[2] - b[0]).toDouble();
+    bool hidden(double x, double y) {
+      for (var j = 0; j < boxes.length; j++) {
+        if (j == i) continue;
+        final o = boxes[j];
+        final inFront = o[0] > b[0] + 5; // starts lower → lies on top
+        if (inFront && x >= o[1] && x <= o[3] && y >= o[0] && y <= o[2]) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // Grid of visible cells, then distance (in cells) to the nearest hidden
+    // cell or box edge — the max is the centre of the largest visible area.
+    final vis = List.generate(n, (gy) => List.generate(n, (gx) {
+          final x = b[1] + bw * (gx + 0.5) / n;
+          final y = b[0] + bh * (gy + 0.5) / n;
+          return !hidden(x, y);
+        }));
     var best = Offset((b[1] + b[3]) / 2000, (b[0] + b[2]) / 2000);
-    var bestScore = -1.0;
-    for (var gy = 1; gy < 12; gy++) {
-      for (var gx = 1; gx < 12; gx++) {
-        final y = b[0] + (b[2] - b[0]) * gy / 12;
-        final x = b[1] + (b[3] - b[1]) * gx / 12;
-        var score = math.min(math.min(x - b[1], b[3] - x), math.min(y - b[0], b[2] - y));
-        for (var j = 0; j < boxes.length; j++) {
-          if (j == i) continue;
-          final o = boxes[j];
-          final inside = x >= o[1] && x <= o[3] && y >= o[0] && y <= o[2];
-          if (inside) {
-            score = -1;
-            break;
+    var bestD = -1.0;
+    for (var gy = 0; gy < n; gy++) {
+      for (var gx = 0; gx < n; gx++) {
+        if (!vis[gy][gx]) continue;
+        // distance to box edge, scaled to real proportions
+        var d = math.min(math.min(gx + 0.5, n - gx - 0.5) * bw,
+                math.min(gy + 0.5, n - gy - 0.5) * bh) /
+            n;
+        for (var yy = 0; yy < n && d > 0; yy++) {
+          for (var xx = 0; xx < n; xx++) {
+            if (vis[yy][xx]) continue;
+            final dx = (xx - gx) * bw / n, dy = (yy - gy) * bh / n;
+            final dd = math.sqrt(dx * dx + dy * dy);
+            if (dd < d) d = dd;
           }
-          final dx = math.max(math.max(o[1] - x, 0), x - o[3]);
-          final dy = math.max(math.max(o[0] - y, 0), y - o[2]);
-          score = math.min(score, math.sqrt(dx * dx + dy * dy).toDouble());
         }
-        if (score > bestScore) {
-          bestScore = score;
-          best = Offset(x / 1000, y / 1000);
+        if (d > bestD) {
+          bestD = d;
+          best = Offset((b[1] + bw * (gx + 0.5) / n) / 1000,
+              (b[0] + bh * (gy + 0.5) / n) / 1000);
         }
+      }
+    }
+    // The AI's point wins only if it sits well inside the visible part.
+    if (points != null && i < points.length && points[i].length == 2) {
+      final px = points[i][1].toDouble(), py = points[i][0].toDouble();
+      final gx = ((px - b[1]) / bw * n).floor(), gy = ((py - b[0]) / bh * n).floor();
+      if (gx >= 1 && gy >= 1 && gx < n - 1 && gy < n - 1 && !hidden(px, py)) {
+        var ok = true;
+        for (var dy = -1; dy <= 1 && ok; dy++) {
+          for (var dx = -1; dx <= 1; dx++) {
+            if (!vis[gy + dy][gx + dx]) {
+              ok = false;
+              break;
+            }
+          }
+        }
+        final close = (Offset(px / 1000, py / 1000) - best).distance <
+            0.35 * math.max(bw, bh) / 1000;
+        if (ok && close) return Offset(px / 1000, py / 1000);
       }
     }
     return best;
