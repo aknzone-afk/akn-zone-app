@@ -592,7 +592,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                         progress: value.progress,
                         below: value.below,
                         amount: value.known,
-                        addOnTo: parcel?.number,
+                        addOnTo: parcel == null ? null : 'ORDER NO. ${parcel.serial ?? '-'}',
                         addOnUntil: parcel == null
                             ? null
                             : OrderService.untilLabel(parcel.until));

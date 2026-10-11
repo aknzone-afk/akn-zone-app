@@ -56,7 +56,7 @@ class MinOrderBar extends StatelessWidget {
           border: Border.all(color: g.withValues(alpha: 0.35)),
         ),
         child: Text(
-          '➕ Adding to your parcel $addOnTo — no minimum until ${addOnUntil ?? 'tomorrow 11:59 PM'}.',
+          '➕ ADD IN $addOnTo — no minimum order till ${addOnUntil ?? 'tomorrow 11:59 PM'}, as you can add in this order.',
           style: TextStyle(
               color: g, fontWeight: FontWeight.w700, fontSize: compact ? 12 : 13),
         ),

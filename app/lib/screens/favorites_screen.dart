@@ -298,7 +298,7 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
                               below: v.below,
                               amount: v.known,
                               compact: true,
-                              addOnTo: parcel?.number,
+                              addOnTo: parcel == null ? null : 'ORDER NO. ${parcel.serial ?? '-'}',
                               addOnUntil: parcel == null
                                   ? null
                                   : OrderService.untilLabel(parcel.until));

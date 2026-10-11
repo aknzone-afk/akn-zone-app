@@ -83,13 +83,16 @@ class OrderService {
   /// parcel today and tomorrow with NO ₹30,000 minimum. Returns the main
   /// order's number and when the window closes (midnight after tomorrow), or
   /// null when no window is open.
-  static ({String number, DateTime until})? activeParcel(SharedPreferences prefs) {
+  static ({String number, DateTime until, int? serial})? activeParcel(
+      SharedPreferences prefs) {
     final now = DateTime.now();
     for (final o in history(prefs)) {
       if (o.addOnTo != null) continue; // add-ons never extend the window
       final c = o.createdAt;
       final until = DateTime(c.year, c.month, c.day + 2);
-      if (now.isBefore(until)) return (number: o.number, until: until);
+      if (now.isBefore(until)) {
+        return (number: o.number, until: until, serial: o.serial);
+      }
       return null; // newest main order is outside its window
     }
     return null;
