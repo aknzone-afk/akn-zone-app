@@ -1035,7 +1035,7 @@ function nearest(q, list, n = 5) {
     while (i < x.length && i < Q.length && x[i] === Q[i]) i++;
     return s + i * 3;
   };
-  return list.filter((x) => !/CLOSED|(^|s)DELIVERY$|WITH OTHER PARTY/.test(x)).map((x) => [x, score(x)]).filter((e) => e[1] >= 12).sort((a, b) => b[1] - a[1]).slice(0, n).map((e) => e[0]);
+  return list.filter((x) => !/CLOSED|(^|\s)DELIVERY$|WITH OTHER PARTY/.test(x)).map((x) => [x, score(x)]).filter((e) => e[1] >= 12).sort((a, b) => b[1] - a[1]).slice(0, n).map((e) => e[0]);
 }
 exports.checkNewParty = onRequest(
   { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
