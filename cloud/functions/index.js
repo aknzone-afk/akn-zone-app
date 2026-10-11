@@ -988,9 +988,9 @@ exports.chatFile = onRequest(
 
 
 /**
- * Shop PC (AKNZonePieces\new_party_feed.py): new customers whose order the
- * shop has taken up ("Maal nikalna chalu" or later) → NewPartyBot makes the
- * Tally ledger (broker YOUTUBE). {ack:[refs]} marks them handed over.
+ * NewPartyBot (app_party_feed.py on the shop PC): new customers' orders, from
+ * the moment they are placed → it makes the Tally ledger (broker YOUTUBE).
+ * {ack:[refs]} marks them handed over.
  */
 exports.newParties = onRequest(
   { region: "asia-south1", timeoutSeconds: 30, memory: "256MiB", maxInstances: 1, invoker: "public" },
@@ -1002,7 +1002,8 @@ exports.newParties = onRequest(
         { partyQueuedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
     }
     const snap = await db.collection("bbapp_orders")
-      .where("status", "in", ["getting_ready", "bill_sent", "payment_received", "dispatched", "bilty"]).get();
+      // Owner 11-Oct: the ledger is made as soon as the customer places the order.
+      .where("status", "in", ["received", "getting_ready", "bill_sent", "payment_received", "dispatched", "bilty"]).get();
     const out = snap.docs.map((x) => ({ ref: x.id, ...x.data() }))
       .filter((o) => o.cust && !o.addOnTo && !o.partyQueuedAt)
       .map((o) => ({ ref: o.ref, serial: o.serial || null, cust: o.cust }));
