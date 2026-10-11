@@ -11,6 +11,7 @@ import '../l10n.dart';
 
 import '../models/photo.dart';
 import '../providers/providers.dart';
+import '../widgets/bar_button.dart';
 import '../services/photo_freshness.dart';
 import '../services/picks_service.dart';
 import '../services/pieces_service.dart';
@@ -428,26 +429,30 @@ class _PickScreenState extends ConsumerState<PickScreen> {
         appBar: AppBar(
           backgroundColor: Colors.black,
           foregroundColor: Colors.white,
-          // Owner: no design number up here — clear text buttons instead.
-          actions: [
-            TextButton(
-              style: TextButton.styleFrom(
-                  foregroundColor: Colors.white,
-                  disabledForegroundColor: Colors.white30),
-              onPressed: (_undo.isEmpty && _s.isEmpty) ? null : _undoLast,
-              child: const Text('UNDO LAST ACTION',
-                  style: TextStyle(fontWeight: FontWeight.w800)),
+          // Owner: no design number up here — two boxed buttons with icons,
+          // spread across with space between (11-Oct).
+          titleSpacing: 0,
+          title: Row(children: [
+            Expanded(
+              child: BarButton(
+                dark: true,
+                icon: Icons.undo_rounded,
+                label: 'UNDO LAST ACTION',
+                onTap: (_undo.isEmpty && _s.isEmpty) ? null : _undoLast,
+              ),
             ),
-            TextButton(
-              style: TextButton.styleFrom(
-                  foregroundColor: const Color(0xFFFF8A80),
-                  disabledForegroundColor: Colors.white30),
-              onPressed: _s.isEmpty ? null : () => _push(const PickState()),
-              child: const Text('CLEAR ALL',
-                  style: TextStyle(fontWeight: FontWeight.w800)),
+            const SizedBox(width: 10),
+            Expanded(
+              child: BarButton(
+                dark: true,
+                icon: Icons.delete_outline_rounded,
+                label: 'CLEAR ALL',
+                color: const Color(0xFFFF8A80),
+                onTap: _s.isEmpty ? null : () => _push(const PickState()),
+              ),
             ),
-            const SizedBox(width: 4),
-          ],
+          ]),
+          actions: const [SizedBox(width: 12)],
         ),
         body: Column(
           children: [

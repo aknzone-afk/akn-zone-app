@@ -5,10 +5,13 @@ import 'package:flutter/material.dart';
 class BarButton extends StatelessWidget {
   final IconData icon;
   final String label;
-  final VoidCallback onTap;
+  final VoidCallback? onTap; // null = greyed out
   final int count;
   final bool dot;
   final Color? color;
+
+  /// For black screens (the selection screen): dark box, light outline.
+  final bool dark;
   const BarButton({
     super.key,
     required this.icon,
@@ -17,13 +20,15 @@ class BarButton extends StatelessWidget {
     this.count = 0,
     this.dot = false,
     this.color,
+    this.dark = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    final fg = color ?? const Color(0xFF1B1A18);
+    var fg = color ?? (dark ? Colors.white : const Color(0xFF1B1A18));
+    if (onTap == null) fg = fg.withValues(alpha: 0.35);
     return Material(
-      color: Colors.white,
+      color: dark ? const Color(0xFF1E1E1E) : Colors.white,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(12),
         side: BorderSide(color: fg.withValues(alpha: 0.55), width: 1.2),
