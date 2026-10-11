@@ -546,8 +546,7 @@ class OrderService {
       if (!order.dotsSent) {
         await _post(dio, '$api/sendMessage', {
           'chat_id': cfg.chatId,
-          'text': '.
-.',
+          'text': '.' + String.fromCharCode(10) + '.',
         });
         order.dotsSent = true;
       }
