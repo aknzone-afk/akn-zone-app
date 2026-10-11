@@ -211,22 +211,22 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
     final scheme = Theme.of(context).colorScheme;
 
     return Scaffold(
+      // Owner 11-Oct: no "CART · N DESIGN" title — two clear words instead.
       appBar: AppBar(
-        title: UText(favPhotos.isEmpty
-            ? t('Cart', 'कार्ट')
-            : t('Cart · ${favPhotos.length} design${favPhotos.length == 1 ? '' : 's'}', 'कार्ट · ${favPhotos.length} डिज़ाइन')),
+        titleSpacing: 0,
+        title: TextButton.icon(
+          onPressed: () => context.push('/orders'),
+          icon: const Icon(Icons.receipt_long_outlined, size: 20),
+          label: const Text('PAST ORDERS', style: TextStyle(fontWeight: FontWeight.w800)),
+        ),
         actions: [
-          IconButton(
-            tooltip: t('My orders', 'मेरे ऑर्डर'),
-            icon: const Icon(Icons.receipt_long_outlined),
-            onPressed: () => context.push('/orders'),
-          ),
           if (favPhotos.isNotEmpty)
-            IconButton(
-              tooltip: t('Clear cart', 'कार्ट खाली करें'),
-              icon: const Icon(Icons.delete_sweep_outlined),
+            TextButton(
               onPressed: _confirmClear,
+              child: const Text('CLEAR SELECTION',
+                  style: TextStyle(fontWeight: FontWeight.w800, color: Color(0xFFD32F2F))),
             ),
+          const SizedBox(width: 6),
         ],
       ),
       body: favPhotos.isEmpty
