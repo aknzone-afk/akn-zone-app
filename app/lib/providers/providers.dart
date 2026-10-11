@@ -24,6 +24,7 @@ import '../services/price_check.dart';
 import '../services/price_ocr.dart';
 import '../services/seed_loader.dart';
 import '../services/share_service.dart';
+import '../services/picks_service.dart';
 
 /// Initialised once in main.dart via [ProviderScope.overrides].
 final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
@@ -1179,6 +1180,12 @@ class FavoritesNotifier extends StateNotifier<Set<String>> {
 
   Future<void> _hydrate() async {
     state = await _service.load();
+    // Selections only live with the cart — drop any left over from a cart
+    // that was emptied (owner saw "SELECTED" with an empty cart).
+    final picks = _ref.read(picksProvider);
+    for (final id in picks.keys.toList()) {
+      if (!state.contains(id)) await _ref.read(picksProvider.notifier).remove(id);
+    }
   }
 
   bool isFavorite(String id) => state.contains(id);
@@ -1191,12 +1198,16 @@ class FavoritesNotifier extends StateNotifier<Set<String>> {
     // its fresh Drive thumbnail. If the customer re-adds it, they start over
     // on a clean image.
     if (!isNow) {
+      await _ref.read(picksProvider.notifier).remove(id);
       await _ref.read(editsProvider.notifier).markRemoved(id);
     }
   }
 
   Future<void> clear() async {
     final removedIds = state.toList();
+    for (final id in removedIds) {
+      await _ref.read(picksProvider.notifier).remove(id);
+    }
     state = const {};
     await _service.clear();
     // Also wipe every edit so the photos revert to their unedited versions.

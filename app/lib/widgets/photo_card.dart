@@ -48,7 +48,7 @@ class PhotoCard extends ConsumerWidget {
     final editVersion = edits[photo.id];
     final isEdited = editVersion != null;
     final scheme = Theme.of(context).colorScheme;
-    final pick = ref.watch(picksProvider)[photo.id];
+    final pick = isFav ? ref.watch(picksProvider)[photo.id] : null;
     ref.watch(piecesProvider);
     final count = ref.read(piecesProvider.notifier).piecesFor(photo);
     final String? pickLabel =
