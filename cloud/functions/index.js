@@ -800,9 +800,116 @@ exports.syncDispatch = onRequest(
  */
 async function addChat(db, ref, m) {
   const o = (await db.collection("bbapp_orders").doc(ref).get()).data() || {};
+  let storagePath = null;
+  try {
+    storagePath = await mirrorToAknChat(db, o, m);
+  } catch (e) {
+    logger.warn("AKN Chat mirror failed", { ref, error: e.message });
+  }
   await db.collection("bbapp_chat").add({ ref, cust: o.mobile || "", from: m.from, text: m.text || "",
-    fileId: m.fileId || null, mime: m.mime || null, by: m.by || "", at: Date.now() });
+    fileId: m.fileId || null, storagePath: m.fileId ? null : storagePath, mime: m.mime || null,
+    by: m.by || "", at: Date.now() });
 }
+
+/* ───────────── AKN Chat "AKN App" tab (owner, 11-Oct-2026) ─────────────
+ * Every app chat also appears in the AKN Chat staff app as its own chip
+ * "AKN App" (pseudo number id 99999, never a WhatsApp number). Staff reply
+ * there like any chat; aknChatOut below carries the reply to the customer's
+ * app. Safety: bot_logs/{msgId} is created FIRST so AKN Chat's WhatsApp bot
+ * never answers these; botEnabled false; numbers["99999"].bot false.
+ */
+const AKZ_PNID = "99999";
+const akzChatId = (mob) => `91${mob}_${AKZ_PNID}`;
+let akzTabReady = false;
+
+async function mirrorToAknChat(db, o, m) {
+  const mob = String(o.mobile || "").replace(/\D/g, "").slice(-10);
+  if (mob.length !== 10) return null;
+  const { Timestamp, FieldValue } = admin.firestore;
+  if (!akzTabReady) {
+    await db.collection("settings").doc("app").set({ numbers: { [AKZ_PNID]: { label: "AKN App", bot: false } } }, { merge: true });
+    akzTabReady = true;
+  }
+  const chatId = akzChatId(mob);
+  const inbound = m.from === "party";
+  const msgId = `aknz_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  // Media → Storage (AKN Chat reads wa-media/…), with a download URL.
+  let bytes = m.bytes || null;
+  if (!bytes && m.fileId) bytes = await tgFileBytes(m.fileId);
+  const mime = m.mime || (bytes ? "image/jpeg" : null);
+  const isPdf = String(mime || "").includes("pdf");
+  let media = {};
+  let storagePath = null;
+  if (bytes) {
+    storagePath = `wa-media/${AKZ_PNID}/91${mob}/${msgId}.${isPdf ? "pdf" : "jpg"}`;
+    const token = require("crypto").randomUUID();
+    const file = admin.storage().bucket().file(storagePath);
+    await file.save(bytes, { contentType: mime, metadata: { metadata: { firebaseStorageDownloadTokens: token } } });
+    const url = `https://firebasestorage.googleapis.com/v0/b/${file.bucket.name}/o/${encodeURIComponent(storagePath)}?alt=media&token=${token}`;
+    media = { mediaPath: storagePath, mediaUrl: url, mediaMime: mime, mediaStatus: "stored", fileSize: bytes.length,
+      ...(isPdf ? { fileName: "bill.pdf" } : {}) };
+  }
+  const type = bytes ? (isPdf ? "document" : "image") : "text";
+  const text = String(m.text || "");
+  if (inbound) await db.collection("bot_logs").doc(msgId).set({ source: "aknzone-app", skip: true });
+  const now = Timestamp.now();
+  const msg = {
+    direction: inbound ? "in" : "out", from: inbound ? "customer" : "bot", type,
+    status: inbound ? "received" : "sent", statusRank: inbound ? null : 1,
+    wamid: null, waId: `91${mob}`, phoneNumberId: AKZ_PNID, timestamp: now,
+    createdAt: FieldValue.serverTimestamp(), replyToWamid: null, senderStaffId: null, error: null,
+    mediaStatus: "none", text: type === "text" ? text : null, caption: type === "text" ? null : (text || null),
+    mediaPath: null, mediaMime: null, fileName: null, fileSize: null, aknzSource: true, ...media,
+  };
+  const chatRef = db.collection("chats").doc(chatId);
+  await db.runTransaction(async (t) => {
+    const c = await t.get(chatRef);
+    const base = c.exists ? {} : { pinned: false, needsAttention: false, botPausedUntil: null, createdAt: now,
+      profileName: o.billName || `+91 ${mob}` };
+    t.set(chatRef.collection("messages").doc(msgId), msg);
+    t.set(chatRef, {
+      ...base, waId: `91${mob}`, phoneNumberId: AKZ_PNID, name: o.billName || `+91 ${mob}`, botEnabled: false,
+      lastMessageText: (type === "text" ? text : (type === "image" ? "📷 Photo" : "📄 Bill")).slice(0, 200),
+      lastMessageAt: now, lastMessageType: type, updatedAt: now,
+      windowExpiresAt: Timestamp.fromMillis(Date.now() + 3650 * 86400e3),
+      ...(inbound ? { unreadCount: FieldValue.increment(1), lastCustomerMsgAt: now } : {}),
+    }, { merge: true });
+  });
+  return storagePath;
+}
+
+/** Staff reply typed in AKN Chat's "AKN App" tab → the customer's app chat. */
+const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+exports.aknChatOut = onDocumentCreated(
+  { document: "chats/{chatId}/messages/{msgId}", region: "asia-south1", memory: "256MiB", maxInstances: 3 },
+  async (event) => {
+    const { chatId, msgId } = event.params;
+    if (!chatId.endsWith("_" + AKZ_PNID)) return;
+    const d = event.data && event.data.data();
+    // Staff drafts: direction "out" + senderStaffId (the app doesn't always set from).
+    if (!d || d.direction !== "out" || d.aknzSource || d.from === "bot" || !(d.senderStaffId || d.from === "staff")) return;
+    const db = admin.firestore();
+    const mob = chatId.slice(0, chatId.indexOf("_")).slice(-10);
+    const ords = await db.collection("bbapp_orders").where("mobile", "==", mob).get();
+    const latest = ords.docs.map((x) => ({ id: x.id, ...x.data() }))
+      .sort((a, b) => (b.createdAt && b.createdAt.toMillis ? b.createdAt.toMillis() : 0) -
+        (a.createdAt && a.createdAt.toMillis ? a.createdAt.toMillis() : 0))[0];
+    let by = "";
+    if (d.senderStaffId) {
+      const st = (await db.collection("staff").doc(String(d.senderStaffId)).get()).data() || {};
+      by = String(st.name || st.displayName || "").split(" ")[0];
+    }
+    const text = String(d.text || d.caption || "");
+    await db.collection("bbapp_chat").add({ ref: latest ? latest.id : "", cust: mob, from: "shop", text,
+      fileId: null, storagePath: d.mediaPath || null, mime: d.mediaPath ? (d.mediaMime || "image/jpeg") : null,
+      by, at: Date.now(), aknChatMsg: msgId });
+    // Tick it (AKN Chat's sendMessage also marks it sent for the AKN App tab).
+    await event.data.ref.set({ status: "sent", statusRank: 1, wamid: `aknzone_${msgId}` }, { merge: true });
+    await db.collection("chats").doc(chatId).set({ unreadCount: 0, needsAttention: false,
+      lastMessageText: (text || "📷 Photo").slice(0, 200), lastMessageAt: d.timestamp || admin.firestore.Timestamp.now(),
+      lastMessageType: d.type || "text" }, { merge: true });
+  },
+);
 
 exports.chatSend = onRequest(
   { region: "asia-south1", secrets: [TG_TOKEN, GEMINI_API_KEY], timeoutSeconds: 60, memory: "512MiB", maxInstances: 3, invoker: "public", cors: true },
@@ -818,6 +925,12 @@ exports.chatSend = onRequest(
     const d = (await db.collection("bbapp_orders").doc(ref).get()).data();
     if (!d || !d.chat) return res.json({ ok: false, error: "order not found" });
     const head = `💬 ${d.billName || "Party"}${d.serial ? " · ORDER NO. " + d.serial : ""}`;
+    const payShot = img && (d.status || "received") === "bill_sent";
+    if (!payShot) {
+      // Owner 11-Oct: chats are answered in AKN Chat → "AKN App", not in the group.
+      await addChat(db, ref, { from: "party", text, bytes: img, mime: img ? "image/jpeg" : null });
+      return res.json({ ok: true, paid: false });
+    }
     let sent;
     if (img) {
       const fd = new FormData();
@@ -848,7 +961,7 @@ exports.chatList = onRequest(
     if (cust.length !== 10) return res.status(400).json({ ok: false });
     const snap = await admin.firestore().collection("bbapp_chat").where("cust", "==", cust).get();
     const msgs = snap.docs.map((x) => ({ id: x.id, ...x.data() })).sort((a, b) => a.at - b.at).slice(-200)
-      .map((m) => ({ id: m.id, from: m.from, text: m.text, at: m.at, by: m.by, file: !!m.fileId, mime: m.mime }));
+      .map((m) => ({ id: m.id, from: m.from, text: m.text, at: m.at, by: m.by, file: !!(m.fileId || m.storagePath), mime: m.mime }));
     return res.json({ ok: true, msgs });
   },
 );
@@ -860,8 +973,9 @@ exports.chatFile = onRequest(
     const cust = String((req.body && req.body.mobile) || "").replace(/\D/g, "").slice(-10);
     const id = String((req.body && req.body.id) || "").slice(0, 64);
     const m = id ? (await admin.firestore().collection("bbapp_chat").doc(id).get()).data() : null;
-    if (!m || m.cust !== cust || !m.fileId) return res.json({ ok: false });
-    const bytes = await tgFileBytes(m.fileId);
+    if (!m || m.cust !== cust || (!m.fileId && !m.storagePath)) return res.json({ ok: false });
+    const bytes = m.fileId ? await tgFileBytes(m.fileId)
+      : await admin.storage().bucket().file(m.storagePath).download().then((r) => r[0]).catch(() => null);
     if (!bytes) return res.json({ ok: false });
     return res.json({ ok: true, mime: m.mime || "image/jpeg", data: bytes.toString("base64") });
   },
