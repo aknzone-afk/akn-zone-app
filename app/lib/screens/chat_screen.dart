@@ -124,9 +124,6 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        if (!m.mine)
-                          Text(m.by.isNotEmpty ? 'AKN ZONE · ${m.by}' : 'AKN ZONE',
-                              style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800)),
                         if (m.file) _ChatImage(mobile: m.cust.isNotEmpty ? m.cust : mob, id: m.id, mime: m.mime),
                         if (m.text.isNotEmpty) Text(m.text, style: const TextStyle(fontSize: 15)),
                         const SizedBox(height: 2),
