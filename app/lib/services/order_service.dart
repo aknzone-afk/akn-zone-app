@@ -216,8 +216,20 @@ class OrderService {
         'getting_ready' => '🧺 Getting your order ready',
         'packed' => '📦 Packed',
         'dispatched' => '🚚 Dispatched',
+        'delivered' => '✅ Delivered',
         _ => 'Sent to shop ✓',
       };
+
+  /// Step row for My Orders (owner): every step, ticked once it happened.
+  static String stepsLine(String? s) {
+    const steps = ['received', 'getting_ready', 'packed', 'dispatched', 'delivered'];
+    const names = ['Sent to shop', 'Getting order ready', 'Packed', 'Dispatched', 'Delivered'];
+    final done = s == null ? 0 : steps.indexOf(s);
+    return [
+      for (var i = 0; i < steps.length; i++)
+        i <= done ? '${names[i]} ✓' : names[i],
+    ].join('  ›  ');
+  }
 
   static const _lookupUrl =
       'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net/lookupParty';
@@ -569,14 +581,12 @@ class OrderService {
         onStep?.call('Sending details…');
         final sent = await _post(dio, '$api/sendMessage', {
           'chat_id': cfg.chatId,
+          // One button at a time (owner): the shop's next steps appear as
+          // each one is done (cloud tgWebhook / packTimer).
           'reply_markup': jsonEncode({
             'inline_keyboard': [
               [
-                {'text': '🧺 Getting order ready', 'callback_data': 's|g|${order.number}'}
-              ],
-              [
-                {'text': '📦 Packed', 'callback_data': 's|p|${order.number}'},
-                {'text': '🚚 Dispatched', 'callback_data': 's|d|${order.number}'},
+                {'text': '🧺 Maal nikalna chalu', 'callback_data': 's|g|${order.number}'}
               ],
             ]
           }),

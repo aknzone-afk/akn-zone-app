@@ -104,7 +104,7 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                       '${OrderService.formatWhen(o.createdAt)}\n'
                       '${o.customer.billName} · ${o.items.length} designs · ${o.totalPcs} pcs'
                       '${o.approxTotal != null ? ' · approx ${OrderService.formatRupees(o.approxTotal!)}' : ''}\n'
-                      '${sent ? OrderService.statusLabel(_st[o.number]?.status) + ((_st[o.number]?.lr ?? '').isNotEmpty ? ' · ${_st[o.number]!.lr}' : '') : (o.lastError ?? t('Waiting to send', 'भेजना बाकी'))}',
+                      '${sent ? OrderService.stepsLine(_st[o.number]?.status) + ((_st[o.number]?.lr ?? '').isNotEmpty ? '\n🚚 ${_st[o.number]!.lr}' : '') : (o.lastError ?? t('Waiting to send', 'भेजना बाकी'))}',
                     ),
                     isThreeLine: true,
                     trailing: sent

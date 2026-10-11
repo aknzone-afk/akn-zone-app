@@ -88,7 +88,10 @@ const BOX_PROMPT =
   "and several folded sarees below, each a different COLOUR of the same design. Printed white cards (design number, price \"Rs 1040/-\", fabric name, " +
   "\"FOAM POUCH PACKING\", \"FULL CUT FULL WORK\") are NOT sarees. IMPORTANT: a big OPEN/spread saree usually shows its " +
   "BLOUSE PIECE and/or PALLU lying next to its body in a different pattern or shade — that whole open spread (body + blouse piece + " +
-  "pallu) is ONE saree: give it ONE box covering all its parts. Only separate folded pieces of different colours are separate sarees. " +
+  "pallu) is ONE saree (its box covers only the open spread). Normally the photo has exactly ONE open saree at the top: count it ONCE " +
+  "even if it shows 2-3 strips of different colour or pattern side by side (body, pallu, blouse piece). BUT every FOLDED saree is a separate saree — even when it lies ON TOP of " +
+  "the open saree or has the same colours; folded pieces usually carry their own design-number sticker. Never merge a folded piece into the " +
+  "open saree's box. " +
   "Find EVERY saree (spread and folded). For each give box_2d " +
   "[ymin, xmin, ymax, xmax] normalised to 0-1000 tightly around that saree's VISIBLE part, its colour, and a label point " +
   "[y, x] (0-1000): the CENTRE of the largest area where ONLY that saree's own colour is visible — never on an edge, a fold line, " +
@@ -217,25 +220,40 @@ exports.nextOrderNo = onRequest(
  */
 const TG_TOKEN = defineSecret("BBAPP_TG_TOKEN");
 const TG_SECRET = defineSecret("BBAPP_TG_SECRET");
-// Owner: RECEIVED is automatic (set when the order reaches the group).
-// Buttons in strict order: Getting order ready → (2 h later) Packed → Dispatched.
-const STATUSES = { g: "getting_ready", p: "packed", d: "dispatched" };
-const LABELS = { g: "🧺 Getting order ready", p: "📦 Packed", d: "🚚 Dispatched" };
-const ORDER = ["received", "getting_ready", "packed", "dispatched"];
-const PACK_AFTER_MS = 2 * 3600 * 1000;
+// Owner (11-Oct-2026): RECEIVED is automatic. Then ONE button at a time:
+//   🧺 Maal nikalna chalu  →  (3 hours later) 📦 Packed  →  🚚 Dispatched  →  ✅ Delivered
+// A done step stays as "✔ <step> — by <name>" (name = the tapper's Telegram
+// name); tapping the LATEST done step again undoes it.
+const STEPS = [
+  { k: "g", status: "getting_ready", label: "🧺 Maal nikalna chalu", by: "readyBy", at: "readyAt" },
+  { k: "p", status: "packed", label: "📦 Packed", by: "packedBy", at: "packedAt" },
+  { k: "d", status: "dispatched", label: "🚚 Dispatched", by: "dispatchedBy", at: "dispatchedAt" },
+  { k: "v", status: "delivered", label: "✅ Delivered", by: "deliveredBy", at: "deliveredAt" },
+];
+const ORDER = ["received", ...STEPS.map((x) => x.status)];
+const PACK_AFTER_MS = 3 * 3600 * 1000;
+const STATUSES = Object.fromEntries(STEPS.map((x) => [x.k, x.status]));
 
-function statusKeyboard(ref, current) {
-  const btn = (k) => ({
-    text: LABELS[k],
-    callback_data: `s|${k}|${ref}`.slice(0, 64),
-  });
-  const done = ORDER.indexOf(current || "received");
-  const b2 = (k) => {
-    const x = btn(k);
-    if (ORDER.indexOf(STATUSES[k]) <= done) x.text = "✔ " + LABELS[k];
-    return x;
-  };
-  return { inline_keyboard: [[b2("g")], [b2("p"), b2("d")]] };
+/** Done steps (ticked, with name) + only the NEXT step when it is allowed. */
+function statusKeyboard(ref, d) {
+  const cur = (d && d.status) || "received";
+  const ci = ORDER.indexOf(cur);
+  const rows = [];
+  for (const st of STEPS) {
+    const si = ORDER.indexOf(st.status);
+    if (si <= ci) {
+      const who = d && d[st.by] ? ` — by ${d[st.by]}` : "";
+      rows.push([{ text: `✔ ${st.label}${who}`, callback_data: `s|${st.k}|${ref}`.slice(0, 64) }]);
+    } else if (si === ci + 1) {
+      if (st.status === "packed") {
+        const ready = d && d.readyAt ? d.readyAt.toMillis() : 0;
+        if (Date.now() - ready < PACK_AFTER_MS) break; // shown by packTimer after 3 h
+      }
+      rows.push([{ text: st.label, callback_data: `s|${st.k}|${ref}`.slice(0, 64) }]);
+      break;
+    }
+  }
+  return { inline_keyboard: rows };
 }
 
 async function tg(method, body) {
@@ -255,40 +273,45 @@ exports.tgWebhook = onRequest(
       if (u.callback_query) {
         const q = u.callback_query;
         const [tag, k, ref] = String(q.data || "").split("|");
-        if (tag === "s" && STATUSES[k] && ref) {
-          const status = STATUSES[k];
+        const step = STEPS.find((x) => x.k === k);
+        if (tag === "s" && step && ref) {
           const docRef = db.collection("bbapp_orders").doc(ref);
-          // Strict order + 2-hour gap before Packed (checked in a transaction).
+          const name = [q.from && q.from.first_name, q.from && q.from.last_name].filter(Boolean).join(" ")
+            || (q.from && q.from.username) || "staff";
           const verdict = await db.runTransaction(async (tx) => {
             const d = await tx.get(docRef);
             const cur = (d.exists && d.get("status")) || "received";
-            const ci = ORDER.indexOf(cur), ni = ORDER.indexOf(status);
-            if (ni <= ci) return { ok: false, msg: `Already ${cur.replace("_", " ")}.`, cur };
-            if (ni !== ci + 1) {
-              return { ok: false, msg: `First tap "${LABELS[{ received: "g", getting_ready: "p", packed: "d" }[cur]]}".`, cur };
+            const ci = ORDER.indexOf(cur), ni = ORDER.indexOf(step.status);
+            const del = admin.firestore.FieldValue.delete();
+            if (ni === ci) {
+              // Undo the latest step.
+              const upd = { status: ORDER[ci - 1], [step.by]: del, [step.at]: del,
+                statusAt: admin.firestore.FieldValue.serverTimestamp() };
+              if (step.status === "getting_ready") upd.packShown = del;
+              tx.set(docRef, upd, { merge: true });
+              return { ok: true, msg: `Undone: ${step.label}` };
             }
-            if (status === "packed") {
+            if (ni < ci) return { ok: false, msg: "Undo the later step first." };
+            if (ni !== ci + 1) return { ok: false, msg: "Not yet — do the steps in order." };
+            if (step.status === "packed") {
               const g = d.get("readyAt");
-              const since = g ? Date.now() - g.toMillis() : 0;
-              if (since < PACK_AFTER_MS) {
-                const at = new Date((g ? g.toMillis() : Date.now()) + PACK_AFTER_MS);
-                const hhmm = at.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit" });
-                return { ok: false, msg: `Packed can be marked after ${hhmm} (2 hours after Getting order ready).`, cur };
+              const at = (g ? g.toMillis() : Date.now()) + PACK_AFTER_MS;
+              if (Date.now() < at) {
+                const hhmm = new Date(at).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit" });
+                return { ok: false, msg: `Packed opens at ${hhmm} (3 hours after Maal nikalna chalu).` };
               }
             }
-            const upd = { status, statusAt: admin.firestore.FieldValue.serverTimestamp(),
-              statusBy: (q.from && (q.from.first_name || q.from.username)) || "" };
-            if (status === "getting_ready") upd.readyAt = admin.firestore.FieldValue.serverTimestamp();
-            tx.set(docRef, upd, { merge: true });
-            return { ok: true, cur: status };
+            tx.set(docRef, { status: step.status, [step.by]: name,
+              [step.at]: admin.firestore.FieldValue.serverTimestamp(),
+              statusAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+            return { ok: true, msg: `${step.label} — by ${name}` };
           });
-          await tg("answerCallbackQuery", { callback_query_id: q.id,
-            text: verdict.ok ? `Marked ${LABELS[k]}` : verdict.msg, show_alert: !verdict.ok });
-          if (!verdict.ok) return res.status(200).send("ok");
-          if (q.message) {
+          await tg("answerCallbackQuery", { callback_query_id: q.id, text: verdict.msg, show_alert: !verdict.ok });
+          if (verdict.ok && q.message) {
+            const fresh = (await docRef.get()).data() || {};
             await tg("editMessageReplyMarkup", {
               chat_id: q.message.chat.id, message_id: q.message.message_id,
-              reply_markup: statusKeyboard(ref, status),
+              reply_markup: statusKeyboard(ref, fresh),
             });
           }
         } else {
@@ -401,5 +424,23 @@ exports.phoneLock = onRequest(
       return { allowed: true, index: mobiles.indexOf(m) + 1, first: mobiles[0], newPhone, phone: device.slice(-4).toUpperCase() };
     });
     return res.json({ ok: true, ...out });
+  },
+);
+
+
+/** Every 10 minutes: orders 3 h past "Maal nikalna chalu" get their Packed button. */
+const { onSchedule } = require("firebase-functions/v2/scheduler");
+exports.packTimer = onSchedule(
+  { schedule: "every 10 minutes", region: "asia-south1", secrets: [TG_TOKEN], timeoutSeconds: 120, memory: "256MiB" },
+  async () => {
+    const db = admin.firestore();
+    const snap = await db.collection("bbapp_orders").where("status", "==", "getting_ready").get();
+    for (const doc of snap.docs) {
+      const d = doc.data();
+      if (d.packShown || !d.readyAt || !d.msg || !d.chat) continue;
+      if (Date.now() - d.readyAt.toMillis() < PACK_AFTER_MS) continue;
+      await tg("editMessageReplyMarkup", { chat_id: d.chat, message_id: d.msg, reply_markup: statusKeyboard(doc.id, d) });
+      await doc.ref.set({ packShown: true }, { merge: true });
+    }
   },
 );
