@@ -392,21 +392,27 @@ class _PickScreenState extends ConsumerState<PickScreen> {
         appBar: AppBar(
           backgroundColor: Colors.black,
           foregroundColor: Colors.white,
-          title: UText(photo.designNumber ?? t('Select pieces', 'पीस चुनें'),
-              style: const TextStyle(color: Colors.white)),
+          // Owner: no design number up here — clear text buttons instead.
           actions: [
-            IconButton(
-              tooltip: t('Undo', 'वापस'),
-              icon: const Icon(Icons.undo_rounded),
+            TextButton(
+              style: TextButton.styleFrom(
+                  foregroundColor: Colors.white,
+                  disabledForegroundColor: Colors.white30),
               onPressed: _undo.isEmpty
                   ? null
                   : () => setState(() => _s = _undo.removeLast()),
+              child: const Text('UNDO LAST ACTION',
+                  style: TextStyle(fontWeight: FontWeight.w800)),
             ),
-            IconButton(
-              tooltip: t('Clear', 'सब हटाएँ'),
-              icon: const Icon(Icons.delete_sweep_outlined),
+            TextButton(
+              style: TextButton.styleFrom(
+                  foregroundColor: const Color(0xFFFF8A80),
+                  disabledForegroundColor: Colors.white30),
               onPressed: _s.isEmpty ? null : () => _push(const PickState()),
+              child: const Text('CLEAR ALL',
+                  style: TextStyle(fontWeight: FontWeight.w800)),
             ),
+            const SizedBox(width: 4),
           ],
         ),
         body: Column(
@@ -555,12 +561,9 @@ class _PickScreenState extends ConsumerState<PickScreen> {
             child: Row(
               children: [
                 Expanded(
+                  // Owner: the total is already at the top — show the design no.
                   child: Text(
-                    _s.isEmpty
-                        ? t('Nothing selected', 'कुछ नहीं चुना')
-                        : (total != null
-                            ? t('$total pcs', '$total पीस')
-                            : '${_s.markPieces} pcs + ${_s.sets} SET'),
+                    'Design No. ${photo.designNumber ?? '-'}',
                     style: const TextStyle(
                         color: Colors.white, fontWeight: FontWeight.w700),
                   ),
