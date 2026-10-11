@@ -644,7 +644,12 @@ async function checkPayment(db, ref, img) {
   const mainRef = first.billGroup || ref;
   const mainDoc = db.collection("bbapp_orders").doc(mainRef);
   const m = (await mainDoc.get()).data() || {};
-  const staff = (text) => m.chat && tg("sendMessage", { chat_id: m.chat, reply_to_message_id: m.msg || undefined, text });
+  const staff = async (text) => {
+    if (!m.chat) return;
+    const r = await tg("sendMessage", { chat_id: m.chat, reply_to_message_id: m.msg || undefined, text });
+    const mid = r && r.result && r.result.message_id; // staff can REPLY to this note → customer's chat
+    if (mid) await db.collection("bbapp_msgmap").doc(`${m.chat}_${mid}`).set({ ref: mainRef });
+  };
   const say = (text) => addChat(db, mainRef, { from: "shop", text });
   const head = `${m.billName || "Party"}${m.serial ? " · ORDER NO. " + m.serial : ""}`;
 
