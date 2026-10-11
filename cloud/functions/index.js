@@ -808,7 +808,7 @@ async function addChat(db, ref, m) {
   }
   await db.collection("bbapp_chat").add({ ref, cust: o.mobile || "", from: m.from, text: m.text || "",
     fileId: m.fileId || null, storagePath: m.fileId ? null : storagePath, mime: m.mime || null,
-    by: m.by || "", at: Date.now() });
+    by: m.by || "", at: Date.now(), mirrored: true });
 }
 
 /* ───────────── AKN Chat "AKN App" tab (owner, 11-Oct-2026) ─────────────
@@ -852,7 +852,7 @@ async function mirrorToAknChat(db, o, m) {
   const type = bytes ? (isPdf ? "document" : "image") : "text";
   const text = String(m.text || "");
   if (inbound) await db.collection("bot_logs").doc(msgId).set({ source: "aknzone-app", skip: true });
-  const now = Timestamp.now();
+  const now = m.at ? Timestamp.fromMillis(m.at) : Timestamp.now();
   const msg = {
     direction: inbound ? "in" : "out", from: inbound ? "customer" : "bot", type,
     status: inbound ? "received" : "sent", statusRank: inbound ? null : 1,
@@ -980,3 +980,4 @@ exports.chatFile = onRequest(
     return res.json({ ok: true, mime: m.mime || "image/jpeg", data: bytes.toString("base64") });
   },
 );
+
