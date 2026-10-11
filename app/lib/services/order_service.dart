@@ -509,7 +509,7 @@ class OrderService {
 
       // 2. The customer's details, closed with the divider line.
       // Serial ORDER NO. from the shared cloud counter (same number on retry).
-      if (order.serial == null) {
+      if (order.serial == null && order.addOnTo == null) {
         final res = await dio.post<dynamic>(
           'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net/nextOrderNo',
           data: {'ref': order.number},
@@ -706,7 +706,7 @@ class OrderService {
 
     final b = StringBuffer();
     if (o.addOnTo != null) {
-      b.writeln('➕ <b>ADD-ON to ORDER NO. ${mainSerial ?? o.addOnTo}</b> — same parcel');
+      b.writeln('➕ <b>ADD IN ORDER NO. ${mainSerial ?? '-'}</b>');
     }
     final total = o.approxTotal;
     b.writeln('📦 ${o.items.length} design${o.items.length == 1 ? '' : 's'} · '
@@ -741,7 +741,9 @@ class OrderService {
     b.writeln();
     // Owner: no date / phone / app version — just ORDER NO. The two dots go
     // as their own message right after (see _trySend).
-    b.write('<b>ORDER NO. ${o.serial ?? '-'}</b>');
+    b.write(o.addOnTo != null
+        ? '<b>ADD IN ORDER NO. ${mainSerial ?? '-'}</b>'
+        : '<b>ORDER NO. ${o.serial ?? '-'}</b>');
     return b.toString();
   }
 }

@@ -76,7 +76,11 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                     ),
                     // Owner: show the shop's serial, not the internal AKN id.
                     title: Text(
-                        o.serial != null ? 'ORDER NO. ${o.serial}' : 'ORDER (sending…)',
+                        o.addOnTo != null
+                            ? 'ADD IN ORDER NO. ${orders.where((x) => x.number == o.addOnTo).firstOrNull?.serial ?? '-'}'
+                            : (o.serial != null
+                                ? 'ORDER NO. ${o.serial}'
+                                : 'ORDER (sending…)'),
                         style: const TextStyle(fontWeight: FontWeight.w700)),
                     subtitle: Text(
                       '${OrderService.formatWhen(o.createdAt)}\n'

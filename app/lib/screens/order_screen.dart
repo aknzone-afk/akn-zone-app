@@ -450,7 +450,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
           mainAxisSize: MainAxisSize.min,
           children: [
             SelectableText(
-                o.serial != null ? 'ORDER NO. ${o.serial}' : 'Order saved',
+                o.addOnTo != null ? 'Added to your parcel' : (o.serial != null ? 'ORDER NO. ${o.serial}' : 'Order saved'),
                 style: const TextStyle(
                     fontWeight: FontWeight.w800, letterSpacing: 1)),
             const SizedBox(height: 10),
