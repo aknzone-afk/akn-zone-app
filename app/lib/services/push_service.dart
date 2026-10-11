@@ -67,16 +67,27 @@ class PushService {
       final fm = FirebaseMessaging.instance;
       final perm = await fm.requestPermission(alert: true, badge: true, sound: true);
       if (perm.authorizationStatus == AuthorizationStatus.denied) return;
-      if (Platform.isIOS && await fm.getAPNSToken() == null) return; // not ready yet; next time
-      final token = await fm.getToken();
+      // iPhone: the Apple push address — the cloud sends straight to Apple.
+      final apns = Platform.isIOS ? await fm.getAPNSToken() : null;
+      if (Platform.isIOS && apns == null) return; // not ready yet; next time
+      String? token;
+      try {
+        token = await fm.getToken();
+      } catch (_) {}
+      token ??= apns; // FCM may refuse without Firebase's APNs setup; Apple's address is enough
       if (token == null) return;
-      final key = '$token|${mobiles.join(',')}';
+      final key = '$token|${apns ?? ''}|${mobiles.join(',')}';
       if (key == _lastKey || key == prefs.getString(_kSent)) {
         _lastKey = key;
         return;
       }
       final r = await dio.post<dynamic>('$_cloud/registerPush',
-          data: {'token': token, 'mobiles': mobiles, 'platform': Platform.isIOS ? 'ios' : 'android'},
+          data: {
+            'token': token,
+            if (apns != null) 'apns': apns,
+            'mobiles': mobiles,
+            'platform': Platform.isIOS ? 'ios' : 'android'
+          },
           options: Options(
               headers: {'x-app-key': 'akn-zone-app-2026'},
               contentType: Headers.jsonContentType,

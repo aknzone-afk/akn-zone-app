@@ -22,6 +22,9 @@ const { readOrderPhoto } = require("./orderVision");
 
 // Own FREE key (BBSynRenamer project) — never spends AKN Chat's daily free quota.
 const GEMINI_API_KEY = defineSecret("BBAPP_GEMINI_KEY");
+// Apple push key "AKN Push" (Key ID YS956XB4FC, team DWJM58G45V) — iPhone
+// push goes straight to Apple (APNs), owner 11-Oct-2026.
+const APNS_KEY = defineSecret("BBAPP_APNS_KEY");
 const APP_KEY = "akn-zone-app-2026"; // not a secret — only keeps random traffic out
 const MAX_BYTES = 3 * 1024 * 1024;
 const PER_IP_PER_HOUR = 120;
@@ -294,7 +297,7 @@ async function tg(method, body) {
 }
 
 exports.tgWebhook = onRequest(
-  { region: "asia-south1", secrets: [TG_TOKEN, TG_SECRET, GEMINI_API_KEY], timeoutSeconds: 120, memory: "256MiB", maxInstances: 3, invoker: "public" },
+  { region: "asia-south1", secrets: [TG_TOKEN, TG_SECRET, GEMINI_API_KEY, APNS_KEY], timeoutSeconds: 120, memory: "256MiB", maxInstances: 3, invoker: "public" },
   async (req, res) => {
     if (req.get("x-telegram-bot-api-secret-token") !== TG_SECRET.value().trim()) return res.status(403).send("no");
     const u = req.body || {};
@@ -736,7 +739,7 @@ exports.billImage = onRequest(
 
 /** App: party's payment screenshot → posted under the order → Payment received. */
 exports.paymentProof = onRequest(
-  { region: "asia-south1", secrets: [TG_TOKEN, GEMINI_API_KEY], timeoutSeconds: 60, memory: "512MiB", maxInstances: 3, invoker: "public", cors: true },
+  { region: "asia-south1", secrets: [TG_TOKEN, GEMINI_API_KEY, APNS_KEY], timeoutSeconds: 60, memory: "512MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
     if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
     const ref = String((req.body && req.body.ref) || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
@@ -887,7 +890,7 @@ async function mirrorToAknChat(db, o, m) {
 /** Staff reply typed in AKN Chat's "AKN App" tab → the customer's app chat. */
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 exports.aknChatOut = onDocumentCreated(
-  { document: "chats/{chatId}/messages/{msgId}", region: "asia-south1", memory: "256MiB", maxInstances: 3 },
+  { document: "chats/{chatId}/messages/{msgId}", region: "asia-south1", memory: "256MiB", maxInstances: 3, secrets: [APNS_KEY] },
   async (event) => {
     const { chatId, msgId } = event.params;
     if (!chatId.endsWith("_" + AKZ_PNID)) return;
@@ -919,7 +922,7 @@ exports.aknChatOut = onDocumentCreated(
 );
 
 exports.chatSend = onRequest(
-  { region: "asia-south1", secrets: [TG_TOKEN, GEMINI_API_KEY], timeoutSeconds: 60, memory: "512MiB", maxInstances: 3, invoker: "public", cors: true },
+  { region: "asia-south1", secrets: [TG_TOKEN, GEMINI_API_KEY, APNS_KEY], timeoutSeconds: 60, memory: "512MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
     if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
     const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
@@ -1097,7 +1100,8 @@ exports.registerPush = onRequest(
       .filter((m) => m.length === 10).slice(0, 3);
     if (token.length < 20 || !mobiles.length) return res.status(400).json({ ok: false });
     const id = require("crypto").createHash("sha1").update(token).digest("hex");
-    await admin.firestore().collection("bbapp_push").doc(id).set({ token, mobiles,
+    const apns = String((req.body && req.body.apns) || "").replace(/[^0-9a-f]/gi, "").slice(0, 200);
+    await admin.firestore().collection("bbapp_push").doc(id).set({ token, mobiles, apns: apns || null,
       platform: String((req.body && req.body.platform) || "").slice(0, 10), at: Date.now() });
     return res.json({ ok: true });
   },
@@ -1107,7 +1111,15 @@ async function pushTo(db, mobile, body) {
   try {
     const snap = await db.collection("bbapp_push").where("mobiles", "array-contains", mobile).get();
     if (snap.empty) return;
-    const tokens = snap.docs.map((d) => d.get("token"));
+    const text = String(body || "New message").slice(0, 180);
+    const iosDocs = snap.docs.filter((d) => d.get("apns"));
+    for (const d of iosDocs) {
+      const st = await apnsSend(d.get("apns"), text);
+      if (st === 400 || st === 410) d.ref.set({ apns: null }, { merge: true }).catch(() => {});
+    }
+    const fcmDocs = snap.docs.filter((d) => !d.get("apns"));
+    if (!fcmDocs.length) return;
+    const tokens = fcmDocs.map((d) => d.get("token"));
     const r = await admin.messaging().sendEachForMulticast({
       tokens,
       notification: { title: "AKN ZONE", body: String(body || "New message").slice(0, 180) },
@@ -1118,10 +1130,57 @@ async function pushTo(db, mobile, body) {
     r.responses.forEach((x, i) => {
       const code = x.error && x.error.code;
       if (code === "messaging/registration-token-not-registered" || code === "messaging/invalid-registration-token") {
-        snap.docs[i].ref.delete().catch(() => {});
+        fcmDocs[i].ref.delete().catch(() => {});
       }
     });
   } catch (e) {
     logger.warn("push failed", { mobile, error: e.message });
   }
+}
+
+/** iPhone push straight to Apple with the team's APNs key (JWT, HTTP/2). */
+let _apnsJwt = null;
+function apnsJwt() {
+  if (_apnsJwt && Date.now() - _apnsJwt.at < 40 * 60e3) return _apnsJwt.t;
+  const crypto = require("crypto");
+  const b = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  const h = b({ alg: "ES256", kid: "YS956XB4FC" });
+  const p = b({ iss: "DWJM58G45V", iat: Math.floor(Date.now() / 1000) });
+  const sig = crypto.sign("sha256", Buffer.from(h + "." + p),
+    { key: APNS_KEY.value(), dsaEncoding: "ieee-p1363" }).toString("base64url");
+  _apnsJwt = { t: `${h}.${p}.${sig}`, at: Date.now() };
+  return _apnsJwt.t;
+}
+function apnsSend(deviceToken, text, host = "api.push.apple.com") {
+  const http2 = require("http2");
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v) => { if (!done) { done = true; resolve(v); } };
+    try {
+      const c = http2.connect("https://" + host);
+      c.on("error", () => finish(0));
+      const req = c.request({ ":method": "POST", ":path": "/3/device/" + deviceToken,
+        authorization: "bearer " + apnsJwt(), "apns-topic": "com.bbsynthetics.catalog",
+        "apns-push-type": "alert", "apns-priority": "10", "content-type": "application/json" });
+      let status = 0, out = "";
+      req.on("response", (hd) => { status = hd[":status"]; });
+      req.on("data", (d) => { out += d; });
+      req.on("end", () => {
+        c.close();
+        if (status !== 200) logger.warn("apns", { status, out: out.slice(0, 200), host });
+        // a development (Xcode) build's token is only valid on the sandbox host
+        if (status === 400 && /BadDeviceToken/.test(out) && host === "api.push.apple.com") {
+          return apnsSend(deviceToken, text, "api.sandbox.push.apple.com").then(finish);
+        }
+        finish(status);
+      });
+      req.on("error", () => finish(0));
+      req.setTimeout(10000, () => { req.close(); finish(0); });
+      req.end(JSON.stringify({ aps: { alert: { title: "AKN ZONE", body: text }, sound: "default", badge: 1 },
+        route: "/chat" }));
+    } catch (e) {
+      logger.warn("apns send", { error: e.message });
+      finish(0);
+    }
+  });
 }
