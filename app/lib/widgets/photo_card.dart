@@ -89,12 +89,13 @@ class PhotoCard extends ConsumerWidget {
                     ),
                   ),
           ),
-          // Full selection text, readable, at the very bottom of the photo.
+          // Full selection text, readable, at the top of the photo (the
+          // select box sits at the bottom — owner 11-Oct).
           if (pickSummary != null)
             Positioned(
               left: 0,
               right: 0,
-              bottom: 0,
+              top: 0,
               child: Container(
                 color: const Color(0xEE111111),
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
@@ -115,16 +116,16 @@ class PhotoCard extends ConsumerWidget {
             Positioned(
               left: 0,
               right: 0,
-              bottom: 0,
+              top: 0,
               child: Container(
                 decoration: const BoxDecoration(
                   gradient: LinearGradient(
-                    begin: Alignment.bottomCenter,
-                    end: Alignment.topCenter,
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
                     colors: [Color(0xCC000000), Color(0x00000000)],
                   ),
                 ),
-                padding: const EdgeInsets.fromLTRB(8, 16, 8, 6),
+                padding: const EdgeInsets.fromLTRB(8, 6, 8, 16),
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
@@ -167,7 +168,7 @@ class PhotoCard extends ConsumerWidget {
             ),
           if (!removeMode && ref.watch(newDesignIdsProvider).contains(photo.id))
             Positioned(
-              top: 48,
+              bottom: 48,
               left: 8,
               child: IgnorePointer(
                 child: Container(
@@ -207,7 +208,7 @@ class PhotoCard extends ConsumerWidget {
             // Owner, 11-Oct-2026: no round icons — one clear box that opens
             // TAP-TO-SELECT. Shows what's picked once something is chosen.
             Positioned(
-              top: 6,
+              bottom: 6,
               left: 6,
               right: 6,
               child: Row(
@@ -233,7 +234,7 @@ class PhotoCard extends ConsumerWidget {
                           child: Text(
                             pickLabel != null
                                 ? '✓ SELECTED'
-                                : (isFav ? t('✓ IN CART · SELECT', '✓ कार्ट में · सिलेक्ट') : t('DO SELECTION', 'सिलेक्ट करें')),
+                                : (isFav ? t('✓ IN CART · SELECT', '✓ कार्ट में · सिलेक्ट') : t('SELECT COLOURS / SETS', 'सिलेक्ट करें')),
                             textAlign: TextAlign.center,
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,

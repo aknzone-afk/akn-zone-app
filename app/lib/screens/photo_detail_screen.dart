@@ -216,7 +216,7 @@ class _PhotoDetailScreenState extends ConsumerState<PhotoDetailScreen> {
               // Replace this view, so DONE returns straight to the folder.
               onPressed: () => context.pushReplacement(
                   '/pick/${Uri.encodeComponent(currentPhoto.id)}'),
-              child: Text(isFav ? t('✓ SELECTED', '✓ सिलेक्ट हो गया') : t('DO SELECTION', 'सिलेक्ट करें'),
+              child: Text(isFav ? t('✓ SELECTED', '✓ सिलेक्ट हो गया') : t('SELECT COLOURS / SETS', 'सिलेक्ट करें'),
                   style: const TextStyle(
                       fontWeight: FontWeight.w900, letterSpacing: 0.8)),
             ),

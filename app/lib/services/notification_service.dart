@@ -118,6 +118,13 @@ class NotificationService {
     );
   }
 
+  /// Removes the old repeating "new designs" reminder (owner: not wanted).
+  Future<void> cancelDaily() async {
+    if (!_ready) return;
+    await _plugin.cancel(id: _dailyId);
+    await _plugin.cancel(id: _testId);
+  }
+
   /// Weekly Sunday 12:00 PM (local) repeating reminder.
   Future<void> scheduleDaily() async {
     if (!_ready) return;

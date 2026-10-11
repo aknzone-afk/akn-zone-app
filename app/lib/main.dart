@@ -45,10 +45,9 @@ Future<void> main() async {
   try {
     await NotificationService.instance.init(onTap: _openDailyUpdate);
     await NotificationService.instance.requestPermission();
-    final geoAllowed = prefs.getBool('geo_check_allowed') ?? true;
-    if (geoAllowed) {
-      await NotificationService.instance.scheduleDaily();
-    }
+    // Owner 11-Oct: no daily / weekly "new designs" notification any more —
+    // cancel the one older versions scheduled.
+    await NotificationService.instance.cancelDaily();
     launchPayload = await NotificationService.instance.launchPayload();
   } catch (_) {}
 
