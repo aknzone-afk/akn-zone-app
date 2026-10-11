@@ -18,6 +18,7 @@ import 'screens/tutorial_screen.dart';
 import 'screens/chat_screen.dart';
 import 'screens/order_detail_screen.dart';
 import 'widgets/chat_bubble.dart';
+import 'widgets/keyboard_hide.dart';
 import 'screens/whats_new_screen.dart';
 import 'services/order_service.dart';
 import 'services/pieces_service.dart';
@@ -171,6 +172,7 @@ class _CatalogAppState extends ConsumerState<CatalogApp>
       builder: (context, child) => Stack(children: [
             AuthGate(child: child ?? const SizedBox.shrink()),
             const ChatBubble(), // single chat with the shop, pops up by itself
+            const KeyboardHideButton(), // owner: a sure way to close the keyboard
           ]),
     ));
   }
