@@ -433,8 +433,15 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       }
       return false;
     }
-    if (r.soft.isEmpty) return true;
     var changed = false;
+    if (r.rename != null && r.rename!.isNotEmpty) {
+      // Same bill name already in Tally → "NAME (BOOKING PLACE)" (owner).
+      _billName.text = r.rename!;
+      customer.billName = r.rename!; // goes out with this order straight away
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Bill name saved as "${r.rename}" (this name is already with us).')));
+    }
+    if (r.soft.isEmpty) return true;
     for (final e in r.soft) {
       if (!mounted) return false;
       final sugg = [for (final x in (e['suggest'] as List? ?? const [])) '$x'];

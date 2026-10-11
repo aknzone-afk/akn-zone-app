@@ -188,7 +188,7 @@ class OrderService {
 
   /// New customer: the same checks the shop's NewPartyBot does before it makes
   /// the Tally ledger (owner 11-Oct-2026). Null = could not check (never blocks).
-  static Future<({List<Map> errors, List<Map> soft})?> checkNewParty(
+  static Future<({List<Map> errors, List<Map> soft, String? rename})?> checkNewParty(
       Dio dio, CustomerDetails c) async {
     try {
       final res = await dio.post<dynamic>('$_cloud/checkNewParty',
@@ -202,6 +202,7 @@ class OrderService {
       return (
         errors: [for (final e in (d['errors'] as List? ?? const [])) e as Map],
         soft: [for (final e in (d['soft'] as List? ?? const [])) e as Map],
+        rename: d['rename'] as String?,
       );
     } catch (_) {
       return null;

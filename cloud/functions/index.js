@@ -1067,10 +1067,16 @@ exports.checkNewParty = onRequest(
       errors.push({ field: "mobile", msg: `We already have a ledger with this mobile number: ${byMob}. ` +
         "Please choose OLD CUSTOMER and search with this mobile number." });
     }
-    const nm = String(c.billName || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
-    if (!byMob && nm && NPCHECK.ledgers.includes(nm)) {
-      errors.push({ field: "billName", msg: `The bill name "${String(c.billName).trim().toUpperCase()}" is already used. ` +
-        "If this is you, choose OLD CUSTOMER and search with your mobile. Otherwise add your city, e.g. NAME (CITY)." });
+    // Owner 11-Oct: a bill name already in Tally becomes "NAME (BOOKING PLACE)"
+    // by itself (Tally can't have two ledgers with one name) — no error.
+    const key = (x) => String(x || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    let rename = null;
+    const base = String(c.billName || "").trim().toUpperCase();
+    if (!byMob && base && NPCHECK.ledgers.includes(key(base))) {
+      const place = String(c.bookingPlace || c.pincode || "").trim().toUpperCase();
+      let cand = place ? `${base} (${place})` : base;
+      for (let i = 2; NPCHECK.ledgers.includes(key(cand)) && i < 10; i++) cand = `${base} (${place}) ${i}`;
+      rename = cand;
     }
     const gst = String(c.taxId || "").toUpperCase().replace(/\s/g, "");
     if (/^\d{2}[A-Z]{5}\d{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/.test(gst) && NPCHECK.gstins[gst] && !byMob) {
@@ -1087,7 +1093,7 @@ exports.checkNewParty = onRequest(
       soft.push({ field: "bookingPlace", msg: `Booking place "${pl}" is not in our list. Please choose the nearest:`,
         suggest: nearest(pl, NPCHECK.dests) });
     }
-    return res.json({ ok: true, errors, soft });
+    return res.json({ ok: true, errors, soft, rename });
   },
 );
 
