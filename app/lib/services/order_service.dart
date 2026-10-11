@@ -684,6 +684,10 @@ class OrderService {
                             ?.serial),
                 'mobile': order.customer.mobile,
                 'billName': order.customer.billName,
+                // New customer: full details → the shop's NewPartyBot makes
+                // the Tally ledger (broker YOUTUBE) once the order is taken up.
+                if (order.customer.kind != 'old' && order.addOnTo == null)
+                  'cust': order.customer.toJson(),
                 'serial': order.serial,
                 'addOnTo': order.addOnTo,
               },

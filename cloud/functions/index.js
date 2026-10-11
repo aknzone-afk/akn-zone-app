@@ -423,7 +423,12 @@ exports.registerOrder = onRequest(
     await db.collection("bbapp_msgmap").doc(`${chat}_${msg}`).set({ ref });
     const docRef = db.collection("bbapp_orders").doc(ref);
     const d = await docRef.get();
-    await docRef.set({ msg, chat, mobile, billName, serial, addOnTo, ...(text ? { text } : {}), ...(d.exists && d.get("status") ? {} : {
+    // New customer's details (for the Tally ledger via NewPartyBot).
+    const c = req.body && req.body.cust;
+    const cust = c && typeof c === "object" && c.kind !== "old" ? Object.fromEntries(
+      ["country", "billName", "address", "bookingPlace", "pincode", "mobile", "transport", "taxId", "kind"]
+        .map((k) => [k, String(c[k] || "").slice(0, 300)])) : null;
+    await docRef.set({ msg, chat, mobile, billName, serial, addOnTo, ...(text ? { text } : {}), ...(cust ? { cust } : {}), ...(d.exists && d.get("status") ? {} : {
       status: "received", statusAt: admin.firestore.FieldValue.serverTimestamp() }) }, { merge: true });
     return res.json({ ok: true });
   },
@@ -981,3 +986,26 @@ exports.chatFile = onRequest(
   },
 );
 
+
+/**
+ * Shop PC (AKNZonePieces\new_party_feed.py): new customers whose order the
+ * shop has taken up ("Maal nikalna chalu" or later) → NewPartyBot makes the
+ * Tally ledger (broker YOUTUBE). {ack:[refs]} marks them handed over.
+ */
+exports.newParties = onRequest(
+  { region: "asia-south1", timeoutSeconds: 30, memory: "256MiB", maxInstances: 1, invoker: "public" },
+  async (req, res) => {
+    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    const db = admin.firestore();
+    for (const r of ((req.body && req.body.ack) || []).slice(0, 50)) {
+      await db.collection("bbapp_orders").doc(String(r).replace(/[^A-Z0-9-]/gi, "")).set(
+        { partyQueuedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+    }
+    const snap = await db.collection("bbapp_orders")
+      .where("status", "in", ["getting_ready", "bill_sent", "payment_received", "dispatched", "bilty"]).get();
+    const out = snap.docs.map((x) => ({ ref: x.id, ...x.data() }))
+      .filter((o) => o.cust && !o.addOnTo && !o.partyQueuedAt)
+      .map((o) => ({ ref: o.ref, serial: o.serial || null, cust: o.cust }));
+    return res.json({ ok: true, parties: out });
+  },
+);
