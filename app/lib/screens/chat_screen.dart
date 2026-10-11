@@ -7,6 +7,7 @@ import 'package:image_picker/image_picker.dart';
 
 import '../providers/providers.dart';
 import '../services/chat_service.dart';
+import '../services/app_badge.dart';
 import '../services/order_service.dart';
 
 /// The customer's single chat with the shop (owner, 11-Oct-2026).
@@ -41,14 +42,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   Future<void> _load() async {
     final prefs = ref.read(sharedPreferencesProvider);
-    final mob = ChatService.mobile(prefs);
-    if (mob == null) return;
+    if (ChatService.mobiles(prefs).isEmpty) return;
     try {
-      final m = await ChatService.list(ref.read(dioProvider), mob);
+      final m = await ChatService.listAll(ref.read(dioProvider), prefs);
       if (!mounted) return;
       final grew = m.length != _msgs.length;
       setState(() => _msgs = m);
       if (m.isNotEmpty) await ChatService.markSeen(prefs, m.last.at);
+      AppBadge.set(0);
       if (grew) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
           if (_scroll.hasClients) _scroll.jumpTo(_scroll.position.maxScrollExtent);
@@ -59,7 +60,10 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
 
   Future<void> _send({List<int>? image}) async {
     final prefs = ref.read(sharedPreferencesProvider);
-    final refNo = ChatService.latestRef(prefs);
+    // Answer in the chat of the number the shop last wrote to.
+    final lastShop = _msgs.where((x) => !x.mine && x.cust.isNotEmpty).lastOrNull;
+    final refNo = (lastShop == null ? null : ChatService.refFor(prefs, lastShop.cust)) ??
+        ChatService.latestRef(prefs);
     final text = _ctrl.text.trim();
     if (refNo == null || (text.isEmpty && image == null) || _sending) return;
     setState(() => _sending = true);
@@ -123,7 +127,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         if (!m.mine)
                           Text(m.by.isNotEmpty ? 'AKN ZONE · ${m.by}' : 'AKN ZONE',
                               style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w800)),
-                        if (m.file) _ChatImage(mobile: mob, id: m.id, mime: m.mime),
+                        if (m.file) _ChatImage(mobile: m.cust.isNotEmpty ? m.cust : mob, id: m.id, mime: m.mime),
                         if (m.text.isNotEmpty) Text(m.text, style: const TextStyle(fontSize: 15)),
                         const SizedBox(height: 2),
                         Text(OrderService.formatWhen(DateTime.fromMillisecondsSinceEpoch(m.at)),

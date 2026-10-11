@@ -8,6 +8,7 @@ import '../providers/providers.dart';
 import '../services/chat_service.dart';
 import '../services/notification_service.dart';
 import 'keyboard_hide.dart';
+import '../services/app_badge.dart';
 
 /// Floating chat bubble on every screen (owner, 11-Oct-2026): unread badge,
 /// and a pop-up card by itself when the shop sends something (bill, reply).
@@ -52,18 +53,23 @@ class _ChatBubbleState extends ConsumerState<ChatBubble> with WidgetsBindingObse
     if (mounted && p != _path) {
       KeyboardHideButton.hide(); // a field on the last screen must not keep the keyboard up
       setState(() => _path = p);
-      if (p == '/chat') setState(() { _unread = 0; _popup = null; });
+      if (p == '/chat') {
+        AppBadge.set(0);
+        setState(() { _unread = 0; _popup = null; });
+      }
     }
   }
 
   Future<void> _check() async {
     final prefs = ref.read(sharedPreferencesProvider);
-    final mob = ChatService.mobile(prefs);
-    if (mob == null || _path == '/chat') return;
+    if (ChatService.mobiles(prefs).isEmpty || _path == '/chat') return;
     try {
-      final msgs = await ChatService.list(ref.read(dioProvider), mob);
+      // Every number this phone ordered for (owner 11-Oct: a reply in the
+      // phone's other number's chat was never shown).
+      final msgs = await ChatService.listAll(ref.read(dioProvider), prefs);
       final seen = ChatService.seenAt(prefs);
       final fresh = msgs.where((m) => !m.mine && m.at > seen).toList();
+      AppBadge.set(fresh.length); // red count on the app icon
       if (!mounted) return;
       setState(() {
         _unread = fresh.length;
@@ -86,7 +92,7 @@ class _ChatBubbleState extends ConsumerState<ChatBubble> with WidgetsBindingObse
   @override
   Widget build(BuildContext context) {
     final prefs = ref.read(sharedPreferencesProvider);
-    if (ChatService.mobile(prefs) == null || _path == '/chat' || _path.startsWith('/pick')) {
+    if (ChatService.mobiles(prefs).isEmpty || _path == '/chat' || _path.startsWith('/pick')) {
       return const SizedBox.shrink();
     }
     final pad = MediaQuery.of(context).padding.bottom;

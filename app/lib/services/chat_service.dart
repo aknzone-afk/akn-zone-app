@@ -14,6 +14,9 @@ class ChatMsg {
   final int at;
   final bool file;
   final String? mime;
+
+  /// The customer mobile this message belongs to (a phone can order for 2).
+  String cust = '';
   ChatMsg(this.id, this.from, this.text, this.by, this.at, this.file, this.mime);
   bool get mine => from == 'party';
 }
@@ -36,6 +39,41 @@ class ChatService {
   }
 
   static String? latestRef(SharedPreferences p) => _latest(p)?.number;
+
+  /// EVERY customer mobile ordered from this phone (newest first, max 3).
+  /// Owner 11-Oct: the shop replied in the chat of the phone's other number
+  /// and the app never showed it — so all of them are watched.
+  static List<String> mobiles(SharedPreferences p) {
+    final out = <String>[];
+    for (final o in OrderService.history(p).where((o) => o.status == OrderStatus.sent)) {
+      final d = o.customer.mobile.replaceAll(RegExp(r'\D'), '');
+      if (d.length < 10) continue;
+      final m = d.substring(d.length - 10);
+      if (!out.contains(m)) out.add(m);
+      if (out.length == 3) break;
+    }
+    return out;
+  }
+
+  /// Latest order ref for a mobile (a reply goes under that customer's order).
+  static String? refFor(SharedPreferences p, String mobile) => OrderService.history(p)
+      .where((o) => o.status == OrderStatus.sent &&
+          o.customer.mobile.replaceAll(RegExp(r'\D'), '').endsWith(mobile))
+      .firstOrNull
+      ?.number;
+
+  /// All chats of this phone, merged by time.
+  static Future<List<ChatMsg>> listAll(Dio dio, SharedPreferences p) async {
+    final all = <ChatMsg>[];
+    for (final m in mobiles(p)) {
+      for (final x in await list(dio, m)) {
+        x.cust = m;
+        all.add(x);
+      }
+    }
+    all.sort((a, b) => a.at.compareTo(b.at));
+    return all;
+  }
 
   static Future<List<ChatMsg>> list(Dio dio, String mobile) async {
     final res = await dio.post<dynamic>('$_cloud/chatList',
@@ -79,9 +117,8 @@ class ChatService {
   /// notification (used by the background task and on app start).
   static Future<void> notifyNew(SharedPreferences p, Dio dio,
       Future<void> Function(String title, String body) show) async {
-    final mob = mobile(p);
-    if (mob == null) return;
-    final msgs = await list(dio, mob);
+    if (mobiles(p).isEmpty) return;
+    final msgs = await listAll(dio, p);
     final last = p.getInt(_kNotified) ?? 0;
     final seen = seenAt(p);
     final fresh = msgs.where((m) => !m.mine && m.at > last && m.at > seen).toList();

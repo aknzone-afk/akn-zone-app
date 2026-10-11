@@ -1300,7 +1300,7 @@ class _TransportHelp extends StatelessWidget {
           ),
         if (usual.isNotEmpty) ...[
           const SizedBox(height: 8),
-          Text('Transports going to ${place.trim().toUpperCase()} (tap to choose):',
+          Text('Suggestion of transports going to ${place.trim().toUpperCase()} — tap to choose:',
               style: const TextStyle(fontWeight: FontWeight.w700)),
           const SizedBox(height: 4),
           Wrap(spacing: 6, runSpacing: 4, children: [
