@@ -62,9 +62,9 @@ class PickState {
     final parts = <String>[
       if (sets > 0)
         sareeCount != null
-            ? '$sets SET (${sets * _perSet(sareeCount)})'
+            ? '$sets SET (${sets * _perSet(sareeCount)} PCS)'
             : '$sets SET',
-      if (markPieces > 0) '$markPieces SELECTED',
+      if (markPieces > 0) '$markPieces SELECTED PCS',
     ];
     final tot = total(sareeCount);
     final x = crossed > 0 ? '  ·  $crossed ✕ NOT WANTED' : '';

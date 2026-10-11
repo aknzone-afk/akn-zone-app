@@ -347,6 +347,29 @@ class _PickScreenState extends ConsumerState<PickScreen> {
     _push(_s.copy(sets: math.max(0, v)));
   }
 
+  /// Undo: the recorded history first; when the design was reopened (no
+  /// history), step back from the last selection — last number −1, then the
+  /// sets — until the photo is clear (owner).
+  void _undoLast() {
+    if (_undo.isNotEmpty) {
+      setState(() => _s = _undo.removeLast());
+      return;
+    }
+    final marks = [..._s.marks];
+    final i = marks.lastIndexWhere((m) => m.n > 0);
+    if (i >= 0) {
+      final n = marks[i].n - 1;
+      if (n <= 0) {
+        marks.removeAt(i);
+      } else {
+        marks[i] = marks[i].withN(n);
+      }
+      setState(() => _s = _s.copy(marks: marks));
+    } else if (_s.sets > 0) {
+      setState(() => _s = _s.copy(sets: _s.sets - 1));
+    }
+  }
+
   Future<void> _done() async {
     await ref.read(picksProvider.notifier).set(widget.photoId, _s);
     // Picking something puts the design in the cart.
@@ -398,9 +421,7 @@ class _PickScreenState extends ConsumerState<PickScreen> {
               style: TextButton.styleFrom(
                   foregroundColor: Colors.white,
                   disabledForegroundColor: Colors.white30),
-              onPressed: _undo.isEmpty
-                  ? null
-                  : () => setState(() => _s = _undo.removeLast()),
+              onPressed: (_undo.isEmpty && _s.isEmpty) ? null : _undoLast,
               child: const Text('UNDO LAST ACTION',
                   style: TextStyle(fontWeight: FontWeight.w800)),
             ),
@@ -421,12 +442,12 @@ class _PickScreenState extends ConsumerState<PickScreen> {
               Container(
                 width: double.infinity,
                 color: const Color(0xFF111111),
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 16),
                 child: Text(
                   _s.summary(count),
                   textAlign: TextAlign.center,
                   style: const TextStyle(
-                      color: Colors.white, fontWeight: FontWeight.w900, fontSize: 17),
+                      color: Colors.white, fontWeight: FontWeight.w900, fontSize: 21, height: 1.25),
                 ),
               ),
             // SET − / + and ✕ right under the summary (owner, 11-Oct-2026).
@@ -562,10 +583,17 @@ class _PickScreenState extends ConsumerState<PickScreen> {
               children: [
                 Expanded(
                   // Owner: the total is already at the top — show the design no.
-                  child: Text(
-                    'Design No. ${photo.designNumber ?? '-'}',
-                    style: const TextStyle(
-                        color: Colors.white, fontWeight: FontWeight.w700),
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'DESIGN NO. | ${(photo.designNumber ?? '-').toUpperCase()}',
+                      style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.w900,
+                          fontSize: 24,
+                          letterSpacing: 0.5),
+                    ),
                   ),
                 ),
                 FilledButton(
