@@ -429,6 +429,7 @@ class _PickScreenState extends ConsumerState<PickScreen> {
               color: const Color(0xFF1B1A18),
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
               child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                 // SET: − / + so a wrong tap is easy to take back; tap the
                 // number to type any amount.
