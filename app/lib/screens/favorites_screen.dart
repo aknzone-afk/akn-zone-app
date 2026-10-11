@@ -11,6 +11,7 @@ import '../services/marks_service.dart';
 import '../services/picks_service.dart';
 import '../services/pieces_service.dart';
 import '../services/whatsapp_share.dart';
+import '../widgets/bar_button.dart';
 import '../widgets/min_order_bar.dart';
 import '../widgets/photo_grid.dart';
 import 'manual_price_screen.dart';
@@ -211,23 +212,26 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
     final scheme = Theme.of(context).colorScheme;
 
     return Scaffold(
-      // Owner 11-Oct: no "CART · N DESIGN" title — two clear words instead.
+      // Owner 11-Oct: no "CART · N DESIGN" title — two boxed buttons across.
       appBar: AppBar(
         titleSpacing: 0,
-        title: TextButton.icon(
-          onPressed: () => context.push('/orders'),
-          icon: const Icon(Icons.receipt_long_outlined, size: 20),
-          label: const Text('PAST ORDERS', style: TextStyle(fontWeight: FontWeight.w800)),
-        ),
-        actions: [
-          if (favPhotos.isNotEmpty)
-            TextButton(
-              onPressed: _confirmClear,
-              child: const Text('CLEAR SELECTION',
-                  style: TextStyle(fontWeight: FontWeight.w800, color: Color(0xFFD32F2F))),
-            ),
-          const SizedBox(width: 6),
-        ],
+        title: Row(children: [
+          Expanded(
+              child: BarButton(
+                  icon: Icons.receipt_long_outlined,
+                  label: 'PAST ORDERS',
+                  onTap: () => context.push('/orders'))),
+          if (favPhotos.isNotEmpty) ...[
+            const SizedBox(width: 8),
+            Expanded(
+                child: BarButton(
+                    icon: Icons.delete_sweep_outlined,
+                    label: 'CLEAR SELECTION',
+                    color: const Color(0xFFC62828),
+                    onTap: _confirmClear)),
+          ],
+        ]),
+        actions: const [SizedBox(width: 12)],
       ),
       body: favPhotos.isEmpty
           ? Center(

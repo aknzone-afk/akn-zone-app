@@ -15,6 +15,7 @@ import '../services/drive_urls.dart';
 import '../services/photo_freshness.dart';
 import '../services/price_check.dart';
 import '../services/notification_service.dart' show kDailyUpdateFolder;
+import '../widgets/bar_button.dart';
 import '../widgets/photo_card.dart';
 import '../widgets/filter_sheet.dart';
 import '../widgets/marquee_text.dart';
@@ -255,46 +256,53 @@ class _FolderScaffold extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     return Scaffold(
-      // Owner 11-Oct: no folder name on top; plain words instead of icons.
-      // While photos are being selected (hold a photo → "1 selected" below)
-      // the bar shows ONLY "SELECT ALL".
+      // Owner 11-Oct: no folder name on top. Three boxed buttons (icon + word)
+      // spread from the back arrow to the right edge, so they clearly look
+      // tappable. While photos are being selected (hold a photo → "1
+      // selected" below) the bar shows ONLY "SELECT ALL".
       appBar: AppBar(
         titleSpacing: 0,
-        actions: [
-          Consumer(builder: (context, ref, _) {
-            final sel = ref.watch(selectionProvider);
-            const st = TextStyle(fontSize: 13, fontWeight: FontWeight.w800, letterSpacing: 0.6);
-            final compact = TextButton.styleFrom(
-                visualDensity: VisualDensity.compact,
-                padding: const EdgeInsets.symmetric(horizontal: 10));
-            if (sel.isNotEmpty) {
-              if (selectableIds.isEmpty) return const SizedBox.shrink();
-              final allSel = selectableIds.every(sel.contains);
-              return TextButton(
-                style: compact,
-                onPressed: () {
-                  final n = ref.read(selectionProvider.notifier);
-                  allSel ? n.clear() : n.selectAll(selectableIds);
-                },
-                child: Text(allSel ? 'UNSELECT ALL' : 'SELECT ALL', style: st),
-              );
-            }
-            final cart = ref.watch(favoritesProvider).length;
-            final filterOn = ref.watch(filterProvider).isActive;
-            return Row(mainAxisSize: MainAxisSize.min, children: [
-              TextButton(style: compact, onPressed: () => context.push('/search'), child: const Text('SEARCH', style: st)),
-              TextButton(
-                  style: compact,
-                  onPressed: () => FilterSheet.show(context),
-                  child: Text(filterOn ? 'SORT •' : 'SORT', style: st)),
-              TextButton(
-                  style: compact,
-                  onPressed: () => context.push('/favorites'),
-                  child: Text(cart > 0 ? 'MY CART ($cart)' : 'MY CART', style: st)),
-              const SizedBox(width: 4),
+        title: Consumer(builder: (context, ref, _) {
+          final sel = ref.watch(selectionProvider);
+          if (sel.isNotEmpty) {
+            if (selectableIds.isEmpty) return const SizedBox.shrink();
+            final allSel = selectableIds.every(sel.contains);
+            return Row(children: [
+              Expanded(
+                child: BarButton(
+                  icon: allSel ? Icons.remove_done_rounded : Icons.done_all_rounded,
+                  label: allSel ? 'UNSELECT ALL' : 'SELECT ALL',
+                  onTap: () {
+                    final n = ref.read(selectionProvider.notifier);
+                    allSel ? n.clear() : n.selectAll(selectableIds);
+                  },
+                ),
+              ),
             ]);
-          }),
-        ],
+          }
+          final cart = ref.watch(favoritesProvider).length;
+          final filterOn = ref.watch(filterProvider).isActive;
+          return Row(children: [
+            Expanded(
+                child: BarButton(
+                    icon: Icons.search_rounded, label: 'SEARCH', onTap: () => context.push('/search'))),
+            const SizedBox(width: 8),
+            Expanded(
+                child: BarButton(
+                    icon: Icons.swap_vert_rounded,
+                    label: 'SORT',
+                    dot: filterOn,
+                    onTap: () => FilterSheet.show(context))),
+            const SizedBox(width: 8),
+            Expanded(
+                child: BarButton(
+                    icon: Icons.shopping_cart_outlined,
+                    label: 'MY CART',
+                    count: cart,
+                    onTap: () => context.push('/favorites'))),
+          ]);
+        }),
+        actions: const [SizedBox(width: 12)],
       ),
       body: RefreshIndicator(
         color: Colors.transparent,
