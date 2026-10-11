@@ -449,7 +449,8 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            SelectableText(o.number,
+            SelectableText(
+                o.serial != null ? 'ORDER NO. ${o.serial}' : 'Order saved',
                 style: const TextStyle(
                     fontWeight: FontWeight.w800, letterSpacing: 1)),
             const SizedBox(height: 10),

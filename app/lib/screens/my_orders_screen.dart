@@ -74,11 +74,14 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                       sent ? Icons.check_circle_rounded : Icons.schedule_rounded,
                       color: sent ? const Color(0xFF2E7D32) : Colors.orange,
                     ),
-                    title: Text(o.number,
+                    // Owner: show the shop's serial, not the internal AKN id.
+                    title: Text(
+                        o.serial != null ? 'ORDER NO. ${o.serial}' : 'ORDER (sending…)',
                         style: const TextStyle(fontWeight: FontWeight.w700)),
                     subtitle: Text(
                       '${OrderService.formatWhen(o.createdAt)}\n'
-                      '${o.customer.billName} · ${o.items.length} designs · ${o.totalPcs} pcs\n'
+                      '${o.customer.billName} · ${o.items.length} designs · ${o.totalPcs} pcs'
+                      '${o.approxTotal != null ? ' · approx ${OrderService.formatRupees(o.approxTotal!)}' : ''}\n'
                       '${sent ? t('Sent to shop ✓', 'दुकान को मिल गया ✓') : (o.lastError ?? t('Waiting to send', 'भेजना बाकी'))}',
                     ),
                     isThreeLine: true,
