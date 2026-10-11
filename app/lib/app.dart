@@ -15,6 +15,8 @@ import 'screens/my_orders_screen.dart';
 import 'screens/order_screen.dart';
 import 'screens/pick_screen.dart';
 import 'screens/tutorial_screen.dart';
+import 'screens/chat_screen.dart';
+import 'widgets/chat_bubble.dart';
 import 'screens/whats_new_screen.dart';
 import 'services/order_service.dart';
 import 'services/pieces_service.dart';
@@ -43,6 +45,7 @@ final appRouter = GoRouter(
     GoRoute(path: '/search', builder: (_, __) => const SearchScreen()),
     GoRoute(path: '/favorites', builder: (_, __) => const FavoritesScreen()),
     GoRoute(path: '/order', builder: (_, __) => const OrderScreen()),
+    GoRoute(path: '/chat', builder: (_, __) => const ChatScreen()),
     GoRoute(
       path: '/tutorial',
       builder: (_, s) =>
@@ -160,8 +163,10 @@ class _CatalogAppState extends ConsumerState<CatalogApp>
       // Customer access gate wraps every route: force-update → OTP login →
       // approval check → catalog. A transparent no-op until the access-control
       // backend is configured (kAccessControlEnabled).
-      builder: (context, child) =>
-          AuthGate(child: child ?? const SizedBox.shrink()),
+      builder: (context, child) => Stack(children: [
+            AuthGate(child: child ?? const SizedBox.shrink()),
+            const ChatBubble(), // single chat with the shop, pops up by itself
+          ]),
     ));
   }
 }

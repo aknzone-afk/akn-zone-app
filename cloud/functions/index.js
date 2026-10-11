@@ -383,15 +383,18 @@ exports.tgWebhook = onRequest(
         }
         await tg("sendMessage", { chat_id: u.message.chat.id, reply_to_message_id: u.message.message_id,
           text: m.length >= 7 ? `✅ ${m} reset — removed from ${freed} phone lock(s).` : "Send: /reset 98xxxxxxxx" });
-      } else if (u.message && u.message.reply_to_message && u.message.text) {
-        // A reply to an order message = dispatch info (LR no., transport).
+      } else if (u.message && u.message.reply_to_message && !(u.message.from && u.message.from.is_bot)
+                 && (u.message.text || u.message.photo || u.message.document)) {
+        // A staff reply to an order message (or to a party's chat message)
+        // = a chat message to that party in the app.
         const m = u.message;
         const map = await db.collection("bbapp_msgmap").doc(`${m.chat.id}_${m.reply_to_message.message_id}`).get();
         if (map.exists) {
           const ref = map.get("ref");
-          await db.collection("bbapp_orders").doc(ref).set({
-            lr: String(m.text).slice(0, 120), lrAt: admin.firestore.FieldValue.serverTimestamp(),
-          }, { merge: true });
+          const fileId = m.photo ? m.photo[m.photo.length - 1].file_id : (m.document ? m.document.file_id : null);
+          await addChat(db, ref, { from: "shop", text: String(m.text || m.caption || "").slice(0, 2000),
+            fileId, mime: m.photo ? "image/jpeg" : (m.document && m.document.mime_type) || null,
+            by: (m.from && m.from.first_name) || "" });
           await tg("setMessageReaction", { chat_id: m.chat.id, message_id: m.message_id, reaction: [{ type: "emoji", emoji: "👍" }] });
         }
       }
@@ -592,17 +595,27 @@ async function handleBillPhoto(db, m) {
   const nm = normName(b.buyerName);
   // Open orders (not yet billed), newest first; main orders before add-ons.
   const snap = await db.collection("bbapp_orders").where("status", "in", ["received", "getting_ready"]).get();
-  const cands = snap.docs.map((x) => ({ id: x.id, ...x.data() }))
+  const all = snap.docs.map((x) => ({ id: x.id, ...x.data() }))
     .filter((o) => (mob && o.mobile && o.mobile === mob) || (nm && o.billName && normName(o.billName) === nm)
       || (nm && o.billName && (normName(o.billName).includes(nm) || nm.includes(normName(o.billName)))));
-  if (!cands.length) {
+  if (!all.length) {
     return reply(`❓ No open app order found for ${b.buyerName || "this party"}${mob ? " (" + mob + ")" : ""}. Bill not sent.`);
+  }
+  // Owner: steps strictly in order — the bill only after "Maal nikalna chalu".
+  const cands = all.filter((o) => o.status === "getting_ready");
+  if (!cands.length) {
+    const o = all[0];
+    return reply(`⛔ ${o.billName} — ${o.serial ? "ORDER NO. " + o.serial : "this order"}: first tap "🧺 Maal nikalna chalu" on the order, then send the bill again.`);
   }
   cands.sort((a, c) => (c.statusAt ? c.statusAt.toMillis() : 0) - (a.statusAt ? a.statusAt.toMillis() : 0));
   const main = cands.find((o) => !o.addOnTo) || cands[0];
   const linked = [main, ...cands.filter((o) => o.addOnTo && (o.addOnTo === main.id))];
   const extra = { billFileId: fileId, billMime: mime, billNo: b.billNo || null, billTotal: b.grandTotal || null };
-  for (const o of linked) await autoStep(db, o.id, "b", "Bill group", extra);
+  for (const o of linked) {
+    await autoStep(db, o.id, "b", "Bill group", extra);
+    await addChat(db, o.id, { from: "shop", text: "🧾 Your bill" + (b.billNo ? " " + b.billNo : "") +
+      (b.grandTotal ? " · ₹" + b.grandTotal : "") + " — please make the payment and send the screenshot here.", fileId, mime });
+  }
   const no = main.serial ? `ORDER NO. ${main.serial}` : "the order";
   return reply(`✅ Bill sent to ${main.billName} — ${no}${b.billNo ? " · Bill " + b.billNo : ""}${b.grandTotal ? " · ₹" + b.grandTotal : ""}`);
 }
@@ -639,8 +652,7 @@ exports.paymentProof = onRequest(
     fd.append("caption", `💰 Payment screenshot — ${d.billName || ""}${d.serial ? " · ORDER NO. " + d.serial : ""}`);
     fd.append("photo", new Blob([img], { type: "image/jpeg" }), "payment.jpg");
     await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/sendPhoto`, { method: "POST", body: fd });
-    const cur = d.status || "received";
-    if (ORDER.indexOf(cur) < ORDER.indexOf("payment_received")) {
+    if ((d.status || "received") === "bill_sent") {
       await autoStep(db, ref, "y", d.billName || "party", {});
     }
     return res.json({ ok: true });
@@ -669,18 +681,98 @@ exports.syncDispatch = onRequest(
       const d = doc.data();
       const r = d.billNo && byBill.get(normBill(d.billNo));
       if (!r) continue;
-      if (r.parcelDate && ORDER.indexOf(d.status) < ORDER.indexOf("dispatched")) {
+      if (r.parcelDate && d.status === "payment_received") {
         await autoStep(db, doc.id, "d", `Daily Parcels (${r.parcelDate})`, { parcelDate: String(r.parcelDate) });
         disp++;
       }
       if (r.bilty) {
         const cur = ((await doc.ref.get()).data() || {}).status;
-        if (ORDER.indexOf(cur) < ORDER.indexOf("bilty")) {
+        if (cur === "dispatched") {
           await autoStep(db, doc.id, "l", "Bilty entry", { lr: `Bilty ${r.bilty}`, bilty: String(r.bilty) });
           bil++;
         }
       }
     }
     return res.json({ ok: true, checked: snap.size, dispatched: disp, bilty: bil });
+  },
+);
+
+
+/* ───────────── CHAT per order (owner, 11-Oct-2026) ─────────────
+ * Party ↔ shop messages for one order. The party writes in the app → the
+ * message is posted under the order in the Party order group; staff answer
+ * with a Telegram REPLY → it shows in the party's chat. The bill from the Bill
+ * group lands in the chat too. A photo sent while the bill is pending = the
+ * payment screenshot (ticks Payment received).
+ */
+async function addChat(db, ref, m) {
+  const o = (await db.collection("bbapp_orders").doc(ref).get()).data() || {};
+  await db.collection("bbapp_chat").add({ ref, cust: o.mobile || "", from: m.from, text: m.text || "",
+    fileId: m.fileId || null, mime: m.mime || null, by: m.by || "", at: Date.now() });
+}
+
+exports.chatSend = onRequest(
+  { region: "asia-south1", secrets: [TG_TOKEN], timeoutSeconds: 60, memory: "512MiB", maxInstances: 3, invoker: "public", cors: true },
+  async (req, res) => {
+    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
+    if (limited("c:" + ip)) return res.status(429).json({ ok: false });
+    const ref = String((req.body && req.body.ref) || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
+    const text = String((req.body && req.body.text) || "").slice(0, 2000);
+    const img = req.body && req.body.image ? Buffer.from(String(req.body.image), "base64") : null;
+    if (!ref || (!text && !img) || (img && img.length > 6 * 1024 * 1024)) return res.status(400).json({ ok: false });
+    const db = admin.firestore();
+    const d = (await db.collection("bbapp_orders").doc(ref).get()).data();
+    if (!d || !d.chat) return res.json({ ok: false, error: "order not found" });
+    const head = `💬 ${d.billName || "Party"}${d.serial ? " · ORDER NO. " + d.serial : ""}`;
+    let sent;
+    if (img) {
+      const fd = new FormData();
+      fd.append("chat_id", String(d.chat));
+      if (d.msg) fd.append("reply_to_message_id", String(d.msg));
+      fd.append("caption", `${head}${text ? "\n" + text : ""}`.slice(0, 1000));
+      fd.append("photo", new Blob([img], { type: "image/jpeg" }), "chat.jpg");
+      sent = await (await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/sendPhoto`, { method: "POST", body: fd })).json();
+    } else {
+      sent = await tg("sendMessage", { chat_id: d.chat, reply_to_message_id: d.msg || undefined, text: `${head}\n${text}` });
+    }
+    const mid = sent && sent.result && sent.result.message_id;
+    if (mid) await db.collection("bbapp_msgmap").doc(`${d.chat}_${mid}`).set({ ref });
+    const fileId = sent && sent.result && sent.result.photo ? sent.result.photo[sent.result.photo.length - 1].file_id : null;
+    await addChat(db, ref, { from: "party", text, fileId, mime: fileId ? "image/jpeg" : null });
+    let paid = false;
+    if (img && (d.status || "received") === "bill_sent") {
+      await autoStep(db, ref, "y", d.billName || "party", {});
+      paid = true;
+    }
+    return res.json({ ok: true, paid });
+  },
+);
+
+exports.chatList = onRequest(
+  { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
+  async (req, res) => {
+    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    // ONE chat per customer (owner): all messages for this mobile.
+    const cust = String((req.body && req.body.mobile) || "").replace(/\D/g, "").slice(-10);
+    if (cust.length !== 10) return res.status(400).json({ ok: false });
+    const snap = await admin.firestore().collection("bbapp_chat").where("cust", "==", cust).get();
+    const msgs = snap.docs.map((x) => ({ id: x.id, ...x.data() })).sort((a, b) => a.at - b.at).slice(-200)
+      .map((m) => ({ id: m.id, from: m.from, text: m.text, at: m.at, by: m.by, file: !!m.fileId, mime: m.mime }));
+    return res.json({ ok: true, msgs });
+  },
+);
+
+exports.chatFile = onRequest(
+  { region: "asia-south1", secrets: [TG_TOKEN], timeoutSeconds: 30, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
+  async (req, res) => {
+    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    const cust = String((req.body && req.body.mobile) || "").replace(/\D/g, "").slice(-10);
+    const id = String((req.body && req.body.id) || "").slice(0, 64);
+    const m = id ? (await admin.firestore().collection("bbapp_chat").doc(id).get()).data() : null;
+    if (!m || m.cust !== cust || !m.fileId) return res.json({ ok: false });
+    const bytes = await tgFileBytes(m.fileId);
+    if (!bytes) return res.json({ ok: false });
+    return res.json({ ok: true, mime: m.mime || "image/jpeg", data: bytes.toString("base64") });
   },
 );
