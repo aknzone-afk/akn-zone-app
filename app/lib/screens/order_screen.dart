@@ -162,10 +162,11 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     if (r == null || r['found'] != true) {
       final why = r?['reason'];
       setState(() {
-        _gstOk = why == 'unavailable';
-        _gstNote = why == 'unavailable'
-            ? 'Could not check GST right now — please fill your details.'
-            : '✗ This GST number is not valid. Please check it.';
+        // Owner 12-Oct: GST not verified → remove it; goods can be taken
+        // without GST.
+        _gstOk = false;
+        _gstNote = '✗ This GST number could not be verified. Please remove it — '
+            'you can order without GST.';
       });
       return;
     }
@@ -181,7 +182,8 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       _gstOk = status.toLowerCase() == 'active' || status.isEmpty;
       _gstNote = _gstOk
           ? '✓ GST verified — ${r['legalName']}. Details filled; change anything if needed.'
-          : '✗ This GST number is $status on the GST portal.';
+          : '✗ This GST number is $status on the GST portal. Please remove it — '
+              'you can order without GST.';
     });
   }
 
@@ -1031,7 +1033,9 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                             : null,
                         helperColor: const Color(0xFF2E7D32)),
                     validator: (v) {
-                      if (_gstNote != null && !_gstOk) return 'Please correct the GST number';
+                      if (_gstNote != null && !_gstOk) {
+                        return 'GST not verified — please remove it (you can order without GST)';
+                      }
                       final k = OrderService.taxIdKind(v ?? '');
                       return (k != null && k.startsWith('!'))
                           ? k.substring(1)
