@@ -222,7 +222,10 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                                   textAlign: TextAlign.center,
                                   style: TextStyle(fontWeight: FontWeight.w900)),
                             ),
-                            // Owner 12-Oct: the helpline lives here (under SEE ORDER).
+                            // Owner 12-Oct: under SEE ORDER, and only once the bill
+                            // is sent — the chat where the payment screenshot goes.
+                            if (const ['bill_sent', 'payment_received', 'dispatched', 'bilty']
+                                .contains(_st[o.number]?.status))
                             InkWell(
                               borderRadius: BorderRadius.circular(10),
                               onTap: () => context.push('/chat'),
@@ -233,7 +236,10 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                                 child: const Row(mainAxisSize: MainAxisSize.min, children: [
                                   HelplineIcon(size: 18),
                                   SizedBox(width: 4),
-                                  Text('HELP', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 11)),
+                                  Text('SEND PAYMENT
+DETAILS',
+                                      textAlign: TextAlign.center,
+                                      style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 10, height: 1.15)),
                                 ]),
                               ),
                             ),
