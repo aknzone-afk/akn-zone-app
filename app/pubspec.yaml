@@ -1,7 +1,7 @@
 name: catalog_app
 description: "B.B Synthetics fabric catalog — browse, filter, mark up and share via WhatsApp. Mirrors a public Google Drive folder."
 publish_to: 'none'
-version: 2.6.2+93
+version: 2.6.3+94
 
 environment:
   sdk: ^3.5.0
@@ -46,7 +46,7 @@ dependencies:
   pdf: ^3.10.0
 
   # On-device OCR for photos whose folder name doesn't encode a price.
-  google_mlkit_text_recognition: ^0.13.0
+  google_mlkit_text_recognition: 0.16.0
   flutter_local_notifications: ^22.0.0-dev.3
   timezone: ^0.11.0
   flutter_timezone: ^5.1.0
