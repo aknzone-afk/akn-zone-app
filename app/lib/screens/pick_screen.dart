@@ -225,7 +225,7 @@ class _PickScreenState extends ConsumerState<PickScreen> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(const SnackBar(
-          content: Text('Designs below ₹310 are sold only in full SETS — use SET + / − above.')));
+          content: Text('This design is SET TO SET only — same quantity of every colour. Use SET + / − above.')));
   }
 
   void _tap(double x, double y, List<List<int>>? boxes) {
@@ -469,6 +469,10 @@ class _PickScreenState extends ConsumerState<PickScreen> {
       }
       if (mounted) context.pop();
       return;
+    }
+    // SET TO SET only (below ₹310): every colour exactly the SET number.
+    if (_setOnly && _s.shown > 0 && _s.marks.any((m) => m.n != _s.shown)) {
+      _s = _s.copy(marks: [for (final m in _s.marks) if (m.n != 0) m.withN(_s.shown)]);
     }
     await ref.read(picksProvider.notifier).set(widget.photoId, _s);
     // Picking something puts the design in the cart.
