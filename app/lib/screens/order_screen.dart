@@ -144,9 +144,59 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     }
   }
 
+  String? _gstNote;
+  bool _gstOk = false;
+  String? _gstLooked;
+
+  /// Owner 12-Oct: a full GST number is checked on the GST portal; a valid
+  /// one fills bill name, address, pincode and booking place.
+  Future<void> _gstLookup(String g) async {
+    if (g == _gstLooked) return;
+    _gstLooked = g;
+    setState(() {
+      _gstNote = 'Checking GST number…';
+      _gstOk = true;
+    });
+    final r = await OrderService.gstLookup(ref.read(dioProvider), g);
+    if (!mounted || _gstLooked != g) return;
+    if (r == null || r['found'] != true) {
+      final why = r?['reason'];
+      setState(() {
+        _gstOk = why == 'unavailable';
+        _gstNote = why == 'unavailable'
+            ? 'Could not check GST right now — please fill your details.'
+            : '✗ This GST number is not valid. Please check it.';
+      });
+      return;
+    }
+    final status = '${r['status'] ?? ''}';
+    final name = '${r['tradeName'] ?? ''}'.isNotEmpty ? '${r['tradeName']}' : '${r['legalName'] ?? ''}';
+    setState(() {
+      if (name.isNotEmpty) _billName.text = name;
+      if ('${r['address'] ?? ''}'.isNotEmpty) _address.text = '${r['address']}';
+      if ('${r['pin'] ?? ''}'.isNotEmpty) _pincode.text = '${r['pin']}';
+      if ('${r['city'] ?? ''}'.isNotEmpty && _bookingPlace.text.trim().isEmpty) {
+        _bookingPlace.text = '${r['city']}';
+      }
+      _gstOk = status.toLowerCase() == 'active' || status.isEmpty;
+      _gstNote = _gstOk
+          ? '✓ GST verified — ${r['legalName']}. Details filled; change anything if needed.'
+          : '✗ This GST number is $status on the GST portal.';
+    });
+  }
+
   /// GST / PAN typed in the new form that already belongs to a party.
   Future<void> _onTaxTyped() async {
     final tax = _taxId.text.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
+    if (RegExp(r'^\d{2}[A-Z]{5}\d{4}[A-Z][0-9A-Z]Z[0-9A-Z]$').hasMatch(tax)) {
+      // ignore: unawaited_futures
+      _gstLookup(tax);
+    } else if (_gstNote != null) {
+      setState(() {
+        _gstNote = null;
+        _gstLooked = null;
+      });
+    }
     final ok = RegExp(r'^\d{2}[A-Z]{5}\d{4}[A-Z][0-9A-Z]Z[0-9A-Z]$').hasMatch(tax) ||
         RegExp(r'^[A-Z]{5}\d{4}[A-Z]$').hasMatch(tax);
     if (!ok) {
@@ -970,6 +1020,42 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                       ),
                   ],
                   if (_newForm) ...[
+                  // Owner 12-Oct: GST first — a valid GST number fills the form
+                  // from the GST portal (the customer can still change it).
+                  TextFormField(
+                    controller: _taxId,
+                    textCapitalization: TextCapitalization.characters,
+                    decoration: _dec(t('GST / PAN / Aadhaar (optional)', 'GST / PAN / आधार (ज़रूरी नहीं)'),
+                        helper: (kind != null && !kind.startsWith('!'))
+                            ? '✓ $kind number'
+                            : null,
+                        helperColor: const Color(0xFF2E7D32)),
+                    validator: (v) {
+                      if (_gstNote != null && !_gstOk) return 'Please correct the GST number';
+                      final k = OrderService.taxIdKind(v ?? '');
+                      return (k != null && k.startsWith('!'))
+                          ? k.substring(1)
+                          : null;
+                    },
+                  ),
+                  if (_taxMatches.isNotEmpty) ...[
+                    const Padding(
+                      padding: EdgeInsets.only(top: 10),
+                      child: Text('This GST / PAN is already with us — tap your account:',
+                          style: TextStyle(fontWeight: FontWeight.w800, color: Color(0xFF2E7D32))),
+                    ),
+                    for (final pt in _taxMatches)
+                      GestureDetector(onTap: () => _useAccount(pt), child: _partyCard(pt)),
+                  ],
+                  if (_gstNote != null)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 6, left: 4),
+                      child: Text(_gstNote!,
+                          style: TextStyle(
+                              fontWeight: FontWeight.w700,
+                              color: _gstOk ? const Color(0xFF2E7D32) : const Color(0xFFD32F2F))),
+                    ),
+                  const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
                     key: ValueKey(_country),
                     initialValue: _country,
@@ -1071,30 +1157,6 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                     },
                   ),
                   const SizedBox(height: 12),
-                  TextFormField(
-                    controller: _taxId,
-                    textCapitalization: TextCapitalization.characters,
-                    decoration: _dec(t('GST / PAN / Aadhaar (optional)', 'GST / PAN / आधार (ज़रूरी नहीं)'),
-                        helper: (kind != null && !kind.startsWith('!'))
-                            ? '✓ $kind number'
-                            : null,
-                        helperColor: const Color(0xFF2E7D32)),
-                    validator: (v) {
-                      final k = OrderService.taxIdKind(v ?? '');
-                      return (k != null && k.startsWith('!'))
-                          ? k.substring(1)
-                          : null;
-                    },
-                  ),
-                  if (_taxMatches.isNotEmpty) ...[
-                    const Padding(
-                      padding: EdgeInsets.only(top: 10),
-                      child: Text('This GST / PAN is already with us — tap your account:',
-                          style: TextStyle(fontWeight: FontWeight.w800, color: Color(0xFF2E7D32))),
-                    ),
-                    for (final pt in _taxMatches)
-                      GestureDetector(onTap: () => _useAccount(pt), child: _partyCard(pt)),
-                  ],
                   ],
                   const SizedBox(height: 12),
                   TextFormField(

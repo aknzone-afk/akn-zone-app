@@ -1258,3 +1258,67 @@ exports.appError = onRequest(
     return res.json({ ok: true });
   },
 );
+
+/* ───────────── GST lookup for the order form (owner, 12-Oct-2026) ─────────────
+ * Same two providers as NewPartyBot (appyflow, then gstincheck). Returns the
+ * registered name, address, PIN, city, state and status so the app can fill
+ * the new-customer form and validate the number. Cached in bbapp_gst 30 days.
+ */
+const GST_APPYFLOW = defineSecret("BBAPP_GST_APPYFLOW");
+const GST_CHECK = defineSecret("BBAPP_GST_CHECK");
+function gstParse(t) {
+  const adr = ((t || {}).pradr || {}).addr || {};
+  const seen = new Set(), lines = [];
+  for (const p of [adr.bno, adr.bnm, adr.flno, adr.st, adr.loc]) {
+    const v = String(p || "").trim().replace(/\s+/g, " ").toUpperCase().replace(/^[ ,]+|[ ,]+$/g, "");
+    if (!v || seen.has(v) || ["0", "00", "NA", "N/A", "-", ".", "NIL"].includes(v)) continue;
+    seen.add(v); lines.push(v);
+  }
+  return {
+    legalName: String(t.lgnm || "").trim().replace(/\s+/g, " ").toUpperCase(),
+    tradeName: String(t.tradeNam || "").trim().replace(/\s+/g, " ").toUpperCase(),
+    address: lines.slice(0, 4).join(", "),
+    city: String(adr.dst || adr.city || "").trim().toUpperCase(),
+    pin: String(adr.pncd || "").replace(/\D/g, ""),
+    state: String(adr.stcd || "").trim(),
+    status: String(t.sts || "").trim(),
+    gstin: String(t.gstin || "").trim().toUpperCase(),
+  };
+}
+exports.gstLookup = onRequest(
+  { region: "asia-south1", secrets: [GST_APPYFLOW, GST_CHECK], timeoutSeconds: 45, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
+  async (req, res) => {
+    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
+    if (limited("g:" + ip)) return res.status(429).json({ ok: false });
+    const g = String((req.body && req.body.gstin) || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (!/^\d{2}[A-Z]{5}\d{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/.test(g)) return res.json({ ok: true, found: false, reason: "format" });
+    const db = admin.firestore();
+    const c = await db.collection("bbapp_gst").doc(g).get();
+    if (c.exists && Date.now() - (c.get("at") || 0) < 30 * 86400e3) return res.json({ ok: true, found: true, ...c.get("info") });
+    let info = null, notFound = false;
+    try {
+      const k = GST_APPYFLOW.value().trim();
+      if (k) {
+        const j = await (await fetch(`https://appyflow.in/api/verifyGST?gstNo=${g}&key_secret=${encodeURIComponent(k)}`)).json();
+        if (j && j.taxpayerInfo && String(j.taxpayerInfo.gstin || "").toUpperCase() === g) info = gstParse(j.taxpayerInfo);
+        else if (j && !j.error) notFound = true;
+      }
+    } catch (e) { logger.warn("appyflow", { error: e.message }); }
+    if (!info) {
+      try {
+        const k = GST_CHECK.value().trim();
+        if (k) {
+          const j = await (await fetch(`https://sheet.gstincheck.co.in/check/${encodeURIComponent(k)}/${g}`)).json();
+          if (j && j.flag && j.data && String(j.data.gstin || "").toUpperCase() === g) info = gstParse(j.data);
+          else if (/NOT.*FOUND/i.test(String((j && j.message) || ""))) notFound = true;
+        }
+      } catch (e) { logger.warn("gstincheck", { error: e.message }); }
+    }
+    if (info) {
+      await db.collection("bbapp_gst").doc(g).set({ info, at: Date.now() });
+      return res.json({ ok: true, found: true, ...info });
+    }
+    return res.json({ ok: true, found: false, reason: notFound ? "notfound" : "unavailable" });
+  },
+);

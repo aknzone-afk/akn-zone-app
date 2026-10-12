@@ -301,6 +301,22 @@ class OrderService {
 
   /// Parties in Tally that have this mobile (same lookup as the DAILY
   /// CUSTOMER desk). Throws on network trouble.
+  /// GST portal details for a GSTIN (owner 12-Oct). Null = could not ask.
+  static Future<Map<String, dynamic>?> gstLookup(Dio dio, String gstin) async {
+    try {
+      final res = await dio.post<dynamic>('$_cloud/gstLookup',
+          data: {'gstin': gstin},
+          options: Options(
+              headers: {'x-app-key': 'akn-zone-app-2026'},
+              contentType: Headers.jsonContentType,
+              receiveTimeout: const Duration(seconds: 40)));
+      final d = res.data is String ? jsonDecode(res.data as String) : res.data;
+      return d is Map ? Map<String, dynamic>.from(d) : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   /// Parties whose GSTIN / PAN matches (owner 12-Oct).
   static Future<List<Map<String, dynamic>>> lookupPartyByTax(Dio dio, String tax) async {
     final res = await dio.post<dynamic>(
