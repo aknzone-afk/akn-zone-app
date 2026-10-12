@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../config.dart';
 import '../providers/providers.dart';
+import '../services/picks_service.dart';
 
 /// Bottom action bar shown whenever the user has selected ≥1 photo.
 /// Tap the action button to add every selected photo to the cart in one shot.
@@ -15,7 +16,14 @@ class SelectionBottomBar extends ConsumerWidget {
     if (ids.isEmpty) return;
     final favs = ref.read(favoritesProvider);
     final notifier = ref.read(favoritesProvider.notifier);
+    // Tester 12-Oct: nothing goes into the cart without a quantity — a bulk
+    // "send to cart" adds 1 SET of each design (tap it to change).
+    final picks = ref.read(picksProvider);
     for (final id in ids) {
+      final pk = picks[id];
+      if (pk == null || pk.isEmpty) {
+        await ref.read(picksProvider.notifier).set(id, const PickState(sets: 1));
+      }
       if (!favs.contains(id)) await notifier.toggle(id);
     }
     ref.read(selectionProvider.notifier).clear();
@@ -49,7 +57,14 @@ class SelectionBottomBar extends ConsumerWidget {
               ),
               const SizedBox(width: 6),
               FilledButton.icon(
-                onPressed: () => _addToCart(ref),
+                onPressed: () async {
+                  final n = ref.read(selectionProvider).length;
+                  await _addToCart(ref);
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                        content: Text('$n design${n == 1 ? '' : 's'} added as 1 SET each — tap a design to change.')));
+                  }
+                },
                 icon: const Icon(Icons.shopping_cart_rounded),
                 label: const UText(
                   'SEND TO CART',

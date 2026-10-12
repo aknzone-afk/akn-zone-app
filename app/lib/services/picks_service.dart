@@ -90,15 +90,15 @@ class PickState {
   String label(int? sareeCount) {
     if (sets == 0 && shown > 0) {
       final extra = markPieces - _setPcs;
-      return '$shown SET${extra > 0 ? ' + $extra pcs' : ''} = $markPieces pcs';
+      return '$shown SET${extra > 0 ? ' + $extra ${extra == 1 ? 'pc' : 'pcs'}' : ''} = $markPieces ${markPieces == 1 ? 'pc' : 'pcs'}';
     }
     final parts = <String>[
       if (sets > 0) '$sets SET',
-      if (markPieces > 0) '$markPieces pcs',
+      if (markPieces > 0) '$markPieces ${markPieces == 1 ? 'pc' : 'pcs'}',
     ];
     final t = total(sareeCount);
     final head = parts.join(' + ');
-    return (sets > 0 && t != null) ? '$head = $t pcs' : head;
+    return (sets > 0 && t != null) ? '$head = $t ${t == 1 ? 'pc' : 'pcs'}' : head;
   }
 
   PickState copy({int? sets, List<PickMark>? marks, int? shown}) =>

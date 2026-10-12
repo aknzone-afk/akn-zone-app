@@ -261,7 +261,14 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         if (list.isEmpty) _mobile.text = m;
       });
     } catch (_) {
-      if (mounted) setState(() => _lookErr = 'No internet — please try again.');
+      if (mounted) setState(() => _lookErr = 'No internet — will try again by itself…');
+      // Tester 12-Oct: retry on its own when the connection is back.
+      Future<void>.delayed(const Duration(seconds: 5), () {
+        if (mounted && _lookErr != null && _searched == m &&
+            OrderService.normalizeIndianMobile(_oldMobile.text) == m) {
+          _findParty();
+        }
+      });
     } finally {
       if (mounted) setState(() => _looking = false);
     }
