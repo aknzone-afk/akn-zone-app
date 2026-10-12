@@ -314,8 +314,10 @@ final FutureProvider<CatalogResult> catalogProvider =
     }
 
     // Warm folder covers so the grid opens fully painted (preparing phase).
+    // Owner: a little longer is fine — the home grid must open with EVERY
+    // cover painted.
     await _prefetchTopLevelCovers(ref, shown)
-        .timeout(const Duration(seconds: 12), onTimeout: () {});
+        .timeout(const Duration(seconds: 40), onTimeout: () {});
 
     // 12-Oct-2026: NO price reading behind the loading screen any more —
     // reading hundreds of photos while the collage animates ran the iPhone
@@ -892,14 +894,18 @@ Future<void> _prefetchTopLevelCovers(Ref ref, CatalogResult result) async {
       // we'll just key by topFolder via a map
     }
   }
-  // Use a map for deterministic order.
-  final byTop = <String, String>{}; // top-folder -> first photo id
+  // 12-Oct-2026: warm EXACTLY the photos the home tiles will show (same
+  // daily seed as topLevelFoldersProvider) — the old "first photo" guess
+  // left most tiles blank after the first load.
+  final byTop = <String, List<String>>{};
   for (final p in result.photos) {
-    byTop.putIfAbsent(p.topFolder, () => p.id);
+    (byTop[p.topFolder] ??= <String>[]).add(p.id);
   }
-  final urls = byTop.values
-      .map((id) => DriveUrls.thumbnail(id, width: kThumbnailWidth))
-      .toList();
+  final stacks = _pickPreviewStack(byTop, ref.read(coverSeedProvider), 4);
+  final urls = <String>[
+    for (final ids in stacks.values)
+      for (final id in ids) DriveUrls.thumbnail(id, width: kThumbnailWidth),
+  ];
   if (urls.isEmpty) return;
 
   final notifier = ref.read(scrapeProgressProvider.notifier);
@@ -911,7 +917,7 @@ Future<void> _prefetchTopLevelCovers(Ref ref, CatalogResult result) async {
 
   final manager = photoCacheManager;
   var done = 0;
-  const concurrency = 8; // covers: quick first screen
+  const concurrency = 10; // covers: quick first screen
   final queue = List<String>.from(urls);
   Future<void> worker() async {
     while (queue.isNotEmpty) {
