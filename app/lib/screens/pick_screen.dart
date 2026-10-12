@@ -12,6 +12,7 @@ import '../l10n.dart';
 import '../models/photo.dart';
 import '../providers/providers.dart';
 import '../widgets/bar_button.dart';
+import '../widgets/pick_preview.dart';
 import '../services/photo_freshness.dart';
 import '../services/picks_service.dart';
 import '../services/pieces_service.dart';
@@ -256,13 +257,9 @@ class _PickScreenState extends ConsumerState<PickScreen> {
           final spot = _labelSpot(box, boxes!, _points);
           marks.add(PickMark(spot.dx, spot.dy, -1, box));
         }
-      } else if (i >= 0 &&
-          math.sqrt(math.pow(marks[i].x - x, 2) + math.pow(marks[i].y - y, 2)) > 0.16 &&
-          _markAt(x, y, 0.08) == null) {
-        // Owner 12-Oct: tapping a DIFFERENT saree that the photo-reading
-        // merged into this one (far from its number) starts its own number.
-        marks.add(PickMark(x, y, 1));
       } else if (i >= 0) {
+        // Owner 12-Oct (2): ONE number per saree — tapping anywhere on it
+        // again makes it 2, 3, 4 (never a second "1" on the same saree).
         // A crossed colour tapped normally becomes 1 again.
         marks[i] = marks[i].withN(marks[i].n < 0 ? 1 : marks[i].n + 1);
       } else {
@@ -473,6 +470,12 @@ class _PickScreenState extends ConsumerState<PickScreen> {
     // SET TO SET only (below ₹310): every colour exactly the SET number.
     if (_setOnly && _s.shown > 0 && _s.marks.any((m) => m.n != _s.shown)) {
       _s = _s.copy(marks: [for (final m in _s.marks) if (m.n != 0) m.withN(_s.shown)]);
+    }
+    // Draw the tile now, so the grid shows the numbers the moment we go back.
+    final ph = _photo;
+    if (ph != null) {
+      await warmPickPreview(ph, _s, sareeCount: ref.read(piecesProvider.notifier).piecesFor(ph))
+          .timeout(const Duration(seconds: 2), onTimeout: () {});
     }
     await ref.read(picksProvider.notifier).set(widget.photoId, _s);
     // Picking something puts the design in the cart.
