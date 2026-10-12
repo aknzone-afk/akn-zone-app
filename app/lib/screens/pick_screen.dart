@@ -288,7 +288,12 @@ class _PickScreenState extends ConsumerState<PickScreen> {
       // MORE sarees than the photo-reading found ("count <design> <n>").
       final ph = _photo;
       final pcs = ph == null ? null : ref.read(piecesProvider.notifier).piecesFor(ph);
-      final missing = pcs != null && pcs > boxes.length;
+      // Only when the SHOP corrected the count (Telegram "count …") — never
+      // because the photo-reading's own numbers disagree.
+      final missing = ph != null &&
+          ref.read(piecesProvider.notifier).isFixed(ph) &&
+          pcs != null &&
+          pcs > boxes.length;
       final inside = missing && x >= left && x <= right && y >= top && y <= bottom;
       if (near != null) {
         marks[near] = marks[near].withN(marks[near].n + 1);
