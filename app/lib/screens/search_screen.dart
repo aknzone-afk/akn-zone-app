@@ -90,7 +90,8 @@ class _SearchSelectAllButton extends ConsumerWidget {
     final selection = ref.watch(selectionProvider);
     // Only show once the user has typed a design number — with an empty query
     // there are no "results" to select (the grid isn't even shown yet).
-    if (query.isEmpty || results.isEmpty) return const SizedBox.shrink();
+    // Owner 12-Oct: SELECT ALL only while photos are being selected (hold).
+    if (query.isEmpty || results.isEmpty || selection.isEmpty) return const SizedBox.shrink();
     final ids = results.map((p) => p.id).toList(growable: false);
     final allSelected = ids.every(selection.contains);
     // Labelled (not icon-only) so customers immediately understand what it

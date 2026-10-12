@@ -215,10 +215,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
   }
 
   void _useAccount(Map<String, dynamic> pt) {
-    final mob = '${pt['mobile'] ?? ''}';
     setState(() {
-      _searched = OrderService.normalizeIndianMobile(mob) ?? _searched;
-      if (mob.isNotEmpty) _oldMobile.text = mob;
       _matches = [pt];
       _party = pt;
       _newForm = false;
@@ -910,7 +907,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                     ),
                   Padding(
                     padding: const EdgeInsets.only(top: 6, bottom: 8),
-                    child: Text(t('${photos.length} designs · $pcs pcs', '${photos.length} डिज़ाइन · $pcs पीस'),
+                    child: Text(t('${photos.length} design${photos.length == 1 ? '' : 's'} · $pcs pcs', '${photos.length} डिज़ाइन · $pcs पीस'),
                         style: const TextStyle(fontWeight: FontWeight.w700)),
                   ),
                   Builder(builder: (_) {
@@ -1063,7 +1060,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                     for (final pt in _taxMatches)
                       GestureDetector(onTap: () => _useAccount(pt), child: _partyCard(pt)),
                   ],
-                  if (_gstNote != null)
+                  if (_gstNote != null && _taxMatches.isEmpty)
                     Padding(
                       padding: const EdgeInsets.only(top: 6, left: 4),
                       child: Text(_gstNote!,
@@ -1229,7 +1226,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                     label: UText(
                       value.below
                           ? t('First complete ${MinOrderBar.minLabel} — select more', 'पहले ${MinOrderBar.minLabel} पूरा करें — और चुनें')
-                          : t('Place order · ${photos.length} designs · $pcs pcs', 'ऑर्डर भेजें · ${photos.length} डिज़ाइन · $pcs पीस'),
+                          : t('Place order · ${photos.length} design${photos.length == 1 ? '' : 's'} · $pcs pcs', 'ऑर्डर भेजें · ${photos.length} डिज़ाइन · $pcs पीस'),
                       style: const TextStyle(
                           fontWeight: FontWeight.w700, letterSpacing: 0.4),
                     ),

@@ -63,7 +63,7 @@ class _PickScreenState extends ConsumerState<PickScreen> {
           row('👆', t('Tap the saree colour you want = 1 piece', 'जो रंग चाहिए उस साड़ी पर टैप करें = 1 पीस')),
           row('👆👆', t('Tap again = 2, 3, 4…', 'फिर टैप करें = 2, 3, 4…')),
           row('✋', t('Hold a number = type any quantity', 'नंबर दबाकर रखें = कोई भी संख्या लिखें')),
-          row('➕', t('SET + below = one of EVERY colour', 'नीचे SET + = हर रंग का एक पीस')),
+          row('➕', t('SET + above the photo = 1 of EVERY colour', 'फ़ोटो के ऊपर SET + = हर रंग का एक पीस')),
           row('✅', t('Press DONE', 'आखिर में "हो गया" दबाएँ')),
         ]),
         actions: [
@@ -551,13 +551,14 @@ class _PickScreenState extends ConsumerState<PickScreen> {
                     textAlign: TextAlign.center,
                     style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13)),
               ),
-            if (!_s.isEmpty)
-              Container(
+            Container(
                 width: double.infinity,
                 color: const Color(0xFF111111),
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 16),
                 child: Text(
-                  _s.summary(count),
+                  _s.isEmpty
+                      ? (_setOnly ? 'TAP THE PHOTO = 1 FULL SET' : 'TAP A SAREE TO SELECT IT')
+                      : _s.summary(count),
                   textAlign: TextAlign.center,
                   style: const TextStyle(
                       color: Colors.white, fontWeight: FontWeight.w900, fontSize: 21, height: 1.25),
@@ -575,7 +576,7 @@ class _PickScreenState extends ConsumerState<PickScreen> {
                   ih = math.max(80.0, room);
                   iw = ih * a;
                 }
-                return Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                return Column(mainAxisAlignment: MainAxisAlignment.start, children: [
                   Container(
               width: double.infinity,
               color: const Color(0xFF1B1A18),
