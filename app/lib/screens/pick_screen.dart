@@ -117,7 +117,9 @@ class _PickScreenState extends ConsumerState<PickScreen> {
           x1 = b[3] / 1000;
       if (x < x0 || x > x1 || y < y0 || y > y1) continue;
       final cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
-      final d = (cx - x) * (cx - x) + (cy - y) * (cy - y);
+      // Owner 12-Oct: when boxes overlap, the saree lying IN FRONT (starts
+      // lower in the photo, smaller) wins — not the open one behind it.
+      final d = (cx - x) * (cx - x) + (cy - y) * (cy - y) - y0 * 0.5 + (x1 - x0) * (y1 - y0) * 0.3;
       if (d < bestD) {
         bestD = d;
         best = i;
@@ -219,6 +221,15 @@ class _PickScreenState extends ConsumerState<PickScreen> {
 
   void _tap(double x, double y, List<List<int>>? boxes) {
     final marks = [..._s.marks];
+    // A tap on a number placed by hand (no box) adds to THAT number.
+    final free = _markAt(x, y, 0.08);
+    if (free != null && marks[free].box == null) {
+      marks[free] = _crossMode
+          ? marks[free].withN(marks[free].n < 0 ? 1 : -1)
+          : marks[free].withN(marks[free].n < 0 ? 1 : marks[free].n + 1);
+      _push(_s.copy(marks: marks));
+      return;
+    }
     final box = _hitBox(boxes, x, y);
     if (box != null) {
       final i = marks.indexWhere((m) => m.box == box);
@@ -232,6 +243,12 @@ class _PickScreenState extends ConsumerState<PickScreen> {
           final spot = _labelSpot(box, boxes!, _points);
           marks.add(PickMark(spot.dx, spot.dy, -1, box));
         }
+      } else if (i >= 0 &&
+          math.sqrt(math.pow(marks[i].x - x, 2) + math.pow(marks[i].y - y, 2)) > 0.16 &&
+          _markAt(x, y, 0.08) == null) {
+        // Owner 12-Oct: tapping a DIFFERENT saree that the photo-reading
+        // merged into this one (far from its number) starts its own number.
+        marks.add(PickMark(x, y, 1));
       } else if (i >= 0) {
         // A crossed colour tapped normally becomes 1 again.
         marks[i] = marks[i].withN(marks[i].n < 0 ? 1 : marks[i].n + 1);
