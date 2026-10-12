@@ -914,7 +914,7 @@ Future<void> _prefetchTopLevelCovers(Ref ref, CatalogResult result) async {
 
   final manager = photoCacheManager;
   var done = 0;
-  const concurrency = 6;
+  const concurrency = 3; // 12-Oct: gentler on iPhone memory (crash at 40%)
   final queue = List<String>.from(urls);
   Future<void> worker() async {
     while (queue.isNotEmpty) {

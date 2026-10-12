@@ -20,7 +20,9 @@ const int kThumbnailWidth = 600;
 /// How many photos to download + OCR in parallel. Downloads dominate, and a
 /// dozen keeps the network busy without piling up decoded 600px images while
 /// ML Kit (one image at a time) catches up.
-const int kOcrConcurrency = 12;
+// 12-Oct-2026: 12 parallel ML Kit reads ran the iPhone out of memory on the
+// first load (crash at 55%) — 3 at a time is safe.
+const int kOcrConcurrency = 3;
 
 /// How many pending photos to fetch from SQLite per batch.
 const int kOcrBatchSize = 128;
