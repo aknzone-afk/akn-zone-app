@@ -375,10 +375,46 @@ class _PickScreenState extends ConsumerState<PickScreen> {
     _push(_s.copy(marks: marks));
   }
 
+  /// Sarees found on the current photo (set in build).
+  List<List<int>>? _boxesNow;
+
+  int get _setsShown => _s.sets > 0 ? _s.sets : _s.shown;
+
+  /// Owner 12-Oct: SET puts the number on EVERY saree — 1 SET → 1 on each,
+  /// 2 SET → 2 on each. The customer can then tap a saree for more, or hold
+  /// its number to change it (0 removes that colour).
+  void _setTo(int target) {
+    target = math.max(0, target);
+    final boxes = _boxesNow;
+    if (boxes == null || boxes.isEmpty || _s.sets > 0) {
+      _push(_s.copy(sets: target)); // layout unknown / old cart item
+      return;
+    }
+    final delta = target - _s.shown;
+    if (delta == 0) return;
+    final marks = <PickMark>[];
+    for (final m in _s.marks) {
+      if (m.n < 0) {
+        marks.add(m); // ✕ not wanted stays out of the sets
+        continue;
+      }
+      final n = m.n + delta;
+      if (n > 0) marks.add(m.withN(n));
+    }
+    if (delta > 0) {
+      for (var b = 0; b < boxes.length; b++) {
+        if (_s.marks.any((m) => m.box == b)) continue;
+        final spot = _labelSpot(b, boxes, _points);
+        marks.add(PickMark(spot.dx, spot.dy, delta, b));
+      }
+    }
+    _push(_s.copy(marks: marks, shown: target));
+  }
+
   Future<void> _editSets() async {
-    final v = await _askQty(t('Sets (1 set = one of every colour)', 'सेट (1 सेट = हर रंग का एक पीस)'), _s.sets);
+    final v = await _askQty(t('Sets (1 set = one of every colour)', 'सेट (1 सेट = हर रंग का एक पीस)'), _setsShown);
     if (v == null || !mounted) return;
-    _push(_s.copy(sets: math.max(0, v)));
+    _setTo(v);
   }
 
   /// Undo: the recorded history first; when the design was reopened (no
@@ -401,6 +437,8 @@ class _PickScreenState extends ConsumerState<PickScreen> {
       setState(() => _s = _s.copy(marks: marks));
     } else if (_s.sets > 0) {
       setState(() => _s = _s.copy(sets: _s.sets - 1));
+    } else if (_s.shown > 0) {
+      setState(() => _s = _s.copy(shown: _s.shown - 1));
     }
   }
 
@@ -438,6 +476,7 @@ class _PickScreenState extends ConsumerState<PickScreen> {
           body: const Center(child: UText('Photo not found.')));
     }
     final boxes = pc.boxesFor(photo);
+    _boxesNow = boxes;
     _points = pc.pointsFor(photo);
     final count = pc.piecesFor(photo);
     // Instant: the grid thumbnail is already on the phone — show it at once
@@ -523,15 +562,13 @@ class _PickScreenState extends ConsumerState<PickScreen> {
                       color: Colors.white,
                       disabledColor: Colors.white24,
                       icon: const Icon(Icons.remove_rounded),
-                      onPressed: _s.sets > 0
-                          ? () => _push(_s.copy(sets: _s.sets - 1))
-                          : null,
+                      onPressed: _setsShown > 0 ? () => _setTo(_setsShown - 1) : null,
                     ),
                     InkWell(
                       onTap: _editSets,
                       child: Padding(
                         padding: const EdgeInsets.symmetric(vertical: 6),
-                        child: Text('${_s.sets} SET',
+                        child: Text('$_setsShown SET',
                             style: const TextStyle(
                                 color: Colors.white,
                                 fontWeight: FontWeight.w800)),
@@ -542,7 +579,7 @@ class _PickScreenState extends ConsumerState<PickScreen> {
                       visualDensity: VisualDensity.compact,
                       color: Colors.white,
                       icon: const Icon(Icons.add_rounded),
-                      onPressed: () => _push(_s.copy(sets: _s.sets + 1)),
+                      onPressed: () => _setTo(_setsShown + 1),
                     ),
                   ]),
                 ),

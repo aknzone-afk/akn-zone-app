@@ -31,7 +31,17 @@ class PickMark {
 class PickState {
   final int sets;
   final List<PickMark> marks;
-  const PickState({this.sets = 0, this.marks = const []});
+
+  /// Owner 12-Oct: "1 SET" now puts a 1 on EVERY saree (2 SET → 2 on each).
+  /// The pieces live in [marks]; [shown] only remembers how many SETs the
+  /// customer pressed, for the "2 SET (12 PCS) + 5 …" wording.
+  final int shown;
+  const PickState({this.sets = 0, this.marks = const [], this.shown = 0});
+
+  /// Pieces that belong to the pressed SETs (each colour counts up to [shown]).
+  int get _setPcs => shown <= 0
+      ? 0
+      : marks.fold(0, (s, m) => s + (m.n > 0 ? math.min(m.n, shown) : 0));
 
   bool get isEmpty => sets == 0 && marks.every((m) => m.n <= 0);
   int get markPieces => marks.fold(0, (s, m) => s + (m.n > 0 ? m.n : 0));
@@ -59,6 +69,10 @@ class PickState {
   /// "2 SET (12) + 8 SELECTED = 20 SAREES" — the clear summary drawn on the
   /// photo (owner, 11-Oct-2026).
   String summary(int? sareeCount) {
+    if (sets == 0 && shown > 0) {
+      final extra = markPieces - _setPcs;
+      return '$shown SET ($_setPcs PCS)${extra > 0 ? ' + $extra SELECTED PCS' : ''} = $markPieces SAREES';
+    }
     final parts = <String>[
       if (sets > 0)
         sareeCount != null
@@ -74,6 +88,10 @@ class PickState {
   }
 
   String label(int? sareeCount) {
+    if (sets == 0 && shown > 0) {
+      final extra = markPieces - _setPcs;
+      return '$shown SET${extra > 0 ? ' + $extra pcs' : ''} = $markPieces pcs';
+    }
     final parts = <String>[
       if (sets > 0) '$sets SET',
       if (markPieces > 0) '$markPieces pcs',
@@ -83,13 +101,14 @@ class PickState {
     return (sets > 0 && t != null) ? '$head = $t pcs' : head;
   }
 
-  PickState copy({int? sets, List<PickMark>? marks}) =>
-      PickState(sets: sets ?? this.sets, marks: marks ?? this.marks);
+  PickState copy({int? sets, List<PickMark>? marks, int? shown}) =>
+      PickState(sets: sets ?? this.sets, marks: marks ?? this.marks, shown: shown ?? this.shown);
 
   Map<String, dynamic> toJson() =>
-      {'s': sets, 'm': marks.map((e) => e.toJson()).toList()};
+      {'s': sets, 'm': marks.map((e) => e.toJson()).toList(), if (shown > 0) 'ss': shown};
   factory PickState.fromJson(Map<String, dynamic> j) => PickState(
         sets: (j['s'] ?? 0) as int,
+        shown: (j['ss'] ?? 0) as int,
         marks: ((j['m'] ?? const []) as List)
             .map((e) => PickMark.fromJson(Map<String, dynamic>.from(e)))
             .toList(),
