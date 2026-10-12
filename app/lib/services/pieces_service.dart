@@ -115,7 +115,33 @@ class PiecesNotifier extends StateNotifier<Map<String, int>> {
     }
   }
 
+  /// Counts the shop corrected in Telegram ("count T58 (2) 6"), by design no.
+  Map<String, int> _fixed = {};
+  static String fixKey(String? d) => (d ?? '').toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
+
+  /// True when the shop corrected this design's count (boxes may be short).
+  bool isFixed(Photo p) => _fixed.containsKey(fixKey(p.designNumber));
+
+  Future<void> _loadFixes() async {
+    try {
+      final r = await _dio.post<dynamic>(
+          'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net/countOverrides',
+          options: Options(headers: {'x-app-key': 'akn-zone-app-2026'}, responseType: ResponseType.plain));
+      final j = jsonDecode('${r.data}') as Map<String, dynamic>;
+      final m = Map<String, dynamic>.from((j['counts'] ?? const {}) as Map);
+      _fixed = {for (final e in m.entries) e.key: (e.value as num).toInt()};
+      await _prefs.setString('pieces_fixed_v1', jsonEncode(_fixed));
+    } catch (_) {
+      try {
+        final m = jsonDecode(_prefs.getString('pieces_fixed_v1') ?? '{}') as Map<String, dynamic>;
+        _fixed = {for (final e in m.entries) e.key: (e.value as num).toInt()};
+      } catch (_) {}
+    }
+  }
+
   int? piecesFor(Photo p) {
+    final f = _fixed[fixKey(p.designNumber)];
+    if (f != null) return f;
     final k = keyFor(p);
     return state[k] ?? state[_noExt(k)];
   }
@@ -123,6 +149,8 @@ class PiecesNotifier extends StateNotifier<Map<String, int>> {
   /// Re-downloads the counts at most every 30 minutes (and always when we
   /// have none yet) — new photos get counted on the PC twice a day.
   Future<void> refresh({bool force = false}) async {
+    await _loadFixes(); // shop corrections — always fresh (tiny)
+    if (mounted) state = Map.of(state);
     final at = _prefs.getInt(_kAtKey) ?? 0;
     final age = DateTime.now().millisecondsSinceEpoch - at;
     if (!force && state.isNotEmpty && age < const Duration(minutes: 30).inMilliseconds) {

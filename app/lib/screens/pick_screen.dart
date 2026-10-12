@@ -246,8 +246,19 @@ class _PickScreenState extends ConsumerState<PickScreen> {
       // Owner: numbers go ONLY on sarees — floor, grass, cards do nothing.
       // (Sets come from the − SET + buttons.)
       final near = _markAt(x, y, 0.06);
+      // Owner 12-Oct: a saree the photo-reading missed must still be
+      // tappable — a tap inside the area where the sarees lie (not the
+      // grass / cards around it) starts a number there.
+      final top = boxes.map((b) => b[0]).reduce(math.min) / 1000;
+      final left = boxes.map((b) => b[1]).reduce(math.min) / 1000;
+      final bottom = boxes.map((b) => b[2]).reduce(math.max) / 1000;
+      final right = boxes.map((b) => b[3]).reduce(math.max) / 1000;
+      final inside = x >= left && x <= right && y >= top && y <= bottom;
       if (near != null) {
         marks[near] = marks[near].withN(marks[near].n + 1);
+        _push(_s.copy(marks: marks));
+      } else if (inside) {
+        marks.add(PickMark(x, y, _crossMode ? -1 : 1));
         _push(_s.copy(marks: marks));
       } else {
         ScaffoldMessenger.of(context)

@@ -399,6 +399,19 @@ exports.tgWebhook = onRequest(
       } else if (u.message && /bill/i.test(String((u.message.chat && u.message.chat.title) || ""))
                  && (u.message.photo || (u.message.document && /image|pdf/.test(u.message.document.mime_type || "")))) {
         await handleBillPhoto(db, u.message);
+      } else if (u.message && /^\/?count\s+/i.test(String(u.message.text || ""))) {
+        // Owner 12-Oct: fix a wrong saree count — "count T58 (2) 6".
+        const mm = /^\/?count\s+(.+?)\s*[=:-]?\s*(\d{1,3})\s*(pcs|pc|pieces)?\s*$/i.exec(String(u.message.text).trim());
+        let txt = "Send: count <design no.> <pieces>   e.g.  count T58 (2) 6";
+        if (mm) {
+          const key = mm[1].toUpperCase().replace(/[^A-Z0-9]/g, "");
+          const n = Number(mm[2]);
+          if (key && n >= 1 && n <= 200) {
+            await db.collection("bbapp_counts").doc(key).set({ n, design: mm[1].trim(), by: (u.message.from && u.message.from.first_name) || "", at: Date.now() });
+            txt = `✅ ${mm[1].trim()} = ${n} sarees — the app uses this count now.`;
+          }
+        }
+        await tg("sendMessage", { chat_id: u.message.chat.id, reply_to_message_id: u.message.message_id, text: txt });
       } else if (u.message && /^\/reset(\s|$)/i.test(String(u.message.text || ""))) {
         // "/reset 98xxxxxxxx" — free this number from every phone lock.
         let m = String(u.message.text).replace(/\D/g, "");
@@ -1218,3 +1231,15 @@ function apnsSend(deviceToken, text, host = "api.push.apple.com") {
     }
   });
 }
+
+/** App: saree counts the shop corrected with "count <design> <n>". */
+exports.countOverrides = onRequest(
+  { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
+  async (req, res) => {
+    if (req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    const snap = await admin.firestore().collection("bbapp_counts").get();
+    const out = {};
+    snap.docs.forEach((d) => { out[d.id] = d.get("n"); });
+    return res.json({ ok: true, counts: out });
+  },
+);
