@@ -58,6 +58,9 @@ class _ChatBubbleState extends ConsumerState<ChatBubble> with WidgetsBindingObse
     final p = cfg.isEmpty ? cfg.uri.path : cfg.last.matchedLocation;
     if (mounted && p != _path) {
       KeyboardHideButton.hide(); // a field on the last screen must not keep the keyboard up
+      // Owner 12-Oct: leaving a folder ends the hold-to-select mode (no
+      // "SELECT ALL" / "1 selected" carried into the next folder).
+      if (ref.read(selectionProvider).isNotEmpty) ref.read(selectionProvider.notifier).clear();
       setState(() => _path = p);
       if (p == '/chat') {
         AppBadge.set(0);
