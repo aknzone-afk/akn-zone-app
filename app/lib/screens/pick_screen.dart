@@ -183,6 +183,11 @@ class _PickScreenState extends ConsumerState<PickScreen> {
             if (dd < d) d = dd;
           }
         }
+        // Owner 12-Oct: an open saree lying behind the folded ones shows as
+        // a band on top + a sliver at the side — the number belongs in the
+        // MIDDLE of the saree, so spots near the left/right edge count less.
+        final off = ((gx + 0.5) / n - 0.5).abs() * 2; // 0 middle … 1 edge
+        d *= 1 - 0.6 * off;
         if (d > bestD) {
           bestD = d;
           best = Offset((b[1] + bw * (gx + 0.5) / n) / 1000,
