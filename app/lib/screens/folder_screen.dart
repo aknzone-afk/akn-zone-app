@@ -88,8 +88,13 @@ class _FolderScreenState extends ConsumerState<FolderScreen> {
       ref.watch(folderLiveRefreshProvider(realPath));
     }
     final contents = ref.watch(folderContentsProvider(realPath));
-    final filteredDirect = _applyFilter(contents.directPhotos, filter,
+    var filteredDirect = _applyFilter(contents.directPhotos, filter,
         favs: ref.watch(favoritesProvider), shuffleSeed: _shuffleSeed);
+    // Owner 12-Oct: DAILY UPDATE always shows the LATEST designs first
+    // (unless the customer picked a sort himself).
+    if (realPath == kDailyUpdateFolder && filter.sortBy == fs.SortBy.shuffle) {
+      filteredDirect = [...filteredDirect]..sort(Photo.compareNewestFirst);
+    }
     final directIds = [for (final p in filteredDirect) p.id];
     WidgetsBinding.instance
         .addPostFrameCallback((_) => prioritizePriceCheck(directIds));
