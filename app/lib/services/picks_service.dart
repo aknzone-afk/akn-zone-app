@@ -115,6 +115,11 @@ class PickState {
       );
 }
 
+/// Owner 12-Oct: designs below ₹310 are sold SET TO SET only — no picking
+/// or leaving out colours.
+const int kSetOnlyBelow = 310;
+bool isSetOnly(int? price) => price != null && price > 0 && price < kSetOnlyBelow;
+
 class PicksNotifier extends StateNotifier<Map<String, PickState>> {
   PicksNotifier(this._prefs) : super(_load(_prefs));
   final SharedPreferences _prefs;

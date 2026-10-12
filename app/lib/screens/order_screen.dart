@@ -823,7 +823,18 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                               ref.read(piecesProvider.notifier).piecesFor(p)),
                       onOpenPick: () =>
                           context.push('/pick/${Uri.encodeComponent(p.id)}'),
-                      onQty: (v) => setState(() => _qty[p.id] = v),
+                      onQty: (v) => setState(() {
+                        // Owner 12-Oct: below ₹310 = SET TO SET only — + / − move
+                        // by a whole set.
+                        final set = ref.read(piecesProvider.notifier).piecesFor(p);
+                        if (isSetOnly(p.price) && set != null && set > 0) {
+                          final cur = _qtyFor(p);
+                          final sets = (cur / set).round().clamp(1, 999);
+                          _qty[p.id] = (v > cur ? sets + 1 : (sets - 1).clamp(1, 999)) * set;
+                        } else {
+                          _qty[p.id] = v;
+                        }
+                      }),
                       onRemove: () => setState(() => _excluded.add(p.id)),
                     ),
                   if (_excluded.isNotEmpty)

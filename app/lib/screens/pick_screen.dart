@@ -219,7 +219,20 @@ class _PickScreenState extends ConsumerState<PickScreen> {
     return best;
   }
 
+  bool get _setOnly => isSetOnly(_photo?.price);
+
+  void _setOnlyNote() {
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(const SnackBar(
+          content: Text('Designs below ₹310 are sold only in full SETS — use SET + / − above.')));
+  }
+
   void _tap(double x, double y, List<List<int>>? boxes) {
+    if (_setOnly) {
+      _setOnlyNote();
+      return;
+    }
     final marks = [..._s.marks];
     // A tap on a number placed by hand (no box) adds to THAT number.
     final free = _markAt(x, y, 0.08);
@@ -528,6 +541,15 @@ class _PickScreenState extends ConsumerState<PickScreen> {
         ),
         body: Column(
           children: [
+            if (_setOnly)
+              Container(
+                width: double.infinity,
+                color: const Color(0xFF1B8E3A),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                child: const Text('SET TO SET ONLY — designs below ₹310 are sold in full sets',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 13)),
+              ),
             if (!_s.isEmpty)
               Container(
                 width: double.infinity,
@@ -600,6 +622,10 @@ class _PickScreenState extends ConsumerState<PickScreen> {
                             onTapUp: (d) => _tap(d.localPosition.dx / w,
                                 d.localPosition.dy / h, boxes),
                             onLongPressStart: (d) {
+                              if (_setOnly) {
+                                _setOnlyNote();
+                                return;
+                              }
                               final i = _markAt(d.localPosition.dx / w,
                                   d.localPosition.dy / h, 0.08);
                               if (i != null) {
