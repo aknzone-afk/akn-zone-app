@@ -173,7 +173,7 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                         Text(
                           '${OrderService.formatWhen(o.createdAt)}\n'
                           '${o.customer.billName} · ${o.items.length} designs · ${o.totalPcs} pcs'
-                          '${o.approxTotal != null ? ' · approx ${OrderService.formatRupees(o.approxTotal!)}' : ''}',
+                          '${o.approxTotal != null ? ' · approx ${OrderService.formatRupees(o.approxTotal!)} + 5% GST' : ''}',
                         ),
                         const SizedBox(height: 6),
                         if (sent)

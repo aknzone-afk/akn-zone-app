@@ -77,7 +77,7 @@ class MinOrderBar extends StatelessWidget {
           border: Border.all(color: ok.withValues(alpha: 0.35)),
         ),
         child: Text(
-          'Approx amount ${_rupees(amount)}',
+          'Approx amount ${_rupees(amount)} + 5% GST',
           textAlign: TextAlign.center,
           style: TextStyle(
               color: ok, fontWeight: FontWeight.w900, fontSize: compact ? 16 : 18),

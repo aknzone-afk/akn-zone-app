@@ -78,7 +78,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
                 ],
                 const Divider(height: 22),
                 Text('${o.items.length} DESIGNS · ${o.totalPcs} PCS'
-                    '${o.approxTotal != null ? ' · APPROX ${OrderService.formatRupees(o.approxTotal!)}' : ''}',
+                    '${o.approxTotal != null ? ' · APPROX ${OrderService.formatRupees(o.approxTotal!)} + 5% GST' : ''}',
                     style: bold),
               ]),
             ),

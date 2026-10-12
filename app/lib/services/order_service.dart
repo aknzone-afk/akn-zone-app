@@ -922,7 +922,7 @@ class OrderService {
     }
     final total = o.approxTotal;
     b.writeln('📦 ${o.items.length} design${o.items.length == 1 ? '' : 's'} · '
-        '${o.totalPcs} pcs${total != null ? ' · approx ${formatRupees(total)}' : ''}');
+        '${o.totalPcs} pcs${total != null ? ' · approx ${formatRupees(total)} + 5% GST' : ''}');
     final unpriced = o.items.where((i) => i.price == null || i.price! <= 0).length;
     if (unpriced > 0) {
       b.writeln('⚠️ <b>$unpriced design${unpriced == 1 ? '' : 's'} without price</b>');
