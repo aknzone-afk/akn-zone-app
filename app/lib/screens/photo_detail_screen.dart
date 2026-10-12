@@ -226,7 +226,7 @@ class _PhotoDetailScreenState extends ConsumerState<PhotoDetailScreen> {
             // the photo — "CLICK TO SELECT COLOURS / SETS".
             _resolveAspect(currentPhoto);
             final a = _aspect[currentPhoto.id] ?? 1.3;
-            final imgH = math.min(box.maxHeight - 52, box.maxWidth / a);
+            final imgH = math.min(box.maxHeight - 64, box.maxWidth / a);
             return Column(mainAxisAlignment: MainAxisAlignment.center, children: [
              SizedBox(
               height: imgH,
@@ -285,8 +285,15 @@ class _PhotoDetailScreenState extends ConsumerState<PhotoDetailScreen> {
               },
             ),
              ),
-             Material(
-              color: isFav ? const Color(0xFF1B8E3A) : Colors.white,
+             // Owner 12-Oct: a little space under the photo, narrower GREEN
+             // button (margins left/right) so it plainly says "tap me".
+             const SizedBox(height: 12),
+             Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 28),
+              child: Material(
+              color: isFav ? const Color(0xFF0F5C25) : const Color(0xFF1B8E3A),
+              borderRadius: BorderRadius.circular(12),
+              clipBehavior: Clip.antiAlias,
               child: InkWell(
                 // Replace this view, so DONE returns straight to the folder.
                 onTap: () => context.pushReplacement(
@@ -297,14 +304,15 @@ class _PhotoDetailScreenState extends ConsumerState<PhotoDetailScreen> {
                   child: Center(
                     child: Text(
                         isFav ? '✓ SELECTED — CLICK TO CHANGE' : 'CLICK TO SELECT COLOURS / SETS',
-                        style: TextStyle(
-                            color: isFav ? Colors.white : Colors.black,
+                        style: const TextStyle(
+                            color: Colors.white,
                             fontWeight: FontWeight.w900,
                             fontSize: 15,
                             letterSpacing: 1)),
                   ),
                 ),
               ),
+             ),
              ),
             ]);
            }),
