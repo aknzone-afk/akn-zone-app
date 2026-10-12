@@ -850,7 +850,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                         addOnTo: parcel == null ? null : 'ORDER NO. ${parcel.serial ?? '-'}',
                         addOnUntil: parcel == null
                             ? null
-                            : OrderService.untilLabel(parcel.until));
+                            : '${OrderService.untilLabel(parcel.until)} (${parcel.left} of ${OrderService.kMaxAddOns} add-ons left)');
                   }),
                   if (value.below)
                     Align(
