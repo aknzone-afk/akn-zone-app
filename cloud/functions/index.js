@@ -200,7 +200,9 @@ exports.lookupParty = onRequest(
     if (!/^[6-9]\d{9}$/.test(d)) return res.json({ ok: false, error: "bad mobile" });
     // Owner 12-Oct: ledgers made today (NewPartyBot / app) are known at once.
     const live = await admin.firestore().collection("bbapp_parties_live").doc(d).get();
-    const fresh = live.exists ? (live.get("list") || []) : [];
+    // Live entries are a bridge until the 2-hourly Tally sync — never older
+    // than a day, and the sync removes ledgers deleted in Tally.
+    const fresh = live.exists && Date.now() - (live.get("at") || 0) < 86400e3 ? (live.get("list") || []) : [];
     const names = new Set(fresh.map((x) => x.name));
     const list = [...fresh, ...(PARTIES[d] || []).filter((x) => !names.has(x.name))].slice(0, 5);
     logger.info("lookupParty", { found: list.length });
@@ -1348,5 +1350,31 @@ exports.registerParty = onRequest(
       await ref.set({ list: [rec, ...list].slice(0, 5), at: Date.now() });
     }
     return res.json({ ok: true, mobiles: mobs.length });
+  },
+);
+
+/** Shop PC (parties_sync): drop live entries whose ledger no longer exists in Tally. */
+exports.pruneLiveParties = onRequest(
+  { region: "asia-south1", timeoutSeconds: 60, memory: "256MiB", maxInstances: 1, invoker: "public" },
+  async (req, res) => {
+    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    const db = admin.firestore();
+    const snap = await db.collection("bbapp_parties_live").get();
+    if (req.body && req.body.list) {
+      const names = new Set();
+      snap.docs.forEach((d) => (d.get("list") || []).forEach((x) => names.add(x.name)));
+      return res.json({ ok: true, names: [...names] });
+    }
+    const keep = new Set(((req.body && req.body.keep) || []).map((x) => String(x).toUpperCase().replace(/[^A-Z0-9]/g, "")));
+    if (keep.size < 500) return res.status(400).json({ ok: false, error: "keep list too small" });
+    let dropped = 0;
+    for (const d of snap.docs) {
+      const list = (d.get("list") || []).filter((x) => keep.has(String(x.name || "").toUpperCase().replace(/[^A-Z0-9]/g, "")));
+      if (list.length !== (d.get("list") || []).length) {
+        dropped++;
+        if (list.length) await d.ref.set({ list }, { merge: true }); else await d.ref.delete();
+      }
+    }
+    return res.json({ ok: true, dropped });
   },
 );
