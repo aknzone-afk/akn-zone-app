@@ -85,7 +85,46 @@ class PiecesNotifier extends StateNotifier<Map<String, int>> {
 
   List<List<int>>? boxesFor(Photo p) {
     final k = keyFor(p);
-    return _boxes[k] ?? _boxes[_noExt(k)];
+    final raw = _boxes[k] ?? _boxes[_noExt(k)];
+    final fixed = _fixed[fixKey(p.designNumber)];
+    if (raw == null || fixed == null || fixed >= raw.length || fixed < 1) return raw;
+    return _mergeTo(raw, fixed);
+  }
+
+  /// Owner 12-Oct: the shop corrected the count to fewer sarees than the
+  /// photo-reading found — an OPEN saree was split into parts (pallu / body).
+  /// Join the back-most side-by-side parts (smallest top edge) until the
+  /// count matches.
+  static List<List<int>> _mergeTo(List<List<int>> boxes, int want) {
+    final b = [for (final x in boxes) [...x]];
+    while (b.length > want) {
+      int? bi, bj;
+      var best = 1 << 30;
+      for (var i = 0; i < b.length; i++) {
+        for (var j = i + 1; j < b.length; j++) {
+          final gap = b[i][1] > b[j][3]
+              ? b[i][1] - b[j][3]
+              : (b[j][1] > b[i][3] ? b[j][1] - b[i][3] : 0);
+          if (gap > 60) continue; // must touch side by side
+          final score = b[i][0] + b[j][0] + (b[i][0] - b[j][0]).abs() * 2;
+          if (score < best) {
+            best = score;
+            bi = i;
+            bj = j;
+          }
+        }
+      }
+      if (bi == null || bj == null) break;
+      final m = [
+        b[bi][0] < b[bj][0] ? b[bi][0] : b[bj][0],
+        b[bi][1] < b[bj][1] ? b[bi][1] : b[bj][1],
+        b[bi][2] > b[bj][2] ? b[bi][2] : b[bj][2],
+        b[bi][3] > b[bj][3] ? b[bi][3] : b[bj][3],
+      ];
+      b.removeAt(bj);
+      b[bi] = m;
+    }
+    return b;
   }
   static const _kAtKey = 'pieces_at_v1';
 
