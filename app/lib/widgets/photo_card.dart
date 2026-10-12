@@ -121,7 +121,7 @@ class PhotoCard extends ConsumerWidget {
               ),
             ),
           if (pickSummary == null &&
-              (price != PriceDisplay.none || photo.designNumber != null))
+              (price == PriceDisplay.show || photo.designNumber != null))
             Positioned(
               left: 0,
               right: 0,
@@ -138,7 +138,9 @@ class PhotoCard extends ConsumerWidget {
                 child: Row(
                   mainAxisAlignment: MainAxisAlignment.end,
                   children: [
-                    if (price != PriceDisplay.none) ...[
+                    // Owner 12-Oct: no "₹ ···" while checking — the rate
+                    // simply appears once confirmed.
+                    if (price == PriceDisplay.show) ...[
                       Container(
                         padding: const EdgeInsets.symmetric(
                             horizontal: 6, vertical: 2),
@@ -203,6 +205,7 @@ class PhotoCard extends ConsumerWidget {
         SizedBox(
           height: 40,
           child: Row(
+                crossAxisAlignment: CrossAxisAlignment.stretch, // fills the strip — no white gap
                 children: [
                   Expanded(
                     child: Material(

@@ -367,7 +367,7 @@ class _DetailFooter extends StatelessWidget {
               ),
             ),
             const SizedBox(width: 12),
-            if (price != PriceDisplay.none)
+            if (price == PriceDisplay.show)
               Container(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
