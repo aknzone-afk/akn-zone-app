@@ -218,9 +218,9 @@ class PhotoCard extends ConsumerWidget {
         ],
       ),
         ),
-        const SizedBox(height: 5),
+        // Joined to the photo — no gap (owner 12-Oct).
         SizedBox(
-          height: 38,
+          height: 40,
           child: Row(
                 children: [
                   Expanded(
@@ -228,9 +228,7 @@ class PhotoCard extends ConsumerWidget {
                       color: pickLabel != null
                           ? const Color(0xF21B8E3A)
                           : const Color(0xE61B1A18),
-                      borderRadius: BorderRadius.circular(8),
                       child: InkWell(
-                        borderRadius: BorderRadius.circular(8),
                         onTap: () {
                           precacheImage(
                               CachedNetworkImageProvider(photo.detailUrl(),
