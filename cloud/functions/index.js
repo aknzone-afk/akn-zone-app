@@ -1467,7 +1467,6 @@ exports.advanceProof = onRequest(
     const who = `${p.payee || ""} ${p.payeeAccount || ""}`.toUpperCase().replace(/[^A-Z0-9@.]/g, "");
     const ours = who.includes("SYNTHETIC") || who.includes("173947529358") || who.includes("270320110001776");
     if (!ours) return fail(`This payment went to "${p.payee || p.payeeAccount || "someone else"}". The advance must be paid to B.B SYNTHETICS only.`);
-    if (p.amount + 1 < a.due) return fail(`Paid ${inr(p.amount)} — the advance is ${inr(a.due)}. Please pay ${inr(a.due - p.amount)} more and send that screenshot too.`);
     const tm = /^\d{1,2}:\d{2}$/.test(String(p.time || "")) ? String(p.time).padStart(5, "0") : null;
     const dt = /^\d{4}-\d{2}-\d{2}$/.test(String(p.date || "")) ? p.date
       : (tm ? new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10) : null);
@@ -1477,14 +1476,24 @@ exports.advanceProof = onRequest(
     }
     const utr = String(p.txnId || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
     if (utr) {
-      const used = await db.collection("bbapp_advances").where("utr", "==", utr).get();
-      if (used.docs.some((x) => x.id !== ref)) return fail("This payment screenshot was already used for another order.");
+      const used = await db.collection("bbapp_advances").where("utrs", "array-contains", utr).get();
+      const used2 = await db.collection("bbapp_advances").where("utr", "==", utr).get();
+      if ([...used.docs, ...used2.docs].some((x) => x.id !== ref)) return fail("This payment screenshot was already used for another order.");
     }
-    const path = `advances/${ref}.jpg`;
+    // Test 12-Oct: part-payments add up (₹5,000 now + ₹4,770 later).
+    const parts = (a.parts || []).filter((x) => !utr || x.utr !== utr);
+    parts.push({ amt: Math.round(p.amount), utr: utr || null, paidAt: isNaN(paidAt) ? null : paidAt });
+    const sum = parts.reduce((t, x) => t + x.amt, 0);
+    const path = `advances/${ref}${parts.length > 1 ? "-" + parts.length : ""}.jpg`;
     await admin.storage().bucket().file(path).save(img, { contentType: "image/jpeg" });
-    await docRef.set({ state: "paid", paid: Math.round(p.amount), utr: utr || null, payee: p.payee || null,
+    const utrs = parts.map((x) => x.utr).filter(Boolean);
+    if (sum + 1 < a.due) {
+      await docRef.set({ parts, utrs, utr: utrs[0] || null, path }, { merge: true });
+      return fail(`Received ${inr(sum)} of the ${inr(a.due)} advance. Please pay ${inr(a.due - sum)} more and send that screenshot too.`);
+    }
+    await docRef.set({ state: "paid", parts, utrs, paid: sum, utr: utrs.join(", ") || null, payee: p.payee || null,
       paidAt: isNaN(paidAt) ? null : paidAt, path, verifiedAt: Date.now() }, { merge: true });
-    return res.json({ ok: true, paid: Math.round(p.amount), utr: utr || null });
+    return res.json({ ok: true, paid: sum, utr: utrs.join(", ") || null });
   },
 );
 
