@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 
 import '../models/photo.dart';
 import '../providers/providers.dart';
+import '../services/picks_service.dart';
 import 'photo_card.dart';
 import 'prefetch_wrap.dart';
 
@@ -66,7 +67,12 @@ class PhotoGrid extends ConsumerWidget {
                   ? context.push('/pick/${Uri.encodeComponent(p.id)}')
                   : context.push(
                       '/photo/${Uri.encodeComponent(p.id)}',
-                      extra: allIds,
+                      // Owner 12-Oct: swiping skips designs already selected
+                      // (they open straight into their selection instead).
+                      extra: [
+                        for (final id in allIds)
+                          if (id == p.id || !_isPicked(ref, id)) id
+                      ],
                     ),
               onLongPress: () =>
                   ref.read(selectionProvider.notifier).toggle(p.id),
@@ -103,4 +109,10 @@ class _Empty extends StatelessWidget {
       ),
     );
   }
+}
+
+bool _isPicked(WidgetRef ref, String id) {
+  if (!ref.read(favoritesProvider).contains(id)) return false;
+  final pk = ref.read(picksProvider)[id];
+  return pk != null && !pk.isEmpty;
 }
