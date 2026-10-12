@@ -52,6 +52,9 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
   final _oldMobile = TextEditingController();
   bool _looking = false;
   String? _lookErr;
+
+  /// Numbers this phone is already linked to — shown to pick from (owner).
+  List<String> _linked = const [];
   List<Map<String, dynamic>> _matches = [];
   Map<String, dynamic>? _party;
 
@@ -115,13 +118,15 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       _lookErr = null;
       _matches = [];
       _party = null;
+      _linked = const [];
     });
     final lock = await PhoneLock.check(ref.read(dioProvider), m);
     if (!lock.allowed) {
       if (mounted) {
         setState(() {
           _looking = false;
-          _lookErr = 'This phone is already linked to 2 numbers. To change, call us.';
+          _lookErr = 'This phone is already linked to these numbers — tap one to order with it:';
+          _linked = lock.mobiles;
         });
       }
       return;
@@ -497,19 +502,41 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     final lock = await PhoneLock.check(ref.read(dioProvider), digits);
     if (!mounted) return;
     if (!lock.allowed) {
-      await showDialog<void>(
+      // Owner 12-Oct: show the numbers this phone is linked to — pick one.
+      final pick = await showDialog<String>(
         context: context,
         builder: (ctx) => AlertDialog(
-          icon: const Icon(Icons.block_rounded, color: Color(0xFFD32F2F), size: 44),
-          title: const Text('Number limit reached'),
-          content: const Text(
-              'This phone is already linked to 2 mobile numbers. To change, please call us.'),
+          icon: const Icon(Icons.phone_iphone_rounded, color: Color(0xFFD32F2F), size: 44),
+          title: const Text('This phone is linked to these numbers'),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            const Text('Tap the number you want to order with:'),
+            const SizedBox(height: 10),
+            for (final m in lock.mobiles)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    icon: const Icon(Icons.phone_iphone_rounded),
+                    label: Text('+91 $m',
+                        style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+                    onPressed: () => Navigator.pop(ctx, m),
+                  ),
+                ),
+              ),
+          ]),
           actions: [
-            FilledButton(
-                onPressed: () => Navigator.pop(ctx), child: const Text('OK')),
+            TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('CANCEL')),
           ],
         ),
       );
+      if (pick != null && mounted) {
+        setState(() {
+          _old = true;
+          _oldMobile.text = pick;
+        });
+        await _findParty();
+      }
       return;
     }
     // New customer: tell them NOW what the shop's Tally would refuse (owner).
@@ -825,6 +852,22 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                       Padding(
                         padding: const EdgeInsets.only(top: 8),
                         child: Text(_lookErr!, style: TextStyle(color: scheme.error, fontWeight: FontWeight.w600)),
+                      ),
+                    if (_linked.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Wrap(spacing: 8, runSpacing: 8, children: [
+                          for (final m in _linked)
+                            ActionChip(
+                              avatar: const Icon(Icons.phone_iphone_rounded, size: 18),
+                              label: Text('+91 $m',
+                                  style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+                              onPressed: () {
+                                _oldMobile.text = m;
+                                _findParty();
+                              },
+                            ),
+                        ]),
                       ),
                     if (_matches.length > 1)
                       Padding(

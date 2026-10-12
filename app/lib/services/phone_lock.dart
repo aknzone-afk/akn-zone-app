@@ -35,7 +35,7 @@ class PhoneLock {
 
   /// allowed=false → the 3rd number on this phone. A network problem never
   /// blocks an order (returns allowed with no warnings).
-  static Future<({bool allowed, int index, String? first, bool newPhone, String phone})>
+  static Future<({bool allowed, int index, String? first, bool newPhone, String phone, List<String> mobiles})>
       check(Dio dio, String mobile) async {
     final id = await phoneId();
     try {
@@ -55,9 +55,11 @@ class PhoneLock {
           first: d['first'] as String?,
           newPhone: d['newPhone'] == true,
           phone: '${d['phone'] ?? id.substring(id.length - 4).toUpperCase()}',
+          // The numbers this phone is already linked to (when blocked).
+          mobiles: [for (final x in (d['mobiles'] as List? ?? const [])) '$x'],
         );
       }
     } catch (_) {}
-    return (allowed: true, index: 1, first: null, newPhone: false, phone: '');
+    return (allowed: true, index: 1, first: null, newPhone: false, phone: '', mobiles: const <String>[]);
   }
 }
