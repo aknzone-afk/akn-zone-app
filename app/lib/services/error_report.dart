@@ -10,16 +10,15 @@ final _dio = Dio();
 void reportAppError(String error, StackTrace? stack) {
   if (_sent >= 20) return;
   _sent++;
+  final lines = (stack?.toString() ?? '').split('\n').take(25).join('\n');
   _dio
       .post<dynamic>('https://asia-south1-akn-chat-a7dd8.cloudfunctions.net/appError',
           data: {
             'error': error.length > 1500 ? error.substring(0, 1500) : error,
-            'stack': (stack?.toString() ?? '').split('
-').take(25).join('
-'),
+            'stack': lines,
             'platform': Platform.operatingSystem,
             'os': Platform.operatingSystemVersion,
           },
           options: Options(headers: {'x-app-key': 'akn-zone-app-2026'}))
-      .catchError((_) => Response(requestOptions: RequestOptions()));
+      .catchError((_) => Response<dynamic>(requestOptions: RequestOptions()));
 }
