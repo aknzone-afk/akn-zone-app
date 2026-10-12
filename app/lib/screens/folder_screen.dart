@@ -534,10 +534,8 @@ class _PhotoCardProxy extends ConsumerWidget {
       photo: photo,
       selectionMode: selectionMode,
       selected: selected,
-      onTap: () => context.push(
-        '/photo/${Uri.encodeComponent(photo.id)}',
-        extra: siblingIds,
-      ),
+      // Owner 12-Oct: straight to SELECT COLOURS / SETS — no preview.
+      onTap: () => context.push('/pick/${Uri.encodeComponent(photo.id)}'),
       onLongPress: () => ref.read(selectionProvider.notifier).toggle(photo.id),
       onSelectToggle: () => ref.read(selectionProvider.notifier).toggle(photo.id),
     );
