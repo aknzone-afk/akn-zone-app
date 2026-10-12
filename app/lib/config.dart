@@ -22,7 +22,7 @@ const int kThumbnailWidth = 600;
 /// ML Kit (one image at a time) catches up.
 // 12-Oct-2026: 12 parallel ML Kit reads ran the iPhone out of memory on the
 // first load (crash at 55%) — 3 at a time is safe.
-const int kOcrConcurrency = 3;
+const int kOcrConcurrency = 5;
 
 /// How many pending photos to fetch from SQLite per batch.
 const int kOcrBatchSize = 128;

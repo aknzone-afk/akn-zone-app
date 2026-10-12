@@ -1,3 +1,5 @@
+import 'dart:ui' show PlatformDispatcher;
+import 'services/error_report.dart';
 import 'services/push_service.dart';
 import 'package:flutter/material.dart';
 
@@ -14,6 +16,16 @@ import 'services/notification_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Owner 12-Oct: the app must never close because of an app error — every
+  // error is caught, logged to the shop's cloud, and the app keeps running.
+  FlutterError.onError = (d) {
+    FlutterError.presentError(d);
+    reportAppError(d.exceptionAsString(), d.stack);
+  };
+  PlatformDispatcher.instance.onError = (e, st) {
+    reportAppError('$e', st);
+    return true; // handled — don't crash
+  };
 
   // Lock app to portrait orientation.
   await SystemChrome.setPreferredOrientations([

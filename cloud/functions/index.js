@@ -1243,3 +1243,18 @@ exports.countOverrides = onRequest(
     return res.json({ ok: true, counts: out });
   },
 );
+
+/** App errors (caught by the app's safety net) — for fixing without asking the customer. */
+exports.appError = onRequest(
+  { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
+  async (req, res) => {
+    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
+    if (limited("e:" + ip)) return res.status(429).json({ ok: false });
+    const b = req.body || {};
+    await admin.firestore().collection("bbapp_errors").add({
+      error: String(b.error || "").slice(0, 1500), stack: String(b.stack || "").slice(0, 4000),
+      platform: String(b.platform || "").slice(0, 20), os: String(b.os || "").slice(0, 120), at: Date.now() });
+    return res.json({ ok: true });
+  },
+);

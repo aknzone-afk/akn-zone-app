@@ -483,8 +483,9 @@ class _PickScreenState extends ConsumerState<PickScreen> {
     // Draw the tile now, so the grid shows the numbers the moment we go back.
     final ph = _photo;
     if (ph != null) {
-      await warmPickPreview(ph, _s, sareeCount: ref.read(piecesProvider.notifier).piecesFor(ph))
-          .timeout(const Duration(seconds: 2), onTimeout: () {});
+      // In the background — going back must be instant (owner 12-Oct).
+      // ignore: unawaited_futures
+      warmPickPreview(ph, _s, sareeCount: ref.read(piecesProvider.notifier).piecesFor(ph));
     }
     await ref.read(picksProvider.notifier).set(widget.photoId, _s);
     // Picking something puts the design in the cart.

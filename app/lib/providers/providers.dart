@@ -911,7 +911,7 @@ Future<void> _prefetchTopLevelCovers(Ref ref, CatalogResult result) async {
 
   final manager = photoCacheManager;
   var done = 0;
-  const concurrency = 3; // 12-Oct: gentler on iPhone memory (crash at 40%)
+  const concurrency = 8; // covers: quick first screen
   final queue = List<String>.from(urls);
   Future<void> worker() async {
     while (queue.isNotEmpty) {
@@ -1078,7 +1078,7 @@ Future<void> warmAllFolderCovers(WidgetRef ref) async {
       } catch (_) {}
     }
   }
-  await Future.wait(List.generate(3, (_) => worker()));
+  await Future.wait(List.generate(8, (_) => worker()));
 }
 
 /// Picks up to [count] DISTINCT photo ids per group — the first is the cover,
