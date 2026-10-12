@@ -521,27 +521,6 @@ class _PickScreenState extends ConsumerState<PickScreen> {
           // Owner: no design number up here — two boxed buttons with icons,
           // spread across with space between (11-Oct).
           titleSpacing: 0,
-          title: Row(children: [
-            Expanded(
-              child: BarButton(
-                dark: true,
-                icon: Icons.undo_rounded,
-                label: 'UNDO LAST ACTION',
-                onTap: (_undo.isEmpty && _s.isEmpty) ? null : _undoLast,
-              ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: BarButton(
-                dark: true,
-                icon: Icons.delete_outline_rounded,
-                label: 'CLEAR ALL',
-                color: const Color(0xFFFF8A80),
-                onTap: _s.isEmpty ? null : () => _push(const PickState()),
-              ),
-            ),
-          ]),
-          actions: const [SizedBox(width: 12)],
         ),
         body: Column(
           children: [
@@ -566,8 +545,20 @@ class _PickScreenState extends ConsumerState<PickScreen> {
                       color: Colors.white, fontWeight: FontWeight.w900, fontSize: 21, height: 1.25),
                 ),
               ),
-            // SET − / + and ✕ right under the summary (owner, 11-Oct-2026).
-            Container(
+            Expanded(
+              // Owner 12-Oct: SET right ABOVE the photo, UNDO / CLEAR right BELOW it.
+              child: LayoutBuilder(builder: (context, outer) {
+                final a = _aspect;
+                if (a == null) return const SizedBox.shrink();
+                var iw = outer.maxWidth;
+                var ih = iw / a;
+                final room = outer.maxHeight - 56 - 66;
+                if (ih > room) {
+                  ih = math.max(80.0, room);
+                  iw = ih * a;
+                }
+                return Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                  Container(
               width: double.infinity,
               color: const Color(0xFF1B1A18),
               padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
@@ -612,12 +603,9 @@ class _PickScreenState extends ConsumerState<PickScreen> {
                 ],
               ),
             ),
-            Expanded(
-              child: Center(
-                child: _aspect == null
-                    ? const SizedBox.shrink()
-                    : AspectRatio(
-                        aspectRatio: _aspect!,
+                  SizedBox(
+                    width: iw,
+                    height: ih,
                         child: LayoutBuilder(builder: (context, c) {
                           final w = c.maxWidth, h = c.maxHeight;
                           final r = math.min(w, h) * 0.06;
@@ -687,8 +675,32 @@ class _PickScreenState extends ConsumerState<PickScreen> {
                             ),
                           );
                         }),
-                      ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),
+                    child: Row(children: [
+            Expanded(
+              child: BarButton(
+                dark: true,
+                icon: Icons.undo_rounded,
+                label: 'UNDO LAST ACTION',
+                onTap: (_undo.isEmpty && _s.isEmpty) ? null : _undoLast,
               ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: BarButton(
+                dark: true,
+                icon: Icons.delete_outline_rounded,
+                label: 'CLEAR ALL',
+                color: const Color(0xFFFF8A80),
+                onTap: _s.isEmpty ? null : () => _push(const PickState()),
+              ),
+            ),
+          ]),
+                  ),
+                ]);
+              }),
             ),
           ],
         ),
