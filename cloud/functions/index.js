@@ -170,11 +170,34 @@ exports.lookupParty = onRequest(
     if (req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
     const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
     if (limited("p:" + ip)) return res.status(429).json({ ok: false, error: "too many" });
+    if (!PARTIES) PARTIES = require("./parties.json");
+    // Owner 12-Oct: a NEW-looking customer whose GST / PAN is already a party
+    // → show that account (match by GSTIN, or PAN inside a GSTIN).
+    const tax = String((req.body && req.body.tax) || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (tax) {
+      const isGst = /^\d{2}[A-Z]{5}\d{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/.test(tax);
+      const isPan = /^[A-Z]{5}\d{4}[A-Z]$/.test(tax);
+      if (!isGst && !isPan) return res.json({ ok: true, parties: [] });
+      const seen = new Set(), out = [];
+      for (const [mob, recs] of Object.entries(PARTIES)) {
+        for (const r of recs) {
+          const g = String(r.gstin || "").toUpperCase();
+          const hit = isGst ? g === tax : (g === tax || (g.length === 15 && g.slice(2, 12) === tax));
+          if (hit && !seen.has(r.name)) {
+            seen.add(r.name);
+            out.push({ ...r, mobile: mob });
+          }
+        }
+        if (out.length >= 5) break;
+      }
+      logger.info("lookupParty tax", { found: out.length });
+      return res.json({ ok: true, parties: out });
+    }
     let d = String((req.body && req.body.mobile) || "").replace(/\D/g, "");
+    if (d.length > 10) d = d.slice(-10); // +91 / 0 / repeated prefix — the last 10 digits
     if (d.length === 12 && d.startsWith("91")) d = d.slice(2);
     if (d.length === 11 && d.startsWith("0")) d = d.slice(1);
     if (!/^[6-9]\d{9}$/.test(d)) return res.json({ ok: false, error: "bad mobile" });
-    if (!PARTIES) PARTIES = require("./parties.json");
     const list = (PARTIES[d] || []).slice(0, 5);
     logger.info("lookupParty", { found: list.length });
     return res.json({ ok: true, parties: list });

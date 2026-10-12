@@ -55,6 +55,16 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
 
   /// Numbers this phone is already linked to — shown to pick from (owner).
   List<String> _linked = const [];
+
+  /// Owner 12-Oct: no OLD / NEW choice. The customer types the mobile; we
+  /// search by ourselves: found → their account, not found → the full form.
+  String? _searched;
+  bool _newForm = false;
+  bool _newFormForeign = false;
+
+  /// Existing accounts matching the GST / PAN typed in the new form.
+  List<Map<String, dynamic>> _taxMatches = [];
+  String? _taxSearched;
   List<Map<String, dynamic>> _matches = [];
   Map<String, dynamic>? _party;
 
@@ -80,7 +90,16 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       _fill(saved);
       _usingSaved = true;
       _old = saved.kind == 'old';
-      if (_old) _oldMobile.text = saved.mobile;
+      _oldMobile.text = saved.mobile;
+      if (!_old) {
+        _newForm = true;
+        _searched = OrderService.normalizeIndianMobile(saved.mobile);
+      }
+    }
+    _oldMobile.addListener(_onMobileTyped);
+    _taxId.addListener(_onTaxTyped);
+    if (_old && saved != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) => _onMobileTyped());
     }
     OrderService.transports().then((t) {
       if (mounted) setState(() => _transports = t);
@@ -104,6 +123,57 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     _mobile.text = c.mobile;
     _transport.text = c.transport;
     _taxId.text = c.taxId;
+  }
+
+  /// Typing the mobile: as soon as it is a full number (+91 / 0 / spaces
+  /// ignored) we look it up — no FIND tap needed.
+  void _onMobileTyped() {
+    final m = OrderService.normalizeIndianMobile(_oldMobile.text);
+    if (m != null && m != _searched) {
+      _searched = m;
+      _findParty();
+    } else if (m == null && _searched != null && !_newFormForeign) {
+      setState(() {
+        _searched = null;
+        _matches = [];
+        _party = null;
+        _newForm = false;
+        _lookErr = null;
+        _linked = const [];
+      });
+    }
+  }
+
+  /// GST / PAN typed in the new form that already belongs to a party.
+  Future<void> _onTaxTyped() async {
+    final tax = _taxId.text.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
+    final ok = RegExp(r'^\d{2}[A-Z]{5}\d{4}[A-Z][0-9A-Z]Z[0-9A-Z]$').hasMatch(tax) ||
+        RegExp(r'^[A-Z]{5}\d{4}[A-Z]$').hasMatch(tax);
+    if (!ok) {
+      if (_taxMatches.isNotEmpty) setState(() => _taxMatches = []);
+      _taxSearched = null;
+      return;
+    }
+    if (tax == _taxSearched) return;
+    _taxSearched = tax;
+    try {
+      final list = await OrderService.lookupPartyByTax(ref.read(dioProvider), tax);
+      if (mounted) setState(() => _taxMatches = list);
+    } catch (_) {}
+  }
+
+  void _useAccount(Map<String, dynamic> pt) {
+    final mob = '${pt['mobile'] ?? ''}';
+    setState(() {
+      _searched = OrderService.normalizeIndianMobile(mob) ?? _searched;
+      if (mob.isNotEmpty) _oldMobile.text = mob;
+      _matches = [pt];
+      _party = pt;
+      _newForm = false;
+      _newFormForeign = false;
+      _taxMatches = [];
+      _lookErr = null;
+    });
   }
 
   Future<void> _findParty() async {
@@ -137,9 +207,8 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       setState(() {
         _matches = list;
         if (list.length == 1) _party = list.first;
-        if (list.isEmpty) {
-          _lookErr = 'This number is not in our records. Please choose NEW CUSTOMER.';
-        }
+        _newForm = list.isEmpty; // not with us → the new-customer form
+        if (list.isEmpty) _mobile.text = m;
       });
     } catch (_) {
       if (mounted) setState(() => _lookErr = 'No internet — please try again.');
@@ -313,10 +382,10 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
               'कम से कम ${MinOrderBar.minLabel} का ऑर्डर होना चाहिए। कुछ और डिज़ाइन चुनें।'))));
       return;
     }
-    if (_old) {
+    if (!_newForm) {
       if (_party == null) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Enter your mobile number and tap FIND first.')));
+            content: Text('Type your 10-digit mobile number first.')));
         return;
       }
       await _send(photos, _oldCustomer());
@@ -808,20 +877,8 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                           style: Theme.of(context).textTheme.bodySmall),
                     ),
                   const SizedBox(height: 6),
-                  SizedBox(
-                    width: double.infinity,
-                    child: SegmentedButton<bool>(
-                      segments: const [
-                        ButtonSegment(value: true, label: Text('OLD CUSTOMER'), icon: Icon(Icons.storefront_rounded)),
-                        ButtonSegment(value: false, label: Text('NEW CUSTOMER'), icon: Icon(Icons.person_add_alt_1_rounded)),
-                      ],
-                      selected: {_old},
-                      onSelectionChanged: (v) => setState(() => _old = v.first),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  if (_old) ...[
-                    Text('Type your mobile number — we will fill your details.',
+                  ...[
+                    Text('Type your mobile number — we find your account by ourselves.',
                         style: Theme.of(context).textTheme.bodySmall),
                     const SizedBox(height: 8),
                     Row(children: [
@@ -830,8 +887,8 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                           controller: _oldMobile,
                           keyboardType: TextInputType.phone,
                           inputFormatters: [
-                            FilteringTextInputFormatter.allow(RegExp(r'[0-9+ ]')),
-                            LengthLimitingTextInputFormatter(14),
+                            FilteringTextInputFormatter.allow(RegExp(r'[0-9+ \-]')),
+                            LengthLimitingTextInputFormatter(18),
                           ],
                           decoration: _dec('Mobile No. *', prefix: const Text('+91 ')),
                           onSubmitted: (_) => _findParty(),
@@ -876,8 +933,32 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                             style: const TextStyle(fontWeight: FontWeight.w700)),
                       ),
                     for (final pt in _matches) _partyCard(pt, selectable: _matches.length > 1),
+                    if (_party != null)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 8),
+                        child: Text('✓ Your account is found — no need to fill anything.',
+                            style: TextStyle(color: Color(0xFF2E7D32), fontWeight: FontWeight.w700)),
+                      ),
+                    if (_newForm && !_newFormForeign)
+                      const Padding(
+                        padding: EdgeInsets.only(top: 10, bottom: 6),
+                        child: Text('New customer — please fill your details below.',
+                            style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+                      ),
+                    if (!_newForm && _party == null)
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton(
+                          onPressed: () => setState(() {
+                            _newForm = true;
+                            _newFormForeign = true;
+                            _country = 'Other';
+                          }),
+                          child: const Text('Customer outside India? Tap here'),
+                        ),
+                      ),
                   ],
-                  if (!_old) ...[
+                  if (_newForm) ...[
                   DropdownButtonFormField<String>(
                     key: ValueKey(_country),
                     initialValue: _country,
@@ -942,7 +1023,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                         : null,
                   ),
                   const SizedBox(height: 12),
-                  TextFormField(
+                  if (!_india) TextFormField(
                     controller: _mobile,
                     keyboardType: TextInputType.phone,
                     inputFormatters: [
@@ -994,6 +1075,15 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                           : null;
                     },
                   ),
+                  if (_taxMatches.isNotEmpty) ...[
+                    const Padding(
+                      padding: EdgeInsets.only(top: 10),
+                      child: Text('This GST / PAN is already with us — tap your account:',
+                          style: TextStyle(fontWeight: FontWeight.w800, color: Color(0xFF2E7D32))),
+                    ),
+                    for (final pt in _taxMatches)
+                      GestureDetector(onTap: () => _useAccount(pt), child: _partyCard(pt)),
+                  ],
                   ],
                   const SizedBox(height: 12),
                   TextFormField(

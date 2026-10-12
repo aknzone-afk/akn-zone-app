@@ -137,6 +137,8 @@ class OrderService {
   /// or null if it isn't a valid Indian mobile (10 digits starting 6/7/8/9).
   static String? normalizeIndianMobile(String raw) {
     var d = raw.replaceAll(RegExp(r'\D'), '');
+    // "+91 98282 71543", "098282…", "+91 +91 98…" — the last 10 digits count.
+    if (d.length > 10 && RegExp(r'^(91|0)+').hasMatch(d)) d = d.substring(d.length - 10);
     if (d.length == 12 && d.startsWith('91')) d = d.substring(2);
     if (d.length == 11 && d.startsWith('0')) d = d.substring(1);
     return RegExp(r'^[6-9]\d{9}$').hasMatch(d) ? d : null;
@@ -295,6 +297,24 @@ class OrderService {
 
   /// Parties in Tally that have this mobile (same lookup as the DAILY
   /// CUSTOMER desk). Throws on network trouble.
+  /// Parties whose GSTIN / PAN matches (owner 12-Oct).
+  static Future<List<Map<String, dynamic>>> lookupPartyByTax(Dio dio, String tax) async {
+    final res = await dio.post<dynamic>(
+      _lookupUrl,
+      data: {'tax': tax},
+      options: Options(
+        headers: {'x-app-key': 'akn-zone-app-2026'},
+        contentType: Headers.jsonContentType,
+        receiveTimeout: const Duration(seconds: 20),
+      ),
+    );
+    final d = res.data is String ? jsonDecode(res.data as String) : res.data;
+    if (d is! Map || d['ok'] != true) return [];
+    return ((d['parties'] ?? const []) as List)
+        .map((e) => Map<String, dynamic>.from(e as Map))
+        .toList();
+  }
+
   static Future<List<Map<String, dynamic>>> lookupParty(Dio dio, String mobile) async {
     final res = await dio.post<dynamic>(
       _lookupUrl,
