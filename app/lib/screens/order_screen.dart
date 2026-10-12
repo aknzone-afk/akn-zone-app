@@ -1024,6 +1024,8 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                   if (_newForm) ...[
                   // Owner 12-Oct: GST first — a valid GST number fills the form
                   // from the GST portal (the customer can still change it).
+                  // Owner 12-Oct: GST / PAN / Aadhaar only for Indian customers.
+                  if (_india) ...[
                   TextFormField(
                     controller: _taxId,
                     textCapitalization: TextCapitalization.characters,
@@ -1059,6 +1061,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                               fontWeight: FontWeight.w700,
                               color: _gstOk ? const Color(0xFF2E7D32) : const Color(0xFFD32F2F))),
                     ),
+                  ],
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
                     key: ValueKey(_country),
@@ -1071,6 +1074,12 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                     ],
                     onChanged: (v) => setState(() {
                       _country = v ?? 'India';
+                      if (_country != 'India') {
+                        _taxId.clear(); // no GST / PAN / Aadhaar abroad
+                        _gstNote = null;
+                        _gstLooked = null;
+                        _taxMatches = [];
+                      }
                       _pinInfo = null;
                       _pinNotFound = false;
                       _onPinChanged();
@@ -1115,8 +1124,10 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                   TextFormField(
                     controller: _bookingPlace,
                     textCapitalization: TextCapitalization.characters,
-                    decoration: _dec(t('Booking Place *', 'बुकिंग स्थान *'),
-                        hint: t('City where goods are booked', 'जिस शहर में माल बुक होगा'),
+                    decoration: _dec(_india ? t('Booking Place *', 'बुकिंग स्थान *') : 'City *',
+                        hint: _india
+                            ? t('City where goods are booked', 'जिस शहर में माल बुक होगा')
+                            : 'Your city',
                         helper: placeHelper,
                         helperColor: placeColor),
                     validator: (v) => (v ?? '').trim().length < 2
@@ -1138,6 +1149,17 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                         OrderService.validateMobile(v ?? '', india: _india),
                   ),
                   const SizedBox(height: 12),
+                  // Abroad: their own shipping / cargo company, typed freely
+                  // (Indian transport list and suggestions don't apply).
+                  if (!_india)
+                    TextFormField(
+                      controller: _transport,
+                      textCapitalization: TextCapitalization.characters,
+                      decoration: _dec('Shipping / Cargo company (optional)',
+                          hint: 'e.g. your cargo agent in India',
+                          suffix: const Icon(Icons.flight_takeoff_rounded)),
+                    ),
+                  if (_india)
                   _TransportField(
                     controller: _transport,
                     focusNode: _transportFocus,
@@ -1151,6 +1173,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                         ? 'Enter transport name'
                         : null,
                   ),
+                  if (_india)
                   _TransportHelp(
                     info: _tInfo,
                     place: _bookingPlace.text,

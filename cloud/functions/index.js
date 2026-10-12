@@ -1125,7 +1125,7 @@ exports.checkNewParty = onRequest(
         "Please choose OLD CUSTOMER and search with your mobile number." });
     }
     const tr = npNorm(c.transport);
-    if (tr && !NPCHECK.transports.includes(tr)) {
+    if (tr && (c.country || "India") === "India" && !NPCHECK.transports.includes(tr)) {
       soft.push({ field: "transport", msg: `Transport "${tr}" is not in our list. Please choose one:`,
         suggest: nearest(tr, NPCHECK.transports) });
     }
