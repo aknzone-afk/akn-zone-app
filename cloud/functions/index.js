@@ -558,6 +558,13 @@ exports.phoneLock = onRequest(
       const mobiles = (d.exists && d.get("mobiles")) || [];
       const devices = (mm.exists && mm.get("devices")) || [];
       const newPhone = devices.length > 0 && !devices.includes(device);
+      // Test 12-Oct: just TYPING / looking up a number (peek) must not use up
+      // the 2-numbers-per-phone limit — only a placed order links it.
+      if (req.body && req.body.peek) {
+        if (!mobiles.includes(m) && mobiles.length >= 2) return { allowed: false, mobiles };
+        return { allowed: true, index: mobiles.includes(m) ? mobiles.indexOf(m) + 1 : mobiles.length + 1,
+          first: mobiles[0] || null, newPhone, phone: device.slice(-4).toUpperCase() };
+      }
       if (!mobiles.includes(m)) {
         if (mobiles.length >= 2) return { allowed: false, mobiles };
         mobiles.push(m);
@@ -687,8 +694,12 @@ async function handleBillPhoto(db, m) {
     await autoStep(db, o.id, "b", "Bill group", extra);
   }
   // One message per customer chat (all linked orders share the mobile).
+  const advPaid = Number(main.paidTotal || 0);
+  const balance = b.grandTotal ? Math.max(0, Number(b.grandTotal) - advPaid) : 0;
   await addChat(db, main.id, { from: "shop", text: "🧾 Sir, please make the payment — Bill" + (b.billNo ? " " + b.billNo : "") +
-    (b.grandTotal ? " · " + inr(b.grandTotal) : "") + ". Send the payment screenshot here 🙏", fileId, mime });
+    (b.grandTotal ? " · " + inr(b.grandTotal) : "") +
+    (advPaid > 0 && b.grandTotal ? ` (advance ${inr(advPaid)} received — balance ${inr(balance)})` : "") +
+    ". Send the payment screenshot here 🙏", fileId, mime });
   const no = main.serial ? `ORDER NO. ${main.serial}` : "the order";
   return reply(`✅ Bill sent to ${main.billName} — ${no}${b.billNo ? " · Bill " + b.billNo : ""}${b.grandTotal ? " · ₹" + b.grandTotal : ""}`);
 }

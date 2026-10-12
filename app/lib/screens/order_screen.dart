@@ -242,7 +242,8 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       _party = null;
       _linked = const [];
     });
-    final lock = await PhoneLock.check(ref.read(dioProvider), m);
+    // Only LOOKING a number up — don't link it to this phone yet.
+    final lock = await PhoneLock.check(ref.read(dioProvider), m, peek: true);
     if (!lock.allowed) {
       if (mounted) {
         setState(() {

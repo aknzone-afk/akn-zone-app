@@ -105,6 +105,9 @@ class OrderService {
     final all = history(prefs);
     for (final o in all) {
       if (o.addOnTo != null) continue; // add-ons never extend the window
+      // Test 12-Oct: an order that never reached the shop (e.g. a new
+      // customer's order still waiting for the advance) opens no window.
+      if (o.status != OrderStatus.sent) continue;
       final until = o.createdAt.add(const Duration(hours: 24));
       final used = all.where((x) => x.addOnTo == o.number).length;
       if (now.isBefore(until) && used < kMaxAddOns) {

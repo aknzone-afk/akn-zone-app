@@ -36,12 +36,12 @@ class PhoneLock {
   /// allowed=false → the 3rd number on this phone. A network problem never
   /// blocks an order (returns allowed with no warnings).
   static Future<({bool allowed, int index, String? first, bool newPhone, String phone, List<String> mobiles})>
-      check(Dio dio, String mobile) async {
+      check(Dio dio, String mobile, {bool peek = false}) async {
     final id = await phoneId();
     try {
       final res = await dio.post<dynamic>(
         'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net/phoneLock',
-        data: {'device': id, 'mobile': mobile},
+        data: {'device': id, 'mobile': mobile, if (peek) 'peek': true},
         options: Options(
             headers: {'x-app-key': 'akn-zone-app-2026'},
             contentType: Headers.jsonContentType,
