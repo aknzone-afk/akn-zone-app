@@ -158,7 +158,18 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
           ]),
         );
     return Scaffold(
-      appBar: AppBar(title: const Text('PAY 10% ADVANCE')),
+      appBar: AppBar(
+        title: const Text('PAY 10% ADVANCE'),
+        // Tester 12-Oct: a way out — the order waits in My Orders.
+        leading: IconButton(
+          icon: const Icon(Icons.close_rounded),
+          onPressed: () {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                content: Text('Your order is saved — pay the advance any time from My Orders.')));
+            context.go('/');
+          },
+        ),
+      ),
       body: ListView(padding: const EdgeInsets.fromLTRB(16, 8, 16, 32), children: [
         Container(
           padding: const EdgeInsets.all(14),
