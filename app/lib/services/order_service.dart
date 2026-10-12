@@ -51,6 +51,19 @@ class OrderService {
   static const _kConfigCacheKey = 'order_cfg_v1';
   static const _kMaxHistory = 60;
 
+  /// Owner 12-Oct-2026: one-time wipe of the TEST orders on every phone
+  /// (cloud orders / phone links / chats were reset; order numbers restart
+  /// at 1). Bump [kDataEpoch] to wipe again.
+  static const kDataEpoch = 1;
+  static Future<void> wipeTestDataOnce(SharedPreferences p) async {
+    if ((p.getInt('data_epoch') ?? 0) >= kDataEpoch) return;
+    for (final k in [_kOrdersKey, _kCustomerKey, 'chat_seen_v1', 'chat_notified_v1',
+                     'push_registered_v1', 'phone_lock_v1']) {
+      await p.remove(k);
+    }
+    await p.setInt('data_epoch', kDataEpoch);
+  }
+
   static const countries = <String>[
     'India',
     'Nepal',

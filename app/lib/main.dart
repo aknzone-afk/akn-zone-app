@@ -1,3 +1,4 @@
+import 'services/order_service.dart';
 import 'dart:ui' show PlatformDispatcher;
 import 'services/error_report.dart';
 import 'services/push_service.dart';
@@ -33,6 +34,7 @@ Future<void> main() async {
     DeviceOrientation.portraitDown,
   ]);
   final prefs = await SharedPreferences.getInstance();
+  await OrderService.wipeTestDataOnce(prefs); // test orders gone (owner 12-Oct)
   loadLanguage(prefs);
 
   assert(
