@@ -85,10 +85,30 @@ class PiecesNotifier extends StateNotifier<Map<String, int>> {
 
   List<List<int>>? boxesFor(Photo p) {
     final k = keyFor(p);
-    final raw = _boxes[k] ?? _boxes[_noExt(k)];
+    final found = _boxes[k] ?? _boxes[_noExt(k)];
+    final raw = found == null ? null : openAsOne(found);
     final fixed = _fixed[fixKey(p.designNumber)];
     if (raw == null || fixed == null || fixed >= raw.length || fixed < 1) return raw;
     return _mergeTo(raw, fixed);
+  }
+
+  /// Owner 12-Oct (rule): the OPEN saree at the top is ALWAYS ONE saree. The
+  /// photo-reading often splits it into 2-3 strips (body / pallu / blouse
+  /// piece) that all start at the very top — when the photo also has folded
+  /// sarees below (4+ found), every box starting in that top band is joined
+  /// into one.
+  static List<List<int>> openAsOne(List<List<int>> boxes) {
+    if (boxes.length < 4) return boxes;
+    final top = boxes.map((b) => b[0]).reduce((a, b) => a < b ? a : b);
+    final band = [for (final b in boxes) if (b[0] <= top + 120) b];
+    if (band.length < 2) return boxes;
+    final m = [
+      band.map((b) => b[0]).reduce((a, b) => a < b ? a : b),
+      band.map((b) => b[1]).reduce((a, b) => a < b ? a : b),
+      band.map((b) => b[2]).reduce((a, b) => a > b ? a : b),
+      band.map((b) => b[3]).reduce((a, b) => a > b ? a : b),
+    ];
+    return [m, for (final b in boxes) if (!band.contains(b)) b];
   }
 
   /// Owner 12-Oct: the shop corrected the count to fewer sarees than the
@@ -182,7 +202,11 @@ class PiecesNotifier extends StateNotifier<Map<String, int>> {
     final f = _fixed[fixKey(p.designNumber)];
     if (f != null) return f;
     final k = keyFor(p);
-    return state[k] ?? state[_noExt(k)];
+    final n = state[k] ?? state[_noExt(k)];
+    // Same rule for the count: the split open saree counts once.
+    final found = _boxes[k] ?? _boxes[_noExt(k)];
+    if (n != null && found != null && n == found.length) return openAsOne(found).length;
+    return n;
   }
 
   /// Re-downloads the counts at most every 30 minutes (and always when we
