@@ -175,26 +175,7 @@ class PhotoCard extends ConsumerWidget {
                 ),
               ),
             ),
-          if (!removeMode && ref.watch(newDesignIdsProvider).contains(photo.id))
-            Positioned(
-              top: 8,
-              left: 8,
-              child: IgnorePointer(
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFD32F2F),
-                    borderRadius: BorderRadius.circular(5),
-                  ),
-                  child: const Text('NEW',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.w900,
-                          fontSize: 11,
-                          letterSpacing: 0.8)),
-                ),
-              ),
-            ),
+          // Owner 12-Oct: no NEW badge on the photos.
           if (selectionMode)
             Positioned(
               top: 4,
