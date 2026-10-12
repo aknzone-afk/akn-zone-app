@@ -17,7 +17,6 @@ import '../services/drive_urls.dart';
 import '../services/photo_freshness.dart';
 import '../services/price_check.dart';
 import '../services/price_ocr.dart';
-import '../widgets/similar_row.dart';
 
 /// Swipeable full-screen photo viewer. The user can swipe left/right to step
 /// through whatever list of photos they were just browsing (folder, search,
@@ -310,7 +309,7 @@ class _PhotoDetailScreenState extends ConsumerState<PhotoDetailScreen> {
             ]);
            }),
           ),
-          SimilarRow(photo: currentPhoto),
+          // Owner 12-Oct: no "similar designs" row.
           _DetailFooter(
             photo: currentPhoto,
             price: ref.watch(priceCheckProvider
