@@ -124,7 +124,7 @@ class PiecesNotifier extends StateNotifier<Map<String, int>> {
 
   Future<void> _loadFixes() async {
     try {
-      final r = await _dio.post<dynamic>(
+      final r = await _dio.get<dynamic>(
           'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net/countOverrides',
           options: Options(headers: {'x-app-key': 'akn-zone-app-2026'}, responseType: ResponseType.plain));
       final j = jsonDecode('${r.data}') as Map<String, dynamic>;
