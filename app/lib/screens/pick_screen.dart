@@ -226,11 +226,14 @@ class _PickScreenState extends ConsumerState<PickScreen> {
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(const SnackBar(
-          content: Text('This design is SET TO SET only — same quantity of every colour. Use SET + / − above.')));
+          content: Text('This item is SET TO SET only — each tap adds one full SET. Use SET − to remove.')));
   }
 
   void _tap(double x, double y, List<List<int>>? boxes) {
     if (_setOnly) {
+      // Owner 12-Oct: SET TO SET item — a tap anywhere = one more SET
+      // (1 on every colour, then 2 …). SET − takes one off.
+      _setTo(_setsShown + 1);
       _setOnlyNote();
       return;
     }
