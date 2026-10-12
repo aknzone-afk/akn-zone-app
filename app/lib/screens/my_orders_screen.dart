@@ -236,8 +236,7 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                                 child: const Row(mainAxisSize: MainAxisSize.min, children: [
                                   HelplineIcon(size: 18),
                                   SizedBox(width: 4),
-                                  Text('SEND PAYMENT
-DETAILS',
+                                  Text('SEND PAYMENT\nDETAILS',
                                       textAlign: TextAlign.center,
                                       style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 10, height: 1.15)),
                                 ]),

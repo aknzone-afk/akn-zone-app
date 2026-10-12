@@ -201,7 +201,8 @@ class PhotoCard extends ConsumerWidget {
         ],
       ),
         ),
-        // Joined to the photo — no gap (owner 12-Oct).
+        // Owner 12-Oct: a thin white line between the photo and the box.
+        Container(height: 2, color: Colors.white),
         SizedBox(
           height: 40,
           child: Row(
@@ -209,9 +210,10 @@ class PhotoCard extends ConsumerWidget {
                 children: [
                   Expanded(
                     child: Material(
+                      // Owner 12-Oct: green (the cart-badge green); darker once selected.
                       color: pickLabel != null
-                          ? const Color(0xF21B8E3A)
-                          : const Color(0xE61B1A18),
+                          ? const Color(0xFF0F5C25)
+                          : const Color(0xFF1B8E3A),
                       child: InkWell(
                         onTap: () {
                           precacheImage(
