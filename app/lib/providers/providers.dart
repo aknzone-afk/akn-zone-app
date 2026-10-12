@@ -317,15 +317,11 @@ final FutureProvider<CatalogResult> catalogProvider =
     await _prefetchTopLevelCovers(ref, shown)
         .timeout(const Duration(seconds: 12), onTimeout: () {});
 
-    if (liveScraped) {
-      // Read EVERY remaining price before revealing — full accuracy at open.
-      // (Designs whose folder name or the bundled seed already gave a price are
-      // skipped, so this only reads the ones genuinely missing one.)
-      await _runPriceOcr(ref)
-          .timeout(const Duration(seconds: 90), onTimeout: () => 0);
-      // Re-read the cache so the revealed catalog includes those prices.
-      shown = await _reloadFromCache(ref, shown);
-    }
+    // 12-Oct-2026: NO price reading behind the loading screen any more —
+    // reading hundreds of photos while the collage animates ran the iPhone
+    // out of memory (crash at 40–55%). The catalog opens now; the catch-up
+    // below reads the missing prices quietly, 3 at a time, and they appear
+    // as they come in.
 
     ref.read(scrapeProgressProvider.notifier).state =
         ref.read(scrapeProgressProvider).copyWith(phase: ScrapePhase.idle);
@@ -352,9 +348,10 @@ final FutureProvider<CatalogResult> catalogProvider =
   // renders with photos painted.
   if (!result.fromCache) {
     await _prefetchTopLevelCovers(ref, result);
-    // Run price OCR on photos whose folder name didn't encode a price. Blocks
-    // the loading screen so prices are visible by the time the catalog opens.
-    await _runPriceOcr(ref);
+    // Prices are read quietly AFTER the catalog opens (12-Oct: blocking the
+    // loading screen with it crashed iPhones on the first load).
+    // ignore: discarded_futures
+    Future<void>.delayed(const Duration(seconds: 8), () => _runPriceOcr(ref, silent: true));
     ref.read(scrapeProgressProvider.notifier).state =
         ref.read(scrapeProgressProvider).copyWith(phase: ScrapePhase.idle);
     // Re-read SQLite so the photos list reflects the OCR-extracted prices.

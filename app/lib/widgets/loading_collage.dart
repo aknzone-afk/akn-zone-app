@@ -28,7 +28,7 @@ class _LoadingCollageState extends ConsumerState<LoadingCollage>
   late final AnimationController _ticker;
   final math.Random _rng = math.Random(7);
   final List<_Slot> _slots = [];
-  static const int _maxCards = 24;
+  static const int _maxCards = 12; // 12-Oct: lighter first load (iPhone memory)
   Size _canvas = Size.zero;
 
   @override
