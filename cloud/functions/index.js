@@ -198,7 +198,11 @@ exports.lookupParty = onRequest(
     if (d.length === 12 && d.startsWith("91")) d = d.slice(2);
     if (d.length === 11 && d.startsWith("0")) d = d.slice(1);
     if (!/^[6-9]\d{9}$/.test(d)) return res.json({ ok: false, error: "bad mobile" });
-    const list = (PARTIES[d] || []).slice(0, 5);
+    // Owner 12-Oct: ledgers made today (NewPartyBot / app) are known at once.
+    const live = await admin.firestore().collection("bbapp_parties_live").doc(d).get();
+    const fresh = live.exists ? (live.get("list") || []) : [];
+    const names = new Set(fresh.map((x) => x.name));
+    const list = [...fresh, ...(PARTIES[d] || []).filter((x) => !names.has(x.name))].slice(0, 5);
     logger.info("lookupParty", { found: list.length });
     return res.json({ ok: true, parties: list });
   },
@@ -1052,6 +1056,7 @@ exports.newParties = onRequest(
       .where("status", "in", ["received", "getting_ready", "bill_sent", "payment_received", "dispatched", "bilty"]).get();
     const out = snap.docs.map((x) => ({ ref: x.id, ...x.data() }))
       .filter((o) => o.cust && !o.addOnTo && !o.partyQueuedAt)
+      .sort((a, b) => (a.serial || 0) - (b.serial || 0)) // oldest first
       .map((o) => ({ ref: o.ref, serial: o.serial || null, cust: o.cust }));
     return res.json({ ok: true, parties: out });
   },
@@ -1320,5 +1325,28 @@ exports.gstLookup = onRequest(
       return res.json({ ok: true, found: true, ...info });
     }
     return res.json({ ok: true, found: false, reason: notFound ? "notfound" : "unavailable" });
+  },
+);
+
+/** Shop PC (NewPartyBot): a ledger it just made → found by mobile at once. */
+exports.registerParty = onRequest(
+  { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 2, invoker: "public" },
+  async (req, res) => {
+    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    const b = req.body || {};
+    const rec = { name: String(b.name || "").slice(0, 120), address: String(b.address || "").slice(0, 300),
+      dest: String(b.dest || "").slice(0, 60), pincode: String(b.pincode || "").slice(0, 10),
+      state: String(b.state || "").slice(0, 40), country: String(b.country || "India").slice(0, 40),
+      gstin: String(b.gstin || "").slice(0, 20), transport: String(b.transport || "").slice(0, 80) };
+    if (!rec.name) return res.status(400).json({ ok: false });
+    const mobs = (b.mobiles || []).map((m) => String(m).replace(/\D/g, "").slice(-10)).filter((m) => /^[6-9]\d{9}$/.test(m));
+    const db = admin.firestore();
+    for (const m of mobs.slice(0, 3)) {
+      const ref = db.collection("bbapp_parties_live").doc(m);
+      const cur = (await ref.get()).data() || {};
+      const list = (cur.list || []).filter((x) => x.name !== rec.name);
+      await ref.set({ list: [rec, ...list].slice(0, 5), at: Date.now() });
+    }
+    return res.json({ ok: true, mobiles: mobs.length });
   },
 );
