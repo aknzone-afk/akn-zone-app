@@ -518,6 +518,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     final cutoff = DateTime.now().subtract(const Duration(hours: 24));
     return OrderService.history(ref.read(sharedPreferencesProvider)).any((o) =>
         o.createdAt.isAfter(cutoff) &&
+        !o.awaitingAdvance && // an unpaid (held) order isn't "already sent"
         sig(o.items.map((i) => (i.photoId, i.qty))) == now);
   }
 
