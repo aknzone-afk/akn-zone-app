@@ -185,7 +185,7 @@ exports.lookupParty = onRequest(
           const hit = isGst ? g === tax : (g === tax || (g.length === 15 && g.slice(2, 12) === tax));
           if (hit && !seen.has(r.name)) {
             seen.add(r.name);
-            out.push({ ...r, mobile: mob });
+            out.push({ ...r }); // never the party's mobile (privacy)
           }
         }
         if (out.length >= 5) break;
