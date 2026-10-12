@@ -46,7 +46,7 @@ class HomeScreen extends ConsumerWidget {
       // Owner 12-Oct: only the AKN ZONE logo (no "Surat saree manufacturer"
       // text) + four boxed buttons with icon AND word.
       appBar: AppBar(
-        toolbarHeight: 66,
+        toolbarHeight: 72,
         leadingWidth: 64,
         leading: Padding(
           padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
@@ -59,6 +59,7 @@ class HomeScreen extends ConsumerWidget {
               stacked: true,
               icon: Icons.play_circle_outline_rounded,
               label: 'TUTORIAL',
+              sub: '(How to order)',
               onTap: () {
                 if (Tutorial.videoId(ref.read(sharedPreferencesProvider)) == null) {
                   ScaffoldMessenger.of(context).showSnackBar(const SnackBar(

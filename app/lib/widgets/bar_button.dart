@@ -15,6 +15,9 @@ class BarButton extends StatelessWidget {
 
   /// Icon above the word (narrow home bar with four buttons).
   final bool stacked;
+
+  /// Small second line under the word, e.g. "(How to order)".
+  final String? sub;
   const BarButton({
     super.key,
     required this.icon,
@@ -25,6 +28,7 @@ class BarButton extends StatelessWidget {
     this.color,
     this.dark = false,
     this.stacked = false,
+    this.sub,
   });
 
   @override
@@ -42,7 +46,7 @@ class BarButton extends StatelessWidget {
         onTap: onTap,
         child: stacked
             ? SizedBox(
-                height: 50,
+                height: sub != null ? 56 : 50,
                 child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
                   Badge(
                     isLabelVisible: count > 0 || dot,
@@ -59,6 +63,13 @@ class BarButton extends StatelessWidget {
                         style: TextStyle(
                             color: fg, fontSize: 10.5, fontWeight: FontWeight.w800, letterSpacing: 0.6)),
                   ),
+                  if (sub != null)
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(sub!,
+                          maxLines: 1,
+                          style: TextStyle(color: fg.withValues(alpha: 0.75), fontSize: 8.5, fontWeight: FontWeight.w700)),
+                    ),
                 ]),
               )
             : SizedBox(

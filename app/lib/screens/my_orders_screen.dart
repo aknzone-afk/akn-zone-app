@@ -13,6 +13,7 @@ import '../l10n.dart';
 import '../models/order.dart';
 import '../providers/providers.dart';
 import '../services/order_service.dart';
+import '../widgets/helpline_icon.dart';
 
 /// Every order placed from this phone, newest first, with its delivery state.
 /// Orders that couldn't be sent (no internet) can be re-sent with one tap —
@@ -212,13 +213,31 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                     // Owner: tap an order → all its designs, selections, pcs.
                     onTap: () => context.push('/order-detail/${Uri.encodeComponent(o.number)}'),
                     trailing: sent
-                        ? TextButton(
-                            // Owner: "SEE ORDER" (not Order again) → the full order.
-                            onPressed: () => context.push('/order-detail/${Uri.encodeComponent(o.number)}'),
-                            child: const Text('SEE ORDER',
-                                textAlign: TextAlign.center,
-                                style: TextStyle(fontWeight: FontWeight.w900)),
-                          )
+                        ? Column(mainAxisSize: MainAxisSize.min, children: [
+                            TextButton(
+                              // Owner: "SEE ORDER" (not Order again) → the full order.
+                              style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+                              onPressed: () => context.push('/order-detail/${Uri.encodeComponent(o.number)}'),
+                              child: const Text('SEE ORDER',
+                                  textAlign: TextAlign.center,
+                                  style: TextStyle(fontWeight: FontWeight.w900)),
+                            ),
+                            // Owner 12-Oct: the helpline lives here (under SEE ORDER).
+                            InkWell(
+                              borderRadius: BorderRadius.circular(10),
+                              onTap: () => context.push('/chat'),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                    color: const Color(0xFF1B8E3A), borderRadius: BorderRadius.circular(10)),
+                                child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                                  HelplineIcon(size: 18),
+                                  SizedBox(width: 4),
+                                  Text('HELP', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 11)),
+                                ]),
+                              ),
+                            ),
+                          ])
                         : (_busy == o.number
                             ? const SizedBox(
                                 width: 22,

@@ -102,9 +102,11 @@ class _ChatBubbleState extends ConsumerState<ChatBubble> with WidgetsBindingObse
     final prefs = ref.read(sharedPreferencesProvider);
     // Owner 12-Oct: the helpline sits on the HOME page only — on other pages
     // just while a new shop message is waiting.
+    // Owner 12-Oct (2): the floating helpline shows ONLY while a new shop
+    // message is waiting (with its count), on every page. Otherwise the
+    // helpline is the HELP button under SEE ORDER in My Orders.
     final waiting = _unread > 0 || _popup != null;
-    if (ChatService.mobiles(prefs).isEmpty || _path == '/chat' || _path.startsWith('/pick') ||
-        (_path != '/' && !waiting)) {
+    if (ChatService.mobiles(prefs).isEmpty || _path == '/chat' || _path.startsWith('/pick') || !waiting) {
       return const SizedBox.shrink();
     }
     final pad = MediaQuery.of(context).padding.bottom;
