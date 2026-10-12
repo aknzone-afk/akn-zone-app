@@ -63,7 +63,9 @@ class PhotoGrid extends ConsumerWidget {
               selectionMode: selectionMode,
               selected: selection.contains(p.id),
               // In the cart a tap opens TAP-TO-SELECT (tap colours / sets).
-              onTap: () => removeMode
+              // Owner 12-Oct: a tap on ANY photo opens SELECT COLOURS / SETS
+              // straight away — no preview.
+              onTap: () => true
                   ? context.push('/pick/${Uri.encodeComponent(p.id)}')
                   : context.push(
                       '/photo/${Uri.encodeComponent(p.id)}',
