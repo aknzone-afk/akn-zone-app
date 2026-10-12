@@ -283,7 +283,13 @@ class _PickScreenState extends ConsumerState<PickScreen> {
       final left = boxes.map((b) => b[1]).reduce(math.min) / 1000;
       final bottom = boxes.map((b) => b[2]).reduce(math.max) / 1000;
       final right = boxes.map((b) => b[3]).reduce(math.max) / 1000;
-      final inside = x >= left && x <= right && y >= top && y <= bottom;
+      // Owner 12-Oct (2): cards / paper beside the sarees must NOT get numbers
+      // — a free number is allowed only when the shop corrected this design to
+      // MORE sarees than the photo-reading found ("count <design> <n>").
+      final ph = _photo;
+      final pcs = ph == null ? null : ref.read(piecesProvider.notifier).piecesFor(ph);
+      final missing = pcs != null && pcs > boxes.length;
+      final inside = missing && x >= left && x <= right && y >= top && y <= bottom;
       if (near != null) {
         marks[near] = marks[near].withN(marks[near].n + 1);
         _push(_s.copy(marks: marks));
