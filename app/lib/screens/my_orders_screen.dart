@@ -165,7 +165,7 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                                 '${o.addOnTo != null ? '  (ADD IN NO. ${orders.where((x) => x.number == o.addOnTo).firstOrNull?.serial ?? '-'})' : ''}'
                             : (o.addOnTo != null
                                 ? 'ADD IN ORDER NO. ${orders.where((x) => x.number == o.addOnTo).firstOrNull?.serial ?? '-'}'
-                                : 'ORDER (sending…)'),
+                                : (o.awaitingAdvance ? 'WAITING FOR 10% ADVANCE' : 'ORDER (sending…)')),
                         style: const TextStyle(fontWeight: FontWeight.w700)),
                     subtitle: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -253,7 +253,9 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                               ),
                             ),
                           ])
-                        : (_busy == o.number
+                        : o.awaitingAdvance
+                            ? null
+                            : (_busy == o.number
                             ? const SizedBox(
                                 width: 22,
                                 height: 22,

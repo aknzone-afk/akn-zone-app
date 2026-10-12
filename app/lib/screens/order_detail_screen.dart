@@ -52,7 +52,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
         : o.serial;
     final title = o.serial != null
         ? 'ORDER NO. ${o.serial}${o.addOnTo != null ? ' (ADD IN NO. ${mainSerial ?? '-'})' : ''}'
-        : (o.addOnTo != null ? 'ADD IN ORDER NO. ${mainSerial ?? '-'}' : 'ORDER (sending…)');
+        : (o.addOnTo != null ? 'ADD IN ORDER NO. ${mainSerial ?? '-'}' : (o.awaitingAdvance ? 'WAITING FOR 10% ADVANCE' : 'ORDER (sending…)'));
     final c = o.customer;
     const bold = TextStyle(fontWeight: FontWeight.w800);
     return Scaffold(

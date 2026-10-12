@@ -157,7 +157,13 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
                 onPressed: () => _copy(v, k)),
           ]),
         );
-    return Scaffold(
+    // Phone BACK button: go to the catalogue (not out of the app).
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) context.go('/');
+      },
+      child: Scaffold(
       appBar: AppBar(
         title: const Text('PAY 10% ADVANCE'),
         // Tester 12-Oct: a way out — the order waits in My Orders.
@@ -239,6 +245,7 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
         const Text('After the screenshot is verified your order goes to us immediately.',
             textAlign: TextAlign.center, style: TextStyle(color: Colors.black54)),
       ]),
+    ),
     );
   }
 }

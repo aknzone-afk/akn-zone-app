@@ -656,7 +656,7 @@ class OrderService {
   static Future<Order?> retryOne(
       SharedPreferences prefs, Dio dio, String number) async {
     final o = history(prefs).where((x) => x.number == number).firstOrNull;
-    if (o == null || o.status == OrderStatus.sent) return o;
+    if (o == null || o.status == OrderStatus.sent || o.awaitingAdvance) return o; // never skip the advance
     await _trySend(prefs, dio, o);
     return o;
   }
