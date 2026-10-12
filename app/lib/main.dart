@@ -28,14 +28,21 @@ Future<void> main() async {
     return true; // handled — don't crash
   };
 
-  // Lock app to portrait orientation.
-  await SystemChrome.setPreferredOrientations([
-    DeviceOrientation.portraitUp,
-    DeviceOrientation.portraitDown,
-  ]);
+  // Lock app to portrait orientation. Nothing before runApp may stop the
+  // catalog from showing (tester 13-Oct: a throw here = splash forever).
+  try {
+    await SystemChrome.setPreferredOrientations([
+      DeviceOrientation.portraitUp,
+      DeviceOrientation.portraitDown,
+    ]);
+  } catch (_) {}
   final prefs = await SharedPreferences.getInstance();
-  await OrderService.wipeTestDataOnce(prefs); // test orders gone (owner 12-Oct)
-  loadLanguage(prefs);
+  try {
+    await OrderService.wipeTestDataOnce(prefs); // test orders gone (owner 12-Oct)
+    loadLanguage(prefs);
+  } catch (e, st) {
+    reportAppError('startup: $e', st);
+  }
 
   assert(
     kDriveFolderId.isNotEmpty && !kDriveFolderId.contains('REPLACE'),
@@ -58,7 +65,9 @@ Future<void> main() async {
   String? launchPayload;
   try {
     await NotificationService.instance.init(onTap: _openDailyUpdate);
-    await NotificationService.instance.requestPermission();
+    // The notification permission is asked when it is needed — after the
+    // first order (PushService.register) — never over the catalog at launch
+    // (tester 13-Oct: the OS prompt blocked the first screen).
     // Owner 11-Oct: no daily / weekly "new designs" notification any more —
     // cancel the one older versions scheduled.
     await NotificationService.instance.cancelDaily();

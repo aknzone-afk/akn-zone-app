@@ -14,6 +14,14 @@ const int _dailyMinute = 0;
 const int _dailyId = 1001;
 const int _testId = 1002;
 const String _channelId = 'daily_update';
+// Shop messages (bill, payment note, replies): high importance = heads-up.
+// The cloud's FCM payload and the manifest meta-data name the same channel.
+const AndroidNotificationChannel _chatChannel = AndroidNotificationChannel(
+  'chat',
+  'Shop messages',
+  description: 'Bills, payment notes and replies from AKN Zone',
+  importance: Importance.high,
+);
 
 /// Schedules the daily "new designs" reminder and routes notification taps to
 /// the [kDailyUpdateFolder] folder. All failures are swallowed so the catalog
@@ -30,6 +38,11 @@ class NotificationService {
   Future<void> init({void Function(String payload)? onTap}) async {
     this.onTap = onTap;
     if (_ready) return;
+    try {
+      await _plugin
+          .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
+          ?.createNotificationChannel(_chatChannel);
+    } catch (_) {}
 
     tzdata.initializeTimeZones();
     try {
@@ -88,10 +101,9 @@ class NotificationService {
 
   NotificationDetails get _details => const NotificationDetails(
         android: AndroidNotificationDetails(
-          _channelId,
-          'Daily design updates',
-          channelDescription:
-              'A daily reminder when new designs are added to the catalog.',
+          'chat',
+          'Shop messages',
+          channelDescription: 'Bills, payment notes and replies from AKN Zone',
           importance: Importance.high,
           priority: Priority.high,
         ),

@@ -15,6 +15,8 @@ import 'chat_service.dart';
 class PushService {
   static const _cloud = 'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net';
   static const _kSent = 'push_registered_v1';
+  static const _kAsked = 'push_perm_asked_v1'; // times the OS prompt was shown
+  static const _kAskedAt = 'push_perm_asked_at_v1';
 
   /// Bumped when a push arrives while the app is open → chat bubble re-checks.
   static final ValueNotifier<int> tick = ValueNotifier(0);
@@ -76,8 +78,21 @@ class PushService {
     }
     try {
       final fm = FirebaseMessaging.instance;
-      final perm = await fm.requestPermission(alert: true, badge: true, sound: true);
-      if (perm.authorizationStatus == AuthorizationStatus.denied) return;
+      var st = (await fm.getNotificationSettings()).authorizationStatus;
+      // Ask at most twice, a day apart (Android 13 denies for good after two
+      // refusals; iOS asks only once anyway) — tester 13-Oct.
+      final asked = prefs.getInt(_kAsked) ?? 0;
+      final askedAt = prefs.getInt(_kAskedAt) ?? 0;
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final mayAsk = Platform.isIOS
+          ? st == AuthorizationStatus.notDetermined
+          : st != AuthorizationStatus.authorized && asked < 2 && now - askedAt > 86400000;
+      if (mayAsk) {
+        await prefs.setInt(_kAsked, asked + 1);
+        await prefs.setInt(_kAskedAt, now);
+        st = (await fm.requestPermission(alert: true, badge: true, sound: true)).authorizationStatus;
+      }
+      if (st == AuthorizationStatus.denied) return;
       // iPhone: the Apple push address — the cloud sends straight to Apple.
       final apns = Platform.isIOS ? await fm.getAPNSToken() : null;
       if (Platform.isIOS && apns == null) return; // not ready yet; next time

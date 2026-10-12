@@ -1263,7 +1263,7 @@ async function pushTo(db, mobile, body) {
       notification: { title: "AKN ZONE", body: String(body || "New message").slice(0, 180) },
       data: { route: "/chat" },
       apns: { payload: { aps: { sound: "default", badge: 1 } } },
-      android: { priority: "high", notification: { sound: "default" } },
+      android: { priority: "high", notification: { sound: "default", channelId: "chat" } }, // heads-up channel
     });
     r.responses.forEach((x, i) => {
       const code = x.error && x.error.code;
@@ -1318,8 +1318,10 @@ function apnsSend(deviceToken, text, host = "api.push.apple.com") {
       });
       req.on("error", () => finish(0));
       req.setTimeout(10000, () => { req.close(); finish(0); });
+      // "gcm.message_id": firebase_messaging reports a tap / a foreground
+      // arrival to the app only when this key is present (tester 13-Oct).
       req.end(JSON.stringify({ aps: { alert: { title: "AKN ZONE", body: text }, sound: "default", badge: 1 },
-        route: "/chat" }));
+        route: "/chat", "gcm.message_id": `${Date.now()}-${Math.random().toString(36).slice(2, 10)}` }));
     } catch (e) {
       logger.warn("apns send", { error: e.message });
       finish(0);

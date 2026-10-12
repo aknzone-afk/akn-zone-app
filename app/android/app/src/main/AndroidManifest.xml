@@ -10,6 +10,9 @@
         android:label="AKN Zone"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher">
+        <!-- Push (FCM) from the shop: heads-up channel + the logo as the small icon -->
+        <meta-data android:name="com.google.firebase.messaging.default_notification_channel_id" android:value="chat" />
+        <meta-data android:name="com.google.firebase.messaging.default_notification_icon" android:resource="@drawable/ic_launcher_foreground" />
         <activity
             android:name=".MainActivity"
             android:exported="true"

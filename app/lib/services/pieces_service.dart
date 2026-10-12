@@ -53,7 +53,13 @@ class PiecesNotifier extends StateNotifier<Map<String, int>> {
 
   List<List<int>>? pointsFor(Photo p) {
     final k = keyFor(p);
-    return _points[k] ?? _points[_noExt(k)];
+    final pts = _points[k] ?? _points[_noExt(k)];
+    if (pts == null) return null;
+    // Points are aligned to the RAW boxes; after openAsOne / _mergeTo the
+    // indices shift, so the grid spot is used instead (tester 13-Oct).
+    final raw = _boxes[k] ?? _boxes[_noExt(k)];
+    final shown = boxesFor(p);
+    return (raw != null && shown != null && shown.length != raw.length) ? null : pts;
   }
 
   /// key → saree boxes [ymin, xmin, ymax, xmax] on a 0-1000 scale.
@@ -65,7 +71,7 @@ class PiecesNotifier extends StateNotifier<Map<String, int>> {
       try {
         final list = (v as List)
             .map((b) => (b as List).map((e) => (e as num).toInt()).toList())
-            .where((b) => b.length == 4)
+            .where((b) => b.length == 4 && b[2] > b[0] && b[3] > b[1]) // never a zero-size box
             .toList();
         out[k] = list;
         out.putIfAbsent(_noExt(k), () => list);

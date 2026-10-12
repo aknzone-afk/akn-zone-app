@@ -83,8 +83,10 @@ class _PickScreenState extends ConsumerState<PickScreen> {
   Photo? get _photo =>
       ref.read(photosProvider).where((p) => p.id == widget.photoId).firstOrNull;
 
+  bool _imgError = false; // photo could not load → retry tile (tester 13-Oct)
+
   void _resolveAspect(ImageProvider img) {
-    if (_aspect != null) return;
+    if (_aspect != null || _imgError) return;
     final stream = img.resolve(const ImageConfiguration());
     late ImageStreamListener l;
     l = ImageStreamListener((info, _) {
@@ -92,12 +94,19 @@ class _PickScreenState extends ConsumerState<PickScreen> {
         setState(() => _aspect = info.image.width / info.image.height);
       }
       stream.removeListener(l);
-    }, onError: (_, __) => stream.removeListener(l));
+    }, onError: (_, __) {
+      stream.removeListener(l);
+      if (mounted) setState(() => _imgError = true);
+    });
     stream.addListener(l);
   }
 
   void _push(PickState next) {
     HapticFeedback.selectionClick();
+    // Nothing selected any more → no "1 SET" left on the control (tester 13-Oct).
+    if (next.sets == 0 && next.shown > 0 && next.marks.every((m) => m.n <= 0)) {
+      next = next.copy(shown: 0);
+    }
     setState(() {
       _undo.add(_s);
       _s = next;
@@ -199,7 +208,7 @@ class _PickScreenState extends ConsumerState<PickScreen> {
       }
     }
     // The AI's point wins only if it sits well inside the visible part.
-    if (points != null && i < points.length && points[i].length == 2) {
+    if (points != null && bw > 0 && bh > 0 && i < points.length && points[i].length == 2) {
       final px = points[i][1].toDouble(), py = points[i][0].toDouble();
       final gx = ((px - b[1]) / bw * n).floor(), gy = ((py - b[0]) / bh * n).floor();
       if (gx >= 1 && gy >= 1 && gx < n - 1 && gy < n - 1 && !hidden(px, py)) {
@@ -401,6 +410,19 @@ class _PickScreenState extends ConsumerState<PickScreen> {
 
   /// Sarees found on the current photo (set in build).
   List<List<int>>? _boxesNow;
+  bool _reboxed = false;
+
+  /// Tester 13-Oct: the box list can be renumbered between visits (pieces
+  /// refresh, a shop "count" fix) — a saved mark keeps its x/y, so its box is
+  /// taken from where it sits, never from the old index.
+  void _rebox(List<List<int>> boxes) {
+    if (_reboxed) return;
+    _reboxed = true;
+    if (_s.marks.isEmpty) return;
+    _s = _s.copy(marks: [
+      for (final m in _s.marks) PickMark(m.x, m.y, m.n, _hitBox(boxes, m.x, m.y) ?? m.box),
+    ]);
+  }
 
   int get _setsShown => _s.sets > 0 ? _s.sets : _s.shown;
 
@@ -444,11 +466,14 @@ class _PickScreenState extends ConsumerState<PickScreen> {
   /// Undo: the recorded history first; when the design was reopened (no
   /// history), step back from the last selection — last number −1, then the
   /// sets — until the photo is clear (owner).
+  bool _dirty = false; // changed without history (reopened design + UNDO)
+
   void _undoLast() {
     if (_undo.isNotEmpty) {
       setState(() => _s = _undo.removeLast());
       return;
     }
+    _dirty = true; // tester 13-Oct: back must save this too
     final marks = [..._s.marks];
     final i = marks.lastIndexWhere((m) => m.n > 0);
     if (i >= 0) {
@@ -466,7 +491,21 @@ class _PickScreenState extends ConsumerState<PickScreen> {
     }
   }
 
+  bool _closing = false; // DONE / back already running
+
   Future<void> _done({bool leaving = false}) async {
+    // Tester 13-Oct: a 2nd tap re-ran this with a stale cart snapshot and
+    // toggled the design OUT of the cart (pick wiped).
+    if (_closing) return;
+    _closing = true;
+    try {
+      await _finish(leaving: leaving);
+    } finally {
+      _closing = false;
+    }
+  }
+
+  Future<void> _finish({required bool leaving}) async {
     final favs = ref.read(favoritesProvider);
     if (_s.isEmpty) {
       // Owner 11-Oct: nothing selected (no piece, no SET) = it can't be in the cart.
@@ -493,8 +532,9 @@ class _PickScreenState extends ConsumerState<PickScreen> {
       warmPickPreview(ph, _s, sareeCount: ref.read(piecesProvider.notifier).piecesFor(ph));
     }
     await ref.read(picksProvider.notifier).set(widget.photoId, _s);
-    // Picking something puts the design in the cart.
-    if (!favs.contains(widget.photoId)) {
+    // Picking something puts the design in the cart (fresh read — the cart
+    // may have changed while the pick was being saved).
+    if (!ref.read(favoritesProvider).contains(widget.photoId)) {
       await ref.read(favoritesProvider.notifier).toggle(widget.photoId);
     }
     if (mounted) context.pop();
@@ -512,6 +552,7 @@ class _PickScreenState extends ConsumerState<PickScreen> {
     }
     final boxes = pc.boxesFor(photo);
     _boxesNow = boxes;
+    if (boxes != null && boxes.isNotEmpty) _rebox(boxes);
     _points = pc.pointsFor(photo);
     final count = pc.piecesFor(photo);
     // Instant: the grid thumbnail is already on the phone — show it at once
@@ -526,7 +567,7 @@ class _PickScreenState extends ConsumerState<PickScreen> {
     final total = _s.total(count);
 
     return PopScope(
-      canPop: _undo.isEmpty,
+      canPop: _undo.isEmpty && !_dirty,
       onPopInvokedWithResult: (didPop, _) async {
         if (didPop) return;
         await _done(leaving: true); // leaving with changes = keep them (empty = not in cart)
@@ -568,7 +609,17 @@ class _PickScreenState extends ConsumerState<PickScreen> {
               // Owner 12-Oct: SET right ABOVE the photo, UNDO / CLEAR right BELOW it.
               child: LayoutBuilder(builder: (context, outer) {
                 final a = _aspect;
-                if (a == null) return const SizedBox.shrink();
+                if (a == null) {
+                  if (!_imgError) return const SizedBox.shrink();
+                  return Center(
+                    child: TextButton.icon(
+                      onPressed: () => setState(() => _imgError = false), // build resolves again
+                      icon: const Icon(Icons.refresh_rounded, color: Colors.white),
+                      label: Text(t('Could not load the photo — tap to retry', 'फ़ोटो नहीं खुली — फिर से कोशिश करें'),
+                          style: const TextStyle(color: Colors.white)),
+                    ),
+                  );
+                }
                 var iw = outer.maxWidth;
                 var ih = iw / a;
                 final room = outer.maxHeight - 56 - 66;

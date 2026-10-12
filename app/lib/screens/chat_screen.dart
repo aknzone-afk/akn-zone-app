@@ -206,7 +206,7 @@ class _ChatImage extends ConsumerWidget {
         if (b == null) {
           return const SizedBox(width: 160, height: 120, child: Center(child: CircularProgressIndicator(strokeWidth: 2)));
         }
-        final bytes = Uint8List.fromList(b);
+        final bytes = b is Uint8List ? b : Uint8List.fromList(b); // no second copy
         if (_bytes.length >= 60) _bytes.remove(_bytes.keys.first);
         _bytes[key] = bytes;
         return _image(context, bytes);

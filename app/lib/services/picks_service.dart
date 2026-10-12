@@ -71,12 +71,12 @@ class PickState {
   String summary(int? sareeCount) {
     if (sets == 0 && shown > 0) {
       final extra = markPieces - _setPcs;
-      return '$shown SET ($_setPcs PCS)${extra > 0 ? ' + $extra EXTRA ${extra == 1 ? 'PC' : 'PCS'}' : ''} = $markPieces ${markPieces == 1 ? 'SAREE' : 'SAREES'}';
+      return '$shown SET ($_setPcs ${_setPcs == 1 ? 'PC' : 'PCS'})${extra > 0 ? ' + $extra EXTRA ${extra == 1 ? 'PC' : 'PCS'}' : ''} = $markPieces ${markPieces == 1 ? 'SAREE' : 'SAREES'}';
     }
     final parts = <String>[
       if (sets > 0)
         sareeCount != null
-            ? '$sets SET (${sets * _perSet(sareeCount)} PCS)'
+            ? '$sets SET (${sets * _perSet(sareeCount)} ${sets * _perSet(sareeCount) == 1 ? 'PC' : 'PCS'})'
             : '$sets SET',
       if (markPieces > 0) '$markPieces SELECTED ${markPieces == 1 ? 'PC' : 'PCS'}',
     ];

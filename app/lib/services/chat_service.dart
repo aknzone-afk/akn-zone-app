@@ -99,6 +99,7 @@ class ChatService {
     return d['paid'] == true;
   }
 
+  /// Downloaded chat files — newest 60 only (tester 13-Oct: unbounded before).
   static final Map<String, List<int>> _files = {};
   static Future<List<int>?> file(Dio dio, String mobile, String id) async {
     if (_files.containsKey(id)) return _files[id];
@@ -108,6 +109,7 @@ class ChatService {
             receiveTimeout: const Duration(seconds: 40)));
     final d = res.data is String ? jsonDecode(res.data as String) : res.data;
     if (d is! Map || d['ok'] != true) return null;
+    if (_files.length >= 60) _files.remove(_files.keys.first);
     return _files[id] = base64Decode(d['data'] as String);
   }
 
