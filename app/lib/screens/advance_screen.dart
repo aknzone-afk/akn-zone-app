@@ -53,6 +53,7 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
   Future<void> _start() async {
     final o = _order;
     if (o == null) return;
+    setState(() => _busy = true); // tester 13-Oct: no upload until we know
     try {
       final r = await ref.read(dioProvider).post<dynamic>('$_cloud/advanceStart',
           data: {
@@ -66,7 +67,9 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
           options: Options(headers: _hdr, contentType: Headers.jsonContentType));
       final d = r.data is String ? jsonDecode(r.data as String) : r.data;
       if (d is Map && d['state'] == 'paid') await _paid((d['paid'] as num).toInt(), d['utr'] as String?);
-    } catch (_) {}
+    } catch (_) {} finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   Future<void> _payUpi(int due) async {

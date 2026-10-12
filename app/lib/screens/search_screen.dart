@@ -16,10 +16,14 @@ class SearchScreen extends ConsumerStatefulWidget {
 
 class _SearchScreenState extends ConsumerState<SearchScreen> {
   late TextEditingController _ctrl;
+  // Taken while mounted: `ref` must not be used from dispose() (Riverpod
+  // throws "Cannot use ref after the widget was disposed" — seen 13-Oct).
+  late final FilterNotifier _filter;
 
   @override
   void initState() {
     super.initState();
+    _filter = ref.read(filterProvider.notifier);
     _ctrl = TextEditingController(text: ref.read(filterProvider).query);
   }
 
@@ -27,7 +31,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
   void dispose() {
     // Clear the persisted query so other screens don't open with a stale
     // search filter applied.
-    ref.read(filterProvider.notifier).setQuery('');
+    _filter.setQuery('');
     _ctrl.dispose();
     super.dispose();
   }

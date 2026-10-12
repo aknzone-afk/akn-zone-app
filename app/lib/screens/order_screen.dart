@@ -93,12 +93,14 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       _oldMobile.text = saved.mobile;
       if (!_old) {
         _newForm = true;
-        _searched = OrderService.normalizeIndianMobile(saved.mobile);
+        _newFormForeign = !saved.isIndia;
       }
     }
     _oldMobile.addListener(_onMobileTyped);
     _taxId.addListener(_onTaxTyped);
-    if (_old && saved != null) {
+    // Tester 13-Oct: a customer saved as NEW is looked up again too — once
+    // the shop has made their ledger they are an old customer (no advance).
+    if (saved != null && saved.isIndia) {
       WidgetsBinding.instance.addPostFrameCallback((_) => _onMobileTyped());
     }
     OrderService.transports().then((t) {
@@ -314,7 +316,10 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
   @override
   void dispose() {
     _pinDebounce?.cancel();
+    _oldMobile.removeListener(_onMobileTyped);
+    _taxId.removeListener(_onTaxTyped);
     for (final c in [
+      _oldMobile,
       _billName,
       _address,
       _bookingPlace,
@@ -409,8 +414,8 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
   }) _check(List<Photo> photos) {
     final v = OrderService.valueCheck(photos
         .map((p) => (price: p.price, qty: _qtyFor(p), sure: _qtySure(p))));
-    // Add-on window open → no minimum.
-    if (OrderService.activeParcel(ref.read(sharedPreferencesProvider)) != null) {
+    // Add-on window open (for THIS number) → no minimum.
+    if (OrderService.activeParcel(ref.read(sharedPreferencesProvider), mobile: _mobileNow) != null) {
       return (known: v.known, unpriced: v.unpriced, below: false, progress: 1.0);
     }
     return v;
@@ -424,8 +429,24 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         .toList();
   }
 
+  /// The number this order is for (window / minimum / advance are per number).
+  String get _mobileNow => _newForm ? _mobile.text : _oldMobile.text;
+
+  bool _submitting = false; // _submit running (the checks before the dialog)
+
   Future<void> _submit(List<Photo> photos) async {
-    if (_sending || photos.isEmpty) return;
+    // Tester 13-Oct: a 2nd tap while the phone-lock / new-party checks ran
+    // (no dialog yet, button still live) placed a 2nd order.
+    if (_sending || _submitting || photos.isEmpty) return;
+    setState(() => _submitting = true);
+    try {
+      await _submitChecked(photos);
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  Future<void> _submitChecked(List<Photo> photos) async {
     FocusScope.of(context).unfocus();
     final marks = ref.read(marksProvider.notifier);
     if (photos.any((p) => marks.isReading(p.id))) {
@@ -668,7 +689,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     }
     // New customer: tell them NOW what the shop's Tally would refuse (owner).
     if (customer.kind != 'old' &&
-        OrderService.activeParcel(ref.read(sharedPreferencesProvider)) == null) {
+        OrderService.activeParcel(ref.read(sharedPreferencesProvider), mobile: customer.mobile) == null) {
       if (!await _newPartyCheck(customer) || !mounted) return;
     }
     final lockNote = [
@@ -730,7 +751,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         // Owner 12-Oct: NEW Indian customer pays a 10% advance first.
         holdForAdvance: customer.kind != 'old' &&
             customer.isIndia &&
-            OrderService.activeParcel(ref.read(sharedPreferencesProvider)) == null,
+            OrderService.activeParcel(ref.read(sharedPreferencesProvider), mobile: customer.mobile) == null,
       );
     } catch (e) {
       order = null;
@@ -919,7 +940,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                   ),
                   Builder(builder: (_) {
                     final parcel = OrderService.activeParcel(
-                        ref.read(sharedPreferencesProvider));
+                        ref.read(sharedPreferencesProvider), mobile: _mobileNow);
                     return MinOrderBar(
                         progress: value.progress,
                         below: value.below,
@@ -1090,6 +1111,16 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                     ],
                     onChanged: (v) => setState(() {
                       _country = v ?? 'India';
+                      if (_country == 'India' && _newFormForeign) {
+                        // Tester 13-Oct: back to India → the mobile search
+                        // box again (a foreign number is no Indian number).
+                        _newFormForeign = false;
+                        _newForm = false;
+                        _mobile.clear();
+                        _party = null;
+                        _matches = [];
+                        _searched = null;
+                      }
                       if (_country != 'India') {
                         _taxId.clear(); // no GST / PAN / Aadhaar abroad
                         _gstNote = null;
@@ -1224,7 +1255,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                 child: SizedBox(
                   height: 52,
                   child: FilledButton.icon(
-                    onPressed: _sending
+                    onPressed: (_sending || _submitting)
                         ? null
                         : (value.below
                             ? () => context.go('/')

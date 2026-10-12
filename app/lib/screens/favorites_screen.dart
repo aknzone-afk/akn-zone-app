@@ -40,7 +40,8 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
       final n = marks[p.id] ?? count;
       return (price: p.price, qty: n ?? 1, sure: n != null);
     }));
-    final parcel = OrderService.activeParcel(ref.read(sharedPreferencesProvider));
+    final parcel = OrderService.activeParcel(ref.read(sharedPreferencesProvider),
+        mobile: OrderService.savedCustomer(ref.read(sharedPreferencesProvider))?.mobile);
     if (!v.below || parcel != null) {
       context.push('/order');
       return;
@@ -261,7 +262,8 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
                         padding: const EdgeInsets.only(top: 6),
                         child: Builder(builder: (_) {
                           final parcel = OrderService.activeParcel(
-                              ref.read(sharedPreferencesProvider));
+                              ref.read(sharedPreferencesProvider),
+                              mobile: OrderService.savedCustomer(ref.read(sharedPreferencesProvider))?.mobile);
                           return MinOrderBar(
                               progress: v.progress,
                               below: v.below,

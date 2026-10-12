@@ -100,11 +100,16 @@ class OrderService {
   /// 2 add-ons (no spamming) — after that it is a new order.
   static const kMaxAddOns = 2;
   static ({String number, DateTime until, int? serial, int left})? activeParcel(
-      SharedPreferences prefs) {
+      SharedPreferences prefs, {String? mobile}) {
     final now = DateTime.now();
     final all = history(prefs);
+    // Tester 13-Oct: the window belongs to the NUMBER that ordered — a 2nd
+    // number on the same phone (a new customer) must not ride that parcel
+    // (no minimum, no advance, no ledger).
+    final who = mobile == null ? null : _digits(mobile);
     for (final o in all) {
       if (o.addOnTo != null) continue; // add-ons never extend the window
+      if (who != null && _digits(o.customer.mobile) != who) continue;
       // Test 12-Oct: an order that never reached the shop (e.g. a new
       // customer's order still waiting for the advance) opens no window.
       if (o.status != OrderStatus.sent) continue;
@@ -116,6 +121,11 @@ class OrderService {
       return null; // newest main order is outside its window / used up
     }
     return null;
+  }
+
+  static String _digits(String m) {
+    final d = m.replaceAll(RegExp(r'\D'), '');
+    return d.length > 10 ? d.substring(d.length - 10) : d;
   }
 
   static String untilLabel(DateTime until) {
@@ -541,7 +551,7 @@ class OrderService {
     void Function(String step)? onStep,
     bool holdForAdvance = false,
   }) async {
-    final parcel = activeParcel(prefs);
+    final parcel = activeParcel(prefs, mobile: customer.mobile);
     final order = Order(
       addOnTo: parcel?.number,
       number: newOrderNumber(),
@@ -608,16 +618,14 @@ class OrderService {
     }
 
     await Future.wait(List.generate(min(6, max(1, photos.length)), (_) => worker()));
+    // New customer: held for the 10% advance (AdvanceScreen). The flag is in
+    // the FIRST save, so a crash right here can never let a retry send it.
+    order.awaitingAdvance = holdForAdvance;
     await _saveOrder(prefs, order);
     await saveCustomer(prefs, customer);
 
     onStep?.call('Sending order…');
-    if (holdForAdvance) {
-      // New customer: wait for the 10% advance (AdvanceScreen) before sending.
-      order.awaitingAdvance = true;
-      await _saveOrder(prefs, order);
-      return order;
-    }
+    if (holdForAdvance) return order;
     await _trySend(prefs, dio, order, onStep: onStep);
     return order;
   }
@@ -645,7 +653,7 @@ class OrderService {
   static Future<Order?> advancePaid(
       SharedPreferences prefs, Dio dio, String number, int paid, String? utr) async {
     final o = history(prefs).where((x) => x.number == number).firstOrNull;
-    if (o == null) return null;
+    if (o == null || o.status == OrderStatus.sent) return o;
     o.awaitingAdvance = false;
     o.advancePaid = paid;
     o.advanceUtr = utr;
@@ -690,7 +698,21 @@ class OrderService {
     return (token: token, chatId: chat);
   }
 
+  /// Orders being sent right now. A resume (retryPending) while an upload is
+  /// still running must not post the same album twice (tester 13-Oct).
+  static final _inFlight = <String>{};
+
   static Future<bool> _trySend(SharedPreferences prefs, Dio dio, Order order,
+      {void Function(String step)? onStep}) async {
+    if (!_inFlight.add(order.number)) return false;
+    try {
+      return await _trySendNow(prefs, dio, order, onStep: onStep);
+    } finally {
+      _inFlight.remove(order.number);
+    }
+  }
+
+  static Future<bool> _trySendNow(SharedPreferences prefs, Dio dio, Order order,
       {void Function(String step)? onStep}) async {
     try {
       final cfg = await _config(prefs, dio);
@@ -929,6 +951,7 @@ class OrderService {
   /// bill and staff replies work too.
   static Future<void> ensureRegistered(SharedPreferences prefs, Dio dio) async {
     for (final o in history(prefs)) {
+      if (_inFlight.contains(o.number)) continue; // that send registers itself
       if (o.tgMsgId != null && !o.registered) await _register(prefs, dio, o);
     }
   }
