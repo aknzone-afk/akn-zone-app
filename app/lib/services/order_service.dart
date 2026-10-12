@@ -83,28 +83,32 @@ class OrderService {
   /// parcel today and tomorrow with NO ₹30,000 minimum. Returns the main
   /// order's number and when the window closes (midnight after tomorrow), or
   /// null when no window is open.
-  static ({String number, DateTime until, int? serial})? activeParcel(
+  /// Owner 12-Oct: the window is 24 HOURS from the main order, and at most
+  /// 2 add-ons (no spamming) — after that it is a new order.
+  static const kMaxAddOns = 2;
+  static ({String number, DateTime until, int? serial, int left})? activeParcel(
       SharedPreferences prefs) {
     final now = DateTime.now();
-    for (final o in history(prefs)) {
+    final all = history(prefs);
+    for (final o in all) {
       if (o.addOnTo != null) continue; // add-ons never extend the window
-      final c = o.createdAt;
-      final until = DateTime(c.year, c.month, c.day + 2);
-      if (now.isBefore(until)) {
-        return (number: o.number, until: until, serial: o.serial);
+      final until = o.createdAt.add(const Duration(hours: 24));
+      final used = all.where((x) => x.addOnTo == o.number).length;
+      if (now.isBefore(until) && used < kMaxAddOns) {
+        return (number: o.number, until: until, serial: o.serial, left: kMaxAddOns - used);
       }
-      return null; // newest main order is outside its window
+      return null; // newest main order is outside its window / used up
     }
     return null;
   }
 
   static String untilLabel(DateTime until) {
+    final h = until.hour % 12 == 0 ? 12 : until.hour % 12;
+    final mm = until.minute.toString().padLeft(2, '0');
+    final ap = until.hour < 12 ? 'AM' : 'PM';
     final today = DateTime.now();
-    final lastDay = until.subtract(const Duration(minutes: 1));
-    final isToday = lastDay.year == today.year &&
-        lastDay.month == today.month &&
-        lastDay.day == today.day;
-    return isToday ? 'today 11:59 PM' : 'tomorrow 11:59 PM';
+    final sameDay = until.year == today.year && until.month == today.month && until.day == today.day;
+    return '${sameDay ? 'today' : 'tomorrow'} $h:$mm $ap';
   }
 
   // ───────────────────────── minimum order ─────────────────────────
