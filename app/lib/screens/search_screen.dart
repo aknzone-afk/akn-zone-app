@@ -79,8 +79,7 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
                       child: Column(mainAxisSize: MainAxisSize.min, children: [
                         Icon(Icons.search_off_rounded, size: 48, color: Theme.of(context).colorScheme.outline),
                         const SizedBox(height: 12),
-                        UText('No design found for "$query".
-Check the design number and try again.',
+                        UText('No design found for "$query".\nCheck the design number and try again.',
                             textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodyMedium),
                       ]),
                     ),

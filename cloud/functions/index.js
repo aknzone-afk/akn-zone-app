@@ -1499,9 +1499,10 @@ exports.advanceStart = onRequest(
     const cur = (await docRef.get()).data();
     if (cur && cur.state === "paid") return res.json({ ok: true, state: "paid", paid: cur.paid, utr: cur.utr });
     // Tester 13-Oct: a phone clock hours ahead made every screenshot "before
-    // the order" — the order time is the server's, at most 30 min back.
+    // the order" — never later than the server's now. An order placed offline
+    // keeps its own (earlier) time, so a payment made meanwhile still counts.
     const now = Date.now();
-    const orderAt = Math.max(Math.min(Number(b.orderAt) || now, now), now - 30 * 60e3);
+    const orderAt = Math.max(Math.min(Number(b.orderAt) || now, now), now - 7 * 86400e3);
     await docRef.set({ ref, due, billName: String(b.billName || "").slice(0, 120), mobile: String(b.mobile || "").slice(0, 20),
       total: Math.round(Number(b.total) || 0),
       state: "pending", ...(cur ? {} : { at: now, orderAt }) }, { merge: true });
