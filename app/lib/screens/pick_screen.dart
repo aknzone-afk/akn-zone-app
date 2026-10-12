@@ -701,7 +701,7 @@ class _PickScreenState extends ConsumerState<PickScreen> {
                     fit: BoxFit.scaleDown,
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      'DESIGN NO. | ${(photo.designNumber ?? '-').toUpperCase()}',
+                      'DESIGN NO. - ${(photo.designNumber ?? '-').toUpperCase()}',
                       style: const TextStyle(
                           color: Colors.white,
                           fontWeight: FontWeight.w900,

@@ -67,7 +67,11 @@ class PhotoCard extends ConsumerWidget {
       onLongPress: onLongPress,
       // Owner 11-Oct: the select box sits UNDER the photo (not on it), so the
       // rate and design no. stay visible on the picture.
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      // Owner 12-Oct: in the cart the SELECTED box + ✕ sit ABOVE the photo.
+      child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          verticalDirection: removeMode ? VerticalDirection.up : VerticalDirection.down,
+          children: [
         Expanded(
           child: Stack(
         fit: StackFit.expand,
