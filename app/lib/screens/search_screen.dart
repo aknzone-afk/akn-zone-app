@@ -72,7 +72,20 @@ class _SearchScreenState extends ConsumerState<SearchScreen> {
         ),
         body: query.isEmpty
             ? const _SearchEmptyState()
-            : PhotoGrid(photos: results),
+            : results.isEmpty
+                ? Center(
+                    child: Padding(
+                      padding: const EdgeInsets.all(32),
+                      child: Column(mainAxisSize: MainAxisSize.min, children: [
+                        Icon(Icons.search_off_rounded, size: 48, color: Theme.of(context).colorScheme.outline),
+                        const SizedBox(height: 12),
+                        UText('No design found for "$query".
+Check the design number and try again.',
+                            textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodyMedium),
+                      ]),
+                    ),
+                  )
+                : PhotoGrid(photos: results),
         bottomNavigationBar: const SelectionBottomBar(),
       ),
     );

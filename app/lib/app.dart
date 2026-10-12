@@ -37,6 +37,15 @@ import 'theme.dart';
 List<String>? _idList(Object? extra) =>
     extra is List ? extra.map((e) => '$e').toList() : null;
 
+/// Opens the chat once — a push tap / bubble tap while the chat is already
+/// open must not stack a second ChatScreen (tester 13-Oct).
+void openChat() {
+  final cfg = appRouter.routerDelegate.currentConfiguration;
+  final top = cfg.isEmpty ? cfg.uri.path : cfg.last.matchedLocation;
+  if (top == '/chat') return;
+  appRouter.push('/chat');
+}
+
 /// Public so the notification service can deep-link (e.g. to the daily-update
 /// folder) from outside the widget tree.
 final appRouter = GoRouter(

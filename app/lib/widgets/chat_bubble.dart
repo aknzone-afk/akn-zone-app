@@ -23,6 +23,8 @@ class ChatBubble extends ConsumerStatefulWidget {
 
 class _ChatBubbleState extends ConsumerState<ChatBubble> with WidgetsBindingObserver {
   Timer? _t;
+  bool _busy = false; // one poll at a time
+  bool _paused = false; // app in background: no polling
   int _unread = 0;
   ChatMsg? _popup;
   int _lastPopupAt = 0;
@@ -49,7 +51,8 @@ class _ChatBubbleState extends ConsumerState<ChatBubble> with WidgetsBindingObse
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState s) {
-    if (s == AppLifecycleState.resumed) _check();
+    _paused = s != AppLifecycleState.resumed;
+    if (!_paused) _check();
   }
 
   void _route() {
@@ -71,7 +74,8 @@ class _ChatBubbleState extends ConsumerState<ChatBubble> with WidgetsBindingObse
 
   Future<void> _check() async {
     final prefs = ref.read(sharedPreferencesProvider);
-    if (ChatService.mobiles(prefs).isEmpty || _path == '/chat') return;
+    if (_busy || _paused || ChatService.mobiles(prefs).isEmpty || _path == '/chat') return;
+    _busy = true;
     // ignore: unawaited_futures
     PushService.register(prefs, ref.read(dioProvider)); // phone ↔ its customer numbers
     try {
@@ -89,15 +93,17 @@ class _ChatBubbleState extends ConsumerState<ChatBubble> with WidgetsBindingObse
           _lastPopupAt = fresh.last.at;
         }
       });
-      // …and a phone notification (e.g. the bill: "Sir, please make the payment").
-      await ChatService.notifyNew(prefs, ref.read(dioProvider),
-          (t, b) => NotificationService.instance.showNow(t, b));
-    } catch (_) {}
+      // The phone already rang by push (or the popup above shows it) — never
+      // a second banner for the same message (tester 13-Oct).
+      if (fresh.isNotEmpty) await ChatService.markNotified(prefs, fresh.last.at);
+    } catch (_) {} finally {
+      _busy = false;
+    }
   }
 
   void _open() {
     setState(() => _popup = null);
-    appRouter.push('/chat');
+    openChat();
   }
 
   @override

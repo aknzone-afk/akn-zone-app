@@ -944,17 +944,19 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                     if (_usingSaved && !_old)
                       TextButton(
                           onPressed: _clearSaved,
-                          child: Text(t('New party', 'नई पार्टी'))),
+                          child: Text(t('Clear form', 'फ़ॉर्म खाली करें'))),
                   ]),
                   if (_usingSaved && !_old)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Text(
-                          t('Filled from your last order — check and send.', 'पिछले ऑर्डर से भरा है — जाँच कर भेजें।'),
+                          t('Filled from your last details — check and send.', 'पिछली जानकारी से भरा है — जाँच कर भेजें।'),
                           style: Theme.of(context).textTheme.bodySmall),
                     ),
                   const SizedBox(height: 6),
-                  ...[
+                  // Outside India the form's own "Mobile No. (with country
+                  // code)" is the only number box — no +91 search box on top.
+                  if (_india || !_newForm) ...[
                     Text('Type your mobile number — we find your account by ourselves.',
                         style: Theme.of(context).textTheme.bodySmall),
                     const SizedBox(height: 8),

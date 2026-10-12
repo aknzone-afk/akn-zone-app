@@ -84,7 +84,7 @@ Future<void> main() async {
   // opens the chat. Non-fatal if Firebase is unavailable.
   // ignore: unawaited_futures
   PushService.init(() => WidgetsBinding.instance
-      .addPostFrameCallback((_) => appRouter.push('/chat')));
+      .addPostFrameCallback((_) => openChat()));
 
   // Cold-launched by tapping the notification → open the folder after frame 1.
   if (launchPayload != null && launchPayload.isNotEmpty) {
@@ -100,7 +100,7 @@ ProviderContainer? _rootContainer;
 /// from Drive on the spot, so the folder reflects exactly what's there now.
 void _openDailyUpdate(String payload) {
   if (payload == 'chat') {
-    appRouter.push('/chat'); // bill / shop message notification
+    openChat(); // bill / shop message notification
     return;
   }
   // Open the folder immediately so the tap feels instant (cached view first),

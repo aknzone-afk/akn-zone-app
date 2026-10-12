@@ -634,6 +634,7 @@ class OrderService {
         if (o.status != OrderStatus.pending || o.awaitingAdvance) continue;
         if (await _trySend(prefs, dio, o)) sent++;
       }
+      await ensureRegistered(prefs, dio);
     } finally {
       _retrying = false;
     }
@@ -714,7 +715,7 @@ class OrderService {
       }
       for (var c = order.photoChunksSent; c < chunks.length; c++) {
         onStep?.call('Sending photos… ${c + 1}/${chunks.length}');
-        await _sendAlbum(dio, api, cfg.chatId, dir, chunks[c], order);
+        order.tgExtraIds.addAll(await _sendAlbum(dio, api, cfg.chatId, dir, chunks[c], order));
         order.photoChunksSent = c + 1;
         await _saveOrder(prefs, order);
       }
@@ -751,74 +752,45 @@ class OrderService {
               ],
             ]
           }),
-          'text': await detailsText(order,
-              mainSerial: order.addOnTo == null
-                  ? null
-                  : history(prefs)
-                      .where((x) => x.number == order.addOnTo)
-                      .firstOrNull
-                      ?.serial),
+          'text': await _details(prefs, order),
           'parse_mode': 'HTML',
           'disable_web_page_preview': 'true',
         });
         order.detailsSent = true;
+        order.tgChat = cfg.chatId;
+        order.tgMsgId = _msgId(sent);
+        order.registered = false;
         await _saveOrder(prefs, order);
-        // Link this Telegram message to the order (status + LR replies).
-        try {
-          final msgId = (sent is Map && sent['result'] is Map)
-              ? sent['result']['message_id']
-              : null;
-          if (msgId != null) {
-            await dio.post<dynamic>(
-              '$_cloud/registerOrder',
-              data: {
-                'ref': order.number,
-                'chat': cfg.chatId,
-                'msg': msgId,
-                'text': await detailsText(order,
-                    mainSerial: order.addOnTo == null
-                        ? null
-                        : history(prefs)
-                            .where((x) => x.number == order.addOnTo)
-                            .firstOrNull
-                            ?.serial),
-                'mobile': order.customer.mobile,
-                'billName': order.customer.billName,
-                // New customer: full details → the shop's NewPartyBot makes
-                // the Tally ledger (broker YOUTUBE) once the order is taken up.
-                if (order.customer.kind != 'old' && order.addOnTo == null)
-                  'cust': order.customer.toJson(),
-                'serial': order.serial,
-                'addOnTo': order.addOnTo,
-              },
-              options: Options(
-                  headers: {'x-app-key': 'akn-zone-app-2026'},
-                  contentType: Headers.jsonContentType),
-            );
-          }
-        } catch (_) {}
+        // Link this Telegram message to the order (status buttons, staff
+        // replies, NewPartyBot). Retried from ensureRegistered if it fails.
+        await _register(prefs, dio, order);
       }
       // Owner 11-Oct: photos → details → "ORDER NO. N" on its own → two dots.
       if (!order.noSent) {
-        await _post(dio, '$api/sendMessage', {
+        final sent = await _post(dio, '$api/sendMessage', {
           'chat_id': cfg.chatId,
           'text': '<b>ORDER NO. ${order.serial ?? '-'}</b>',
           'parse_mode': 'HTML',
         });
         order.noSent = true;
+        _remember(order, _msgId(sent));
         await _saveOrder(prefs, order);
       }
       // Separate message with two dots — closes this order in the group.
       if (!order.dotsSent) {
-        await _post(dio, '$api/sendMessage', {
+        final sent = await _post(dio, '$api/sendMessage', {
           'chat_id': cfg.chatId,
           'text': '.' + String.fromCharCode(10) + '.',
         });
         order.dotsSent = true;
+        _remember(order, _msgId(sent));
       }
       order.status = OrderStatus.sent;
       order.lastError = null;
       await _saveOrder(prefs, order);
+      // The cloud gets the album / ORDER NO. / dots ids too (staff reply to
+      // any of them); harmless if it already has them.
+      if (!order.registered) await _register(prefs, dio, order);
       await _keepSmallCopies(dir);
       return true;
     } catch (e) {
@@ -842,12 +814,12 @@ class OrderService {
     return folder.isEmpty ? parts.join(' · ') : '${parts.join(' · ')}\n$folder';
   }
 
-  static Future<void> _sendAlbum(Dio dio, String api, String chatId,
+  /// Sends one album (≤10 photos); returns the Telegram message ids.
+  static Future<List<int>> _sendAlbum(Dio dio, String api, String chatId,
       Directory dir, List<(int, OrderItem)> chunk, Order order) async {
-    final total = order.items.length;
     if (chunk.length == 1) {
-      final (i, it) = chunk.first;
-      await _post(
+      final (i, _) = chunk.first;
+      final sent = await _post(
         dio,
         '$api/sendPhoto',
         FormData.fromMap({
@@ -856,7 +828,8 @@ class OrderService {
               filename: '$i.jpg'),
         }),
       );
-      return;
+      final id = _msgId(sent);
+      return id == null ? const [] : [id];
     }
     final media = <Map<String, String>>[];
     final form = FormData();
@@ -873,7 +846,7 @@ class OrderService {
       ));
     }
     form.fields.add(MapEntry('media', jsonEncode(media)));
-    await _post(dio, '$api/sendMediaGroup', form, rebuild: () async {
+    final sent = await _post(dio, '$api/sendMediaGroup', form, rebuild: () async {
       final f = FormData();
       f.fields.addAll(form.fields);
       for (final (i, _) in chunk) {
@@ -885,6 +858,79 @@ class OrderService {
       }
       return f;
     });
+    return [
+      if (sent is Map && sent['result'] is List)
+        for (final m in sent['result'] as List)
+          if (m is Map && m['message_id'] is num) (m['message_id'] as num).toInt(),
+    ];
+  }
+
+  static int? _msgId(dynamic sent) => (sent is Map && sent['result'] is Map)
+      ? (sent['result']['message_id'] as num?)?.toInt()
+      : null;
+
+  static void _remember(Order order, int? id) {
+    if (id == null || order.tgExtraIds.contains(id)) return;
+    order.tgExtraIds.add(id);
+    order.registered = false;
+  }
+
+  static Future<String> _details(SharedPreferences prefs, Order order) =>
+      detailsText(order,
+          mainSerial: order.addOnTo == null
+              ? null
+              : history(prefs)
+                  .where((x) => x.number == order.addOnTo)
+                  .firstOrNull
+                  ?.serial);
+
+  /// Tells the cloud this order's Telegram messages (status buttons, staff
+  /// replies → the customer's chat, NewPartyBot ledger). Idempotent.
+  static Future<bool> _register(
+      SharedPreferences prefs, Dio dio, Order order) async {
+    final msgId = order.tgMsgId;
+    final chat = order.tgChat;
+    if (msgId == null || chat == null) return false;
+    try {
+      final res = await dio.post<dynamic>(
+        '$_cloud/registerOrder',
+        data: {
+          'ref': order.number,
+          'chat': chat,
+          'msg': msgId,
+          'extra': order.tgExtraIds,
+          'text': await _details(prefs, order),
+          'mobile': order.customer.mobile,
+          'billName': order.customer.billName,
+          // New customer: full details → the shop's NewPartyBot makes
+          // the Tally ledger (broker YOUTUBE) once the order is taken up.
+          if (order.customer.kind != 'old' && order.addOnTo == null)
+            'cust': order.customer.toJson(),
+          'serial': order.serial,
+          'addOnTo': order.addOnTo,
+        },
+        options: Options(
+            headers: {'x-app-key': 'akn-zone-app-2026'},
+            contentType: Headers.jsonContentType,
+            receiveTimeout: const Duration(seconds: 20)),
+      );
+      final d = res.data is String ? jsonDecode(res.data as String) : res.data;
+      if (d is Map && d['ok'] == true) {
+        order.registered = true;
+        await _saveOrder(prefs, order);
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  /// Orders the cloud never heard of (no internet right after they went to
+  /// the group) — registered on the next chance, so their status buttons,
+  /// bill and staff replies work too.
+  static Future<void> ensureRegistered(SharedPreferences prefs, Dio dio) async {
+    for (final o in history(prefs)) {
+      if (o.tgMsgId != null && !o.registered) await _register(prefs, dio, o);
+    }
   }
 
   /// POST with Telegram's flood-control handling (429 → wait retry_after).

@@ -118,7 +118,8 @@ class _ItemTile extends StatelessWidget {
               appBar: AppBar(
                   backgroundColor: Colors.black,
                   foregroundColor: Colors.white,
-                  title: Text('DESIGN NO. ${item.designNumber ?? '-'}')),
+                  title: Text('DESIGN NO. ${item.designNumber ?? '-'}',
+                      style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800))),
               body: InteractiveViewer(
                   maxScale: 6, child: SizedBox.expand(child: _image(fit: BoxFit.contain))),
             )));

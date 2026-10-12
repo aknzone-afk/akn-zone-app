@@ -174,30 +174,56 @@ class _ChatImage extends ConsumerWidget {
   final String? mime;
   const _ChatImage({required this.mobile, required this.id, this.mime});
 
+  /// Each photo is downloaded once; the 8-s poll rebuilds the list and must
+  /// not re-fetch (and blink) every picture. Bounded, oldest dropped.
+  static final _bytes = <String, Uint8List>{};
+  static final _loading = <String, Future<List<int>?>>{};
+
+  static Future<List<int>?> _fetch(WidgetRef ref, String key, String mobile, String id) {
+    final hit = _loading[key];
+    if (hit != null) return hit;
+    if (_loading.length >= 80) _loading.remove(_loading.keys.first);
+    final f = ChatService.file(ref.read(dioProvider), mobile, id).then((b) {
+      if (b == null) _loading.remove(key); // failed → tried again next build
+      return b;
+    });
+    _loading[key] = f;
+    return f;
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     if ((mime ?? '').contains('pdf')) {
       return const Padding(padding: EdgeInsets.all(4), child: Text('📄 PDF bill (see My Orders → VIEW BILL)'));
     }
+    final key = '$mobile/$id';
+    final have = _bytes[key];
+    if (have != null) return _image(context, have);
     return FutureBuilder<List<int>?>(
-      future: ChatService.file(ref.read(dioProvider), mobile, id),
+      future: _fetch(ref, key, mobile, id),
       builder: (_, s) {
         final b = s.data;
         if (b == null) {
           return const SizedBox(width: 160, height: 120, child: Center(child: CircularProgressIndicator(strokeWidth: 2)));
         }
         final bytes = Uint8List.fromList(b);
-        return GestureDetector(
-          onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
-              builder: (_) => Scaffold(
-                  backgroundColor: Colors.black,
-                  appBar: AppBar(backgroundColor: Colors.black, foregroundColor: Colors.white),
-                  body: InteractiveViewer(maxScale: 6, child: Center(child: Image.memory(bytes)))))),
-          child: ClipRRect(
-              borderRadius: BorderRadius.circular(8),
-              child: Image.memory(bytes, width: 220, fit: BoxFit.cover)),
-        );
+        if (_bytes.length >= 60) _bytes.remove(_bytes.keys.first);
+        _bytes[key] = bytes;
+        return _image(context, bytes);
       },
     );
+  }
+
+  Widget _image(BuildContext context, Uint8List bytes) {
+  return GestureDetector(
+    onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(
+        builder: (_) => Scaffold(
+            backgroundColor: Colors.black,
+            appBar: AppBar(backgroundColor: Colors.black, foregroundColor: Colors.white),
+            body: InteractiveViewer(maxScale: 6, child: Center(child: Image.memory(bytes)))))),
+    child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: Image.memory(bytes, width: 220, fit: BoxFit.cover, gaplessPlayback: true)),
+  );
   }
 }

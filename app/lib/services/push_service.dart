@@ -48,7 +48,10 @@ class PushService {
       FirebaseMessaging.onMessageOpenedApp.listen((_) => onOpenChat());
       final first = await fm.getInitialMessage();
       if (first != null) onOpenChat();
-      fm.onTokenRefresh.listen((_) => _lastKey = null);
+      fm.onTokenRefresh.listen((_) {
+        _lastKey = null;
+        _stale = true;
+      });
       _ready = true;
     } catch (e) {
       debugPrint('push init: $e');
@@ -56,6 +59,7 @@ class PushService {
   }
 
   static String? _lastKey;
+  static bool _stale = false; // the token changed since the last post
 
   /// Tells the cloud which customer mobiles this phone follows. Cheap to call
   /// often: only posts when the token or the mobiles changed.
@@ -63,6 +67,13 @@ class PushService {
     if (!_ready) return;
     final mobiles = ChatService.mobiles(prefs);
     if (mobiles.isEmpty) return;
+    // Same numbers as the last successful post and no new token → nothing to
+    // do (this runs with every 30-s chat poll).
+    final last = _lastKey ?? prefs.getString(_kSent);
+    if (!_stale && last != null && last.endsWith('|${mobiles.join(',')}')) {
+      _lastKey = last;
+      return;
+    }
     try {
       final fm = FirebaseMessaging.instance;
       final perm = await fm.requestPermission(alert: true, badge: true, sound: true);
@@ -94,6 +105,7 @@ class PushService {
               receiveTimeout: const Duration(seconds: 15)));
       if (r.statusCode == 200) {
         _lastKey = key;
+        _stale = false;
         await prefs.setString(_kSent, key);
       }
     } catch (e) {

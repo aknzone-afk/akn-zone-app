@@ -14,6 +14,7 @@ import '../models/order.dart';
 import '../providers/providers.dart';
 import '../services/order_service.dart';
 import '../widgets/helpline_icon.dart';
+import '../app.dart' show openChat;
 
 /// Every order placed from this phone, newest first, with its delivery state.
 /// Orders that couldn't be sent (no internet) can be re-sent with one tap —
@@ -50,6 +51,7 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
             'addOnTo': o.addOnTo,
           }
       };
+      await OrderService.ensureRegistered(ref.read(sharedPreferencesProvider), ref.read(dioProvider));
       final st = await OrderService.fetchStatuses(ref.read(dioProvider), refs, info: info);
       if (mounted) setState(() => _st = st);
     } catch (_) {}
@@ -238,7 +240,7 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                                 .contains(_st[o.number]?.status))
                             InkWell(
                               borderRadius: BorderRadius.circular(10),
-                              onTap: () => context.push('/chat'),
+                              onTap: openChat,
                               child: Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                 decoration: BoxDecoration(

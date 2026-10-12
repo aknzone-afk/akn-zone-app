@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'chat_service.dart';
 import 'notification_service.dart';
 import 'package:dio/dio.dart';
@@ -40,7 +42,11 @@ void backgroundCallbackDispatcher() {
     if (taskName == kChatTaskName) {
       try {
         final prefs = await SharedPreferences.getInstance();
-        await ChatService.notifyNew(prefs, Dio(), (t, b) => NotificationService.instance.showNow(t, b));
+        // Real push registered → the phone already rang for every message;
+        // this 15-min check is only the fallback for phones without push.
+        if (prefs.getString('push_registered_v1') == null) {
+          await ChatService.notifyNew(prefs, Dio(), (t, b) => NotificationService.instance.showNow(t, b));
+        }
       } catch (_) {}
       return true;
     }
@@ -115,6 +121,9 @@ Future<void> _prefetchAllThumbnailsBg(Iterable<String> ids) async {
 class BackgroundRefresh {
   /// One-time setup at app launch. Idempotent — safe to call every cold start.
   static Future<void> register() async {
+    // iPhone: WorkManager needs BGTaskScheduler ids we never declared — it
+    // would only log errors. Push + the foreground checks cover iOS.
+    if (!Platform.isAndroid) return;
     await Workmanager().initialize(
       backgroundCallbackDispatcher,
       isInDebugMode: false,

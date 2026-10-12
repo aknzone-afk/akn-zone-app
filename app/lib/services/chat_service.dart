@@ -128,6 +128,12 @@ class ChatService {
     await p.setInt(_kNotified, m.at);
   }
 
+  /// The app itself showed this message (popup / push) — the background
+  /// check must not ring the phone for it again.
+  static Future<void> markNotified(SharedPreferences p, int at) async {
+    if ((p.getInt(_kNotified) ?? 0) < at) await p.setInt(_kNotified, at);
+  }
+
   static int seenAt(SharedPreferences p) => p.getInt(_kSeen) ?? 0;
   static Future<void> markSeen(SharedPreferences p, int at) => p.setInt(_kSeen, at);
 }

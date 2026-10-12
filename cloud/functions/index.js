@@ -26,6 +26,20 @@ const GEMINI_API_KEY = defineSecret("BBAPP_GEMINI_KEY");
 // push goes straight to Apple (APNs), owner 11-Oct-2026.
 const APNS_KEY = defineSecret("BBAPP_APNS_KEY");
 const APP_KEY = "akn-zone-app-2026"; // not a secret — only keeps random traffic out
+// Shop-PC programs (NewPartyBot, parties_sync, dispatch_sync, count_pieces)
+// prove themselves with this key (C:\BotSecrets\bbapp_pc_key.txt). The
+// app's key sits inside the APK, so it alone must not open party data.
+const PC_KEY = defineSecret("BBAPP_PC_KEY");
+const pcOk = (req) => {
+  try { return !!req.get("x-pc-key") && req.get("x-pc-key") === PC_KEY.value().trim(); } catch (e) { return false; }
+};
+/** Cut a text at a line end (never inside an HTML tag). */
+const cutAt = (x, n) => {
+  const t = String(x || "");
+  if (t.length <= n) return t;
+  const i = t.lastIndexOf("\n", n);
+  return t.slice(0, i > n / 2 ? i : n) + "\n…";
+};
 const MAX_BYTES = 3 * 1024 * 1024;
 const PER_IP_PER_HOUR = 120;
 
@@ -107,10 +121,10 @@ const BOX_SCHEMA = { type: "object", properties: {
   designNo: { type: ["string", "null"] }, price: { type: ["number", "null"] } }, required: ["sarees"] };
 
 exports.detectSarees = onRequest(
-  { region: "asia-south1", secrets: [GEMINI_API_KEY], timeoutSeconds: 120, memory: "512MiB", maxInstances: 5, invoker: "public" },
+  { region: "asia-south1", secrets: [GEMINI_API_KEY, PC_KEY], timeoutSeconds: 120, memory: "512MiB", maxInstances: 5, invoker: "public" },
   async (req, res) => {
     if (req.method !== "POST") return res.status(405).json({ ok: false });
-    if (req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    if (!pcOk(req)) return res.status(403).json({ ok: false });
     const bytes = Buffer.from(String((req.body && req.body.image) || ""), "base64");
     if (!bytes.length || bytes.length > MAX_BYTES) return res.status(400).json({ ok: false, error: "bad image" });
     const { MODELS } = require("./orderVision");
@@ -288,7 +302,9 @@ function statusText(d, fallbackPlain) {
       ? `↩️ Undone ${escH(name)} — by ${escH(e.by)} · ${hhmm(e.at)}`
       : `✔ ${escH(name)} — by ${escH(e.by)} · ${hhmm(e.at)}`;
   });
-  return `${base}\n\n<b>STATUS</b>\n${lines.join("\n")}`;
+  const tail = `\n\n<b>STATUS</b>\n${lines.join("\n")}`;
+  // Telegram edits fail above 4096 chars — trim the details, keep the status.
+  return (base.length + tail.length > 4000 ? cutAt(base, 4000 - tail.length) : base) + tail;
 }
 
 /**
@@ -324,10 +340,17 @@ function statusKeyboard(ref, d) {
 }
 
 async function tg(method, body) {
-  const r = await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/${method}`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-  });
-  return r.json().catch(() => ({}));
+  try {
+    const r = await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/${method}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!j.ok) logger.warn("tg " + method, { code: j.error_code, desc: j.description, chat: body && body.chat_id });
+    return j;
+  } catch (e) {
+    logger.warn("tg " + method, { error: e.message });
+    return {};
+  }
 }
 
 exports.tgWebhook = onRequest(
@@ -463,7 +486,7 @@ exports.registerOrder = onRequest(
     const ref = String((req.body && req.body.ref) || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
     const chat = String((req.body && req.body.chat) || "").replace(/[^0-9-]/g, "");
     const msg = Number(req.body && req.body.msg) || 0;
-    const text = String((req.body && req.body.text) || "").slice(0, 3500);
+    const text = cutAt((req.body && req.body.text) || "", 3500);
     const mobile = String((req.body && req.body.mobile) || "").replace(/\D/g, "").slice(-10);
     const billName = String((req.body && req.body.billName) || "").slice(0, 120);
     const serial = Number(req.body && req.body.serial) || null;
@@ -471,6 +494,14 @@ exports.registerOrder = onRequest(
     if (!ref || !chat || !msg) return res.status(400).json({ ok: false });
     const db = admin.firestore();
     await db.collection("bbapp_msgmap").doc(`${chat}_${msg}`).set({ ref });
+    // Tester 13-Oct: staff also reply to a photo of the album, to "ORDER NO. N"
+    // or to the dots — those replies must reach the customer too.
+    const extra = [...new Set(((req.body && req.body.extra) || []).map(Number).filter((n) => n > 0))].slice(0, 60);
+    if (extra.length) {
+      const batch = db.batch();
+      for (const id of extra) batch.set(db.collection("bbapp_msgmap").doc(`${chat}_${id}`), { ref });
+      await batch.commit();
+    }
     const docRef = db.collection("bbapp_orders").doc(ref);
     const d = await docRef.get();
     // New customer's details (for the Tally ledger via NewPartyBot).
@@ -485,9 +516,13 @@ exports.registerOrder = onRequest(
     // screenshot goes under the order in the group.
     const adv = (await db.collection("bbapp_advances").doc(ref).get()).data();
     if (adv && adv.state === "paid" && !(d.exists && d.get("advanceAmt"))) {
-      await docRef.set({ advanceAmt: adv.paid, advanceUtr: adv.utr || null,
-        payments: [{ amt: Number(adv.paid), txn: adv.utr || "", paidAt: adv.paidAt || null, at: Date.now(), kind: "advance" }],
-        paidTotal: Number(adv.paid) }, { merge: true });
+      // One payment per screenshot (a part-paid advance has 2 UTRs): the
+      // same screenshot sent again later as a "bill payment" is then a dup.
+      const parts = (adv.parts && adv.parts.length) ? adv.parts
+        : [{ amt: Number(adv.paid), utr: adv.utr || null, paidAt: adv.paidAt || null }];
+      const payments = parts.map((x) => ({ amt: Number(x.amt) || 0, txn: x.utr || "", paidAt: x.paidAt || null, at: Date.now(), kind: "advance" }));
+      await docRef.set({ advanceAmt: adv.paid, advanceUtr: adv.utr || null, payments,
+        paidTotal: payments.reduce((t, x) => t + x.amt, 0) }, { merge: true });
       // Owner 12-Oct: the advance screenshot is the FIRST message of the
       // customer's chat (and goes to the new-party group with the ledger).
       try {
@@ -673,9 +708,22 @@ async function handleBillPhoto(db, m) {
   const nm = normName(b.buyerName);
   // Open orders (not yet billed), newest first; main orders before add-ons.
   const snap = await db.collection("bbapp_orders").where("status", "in", ["received", "getting_ready"]).get();
-  const all = snap.docs.map((x) => ({ id: x.id, ...x.data() }))
-    .filter((o) => (mob && o.mobile && o.mobile === mob) || (nm && o.billName && normName(o.billName) === nm)
-      || (nm && o.billName && (normName(o.billName).includes(nm) || nm.includes(normName(o.billName)))));
+  // Tester 13-Oct: mobile > exact name > part of the name (6+ letters). Only
+  // the best class counts, and a part-match shared by two parties is refused.
+  const score = (o) => {
+    const on = normName(o.billName);
+    if (mob && o.mobile && o.mobile === mob) return 3;
+    if (nm && on && on === nm) return 2;
+    if (nm && on && nm.length >= 6 && on.length >= 6 && (on.includes(nm) || nm.includes(on))) return 1;
+    return 0;
+  };
+  const scored = snap.docs.map((x) => ({ id: x.id, ...x.data() })).map((o) => ({ ...o, _s: score(o) })).filter((o) => o._s > 0);
+  const best = scored.reduce((t, o) => Math.max(t, o._s), 0);
+  const all = scored.filter((o) => o._s === best);
+  if (best === 1 && new Set(all.map((o) => o.mobile || o.billName)).size > 1) {
+    const names = [...new Set(all.map((o) => `${o.billName}${o.serial ? " (ORDER NO. " + o.serial + ")" : ""}`))].join(", ");
+    return reply(`❓ "${b.buyerName || "?"}" could be ${names}. Bill not sent — please put the party's mobile number on the bill, or send it again with the exact name.`);
+  }
   if (!all.length) {
     return reply(`❓ No open app order found for ${b.buyerName || "this party"}${mob ? " (" + mob + ")" : ""}. Bill not sent.`);
   }
@@ -827,7 +875,10 @@ exports.paymentProof = onRequest(
     if (d.msg) fd.append("reply_to_message_id", String(d.msg));
     fd.append("caption", `💰 Payment screenshot — ${d.billName || ""}${d.serial ? " · ORDER NO. " + d.serial : ""}`);
     fd.append("photo", new Blob([img], { type: "image/jpeg" }), "payment.jpg");
-    await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/sendPhoto`, { method: "POST", body: fd });
+    const sent = await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/sendPhoto`, { method: "POST", body: fd })
+      .then((r) => r.json()).catch(() => ({}));
+    const mid = sent && sent.result && sent.result.message_id;
+    if (mid) await db.collection("bbapp_msgmap").doc(`${d.chat}_${mid}`).set({ ref: d.billGroup || ref });
     let paid = false;
     if ((d.status || "received") === "bill_sent") paid = await checkPayment(db, ref, img);
     return res.json({ ok: true, paid });
@@ -843,9 +894,9 @@ exports.paymentProof = onRequest(
  */
 const normBill = (x) => String(x || "").toUpperCase().replace(/\s+/g, "");
 exports.syncDispatch = onRequest(
-  { region: "asia-south1", secrets: [TG_TOKEN], timeoutSeconds: 120, memory: "256MiB", maxInstances: 1, invoker: "public" },
+  { region: "asia-south1", secrets: [PC_KEY, TG_TOKEN], timeoutSeconds: 120, memory: "256MiB", maxInstances: 1, invoker: "public" },
   async (req, res) => {
-    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    if (req.method !== "POST" || !pcOk(req)) return res.status(403).json({ ok: false });
     const rows = (req.body && req.body.rows) || [];
     const byBill = new Map();
     for (const r of rows) if (r && r.billNo) byBill.set(normBill(r.billNo), r);
@@ -975,8 +1026,8 @@ exports.aknChatOut = onDocumentCreated(
     const mob = chatId.slice(0, chatId.indexOf("_")).slice(-10);
     const ords = await db.collection("bbapp_orders").where("mobile", "==", mob).get();
     const latest = ords.docs.map((x) => ({ id: x.id, ...x.data() }))
-      .sort((a, b) => (b.createdAt && b.createdAt.toMillis ? b.createdAt.toMillis() : 0) -
-        (a.createdAt && a.createdAt.toMillis ? a.createdAt.toMillis() : 0))[0];
+      .sort((a, b) => ((b.serial || 0) - (a.serial || 0)) ||
+        ((b.statusAt && b.statusAt.toMillis ? b.statusAt.toMillis() : 0) - (a.statusAt && a.statusAt.toMillis ? a.statusAt.toMillis() : 0)))[0];
     let by = "";
     if (d.senderStaffId) {
       const st = (await db.collection("staff").doc(String(d.senderStaffId)).get()).data() || {};
@@ -1072,9 +1123,9 @@ exports.chatFile = onRequest(
  * {ack:[refs]} marks them handed over.
  */
 exports.newParties = onRequest(
-  { region: "asia-south1", timeoutSeconds: 30, memory: "256MiB", maxInstances: 1, invoker: "public" },
+  { region: "asia-south1", secrets: [PC_KEY], timeoutSeconds: 30, memory: "256MiB", maxInstances: 1, invoker: "public" },
   async (req, res) => {
-    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    if (req.method !== "POST" || !(pcOk(req) || req.get("x-app-key") === APP_KEY)) return res.status(403).json({ ok: false });
     const db = admin.firestore();
     for (const r of ((req.body && req.body.ack) || []).slice(0, 50)) {
       await db.collection("bbapp_orders").doc(String(r).replace(/[^A-Z0-9-]/gi, "")).set(
@@ -1135,8 +1186,8 @@ exports.checkNewParty = onRequest(
     const mob = String(c.mobile || "").replace(/\D/g, "").slice(-10);
     const byMob = (mob && ((PARTIES[mob] || [])[0] || {}).name) || (mob && NPCHECK.mobiles[mob]);
     if (byMob) {
-      errors.push({ field: "mobile", msg: `We already have a ledger with this mobile number: ${byMob}. ` +
-        "Please choose OLD CUSTOMER and search with this mobile number." });
+      errors.push({ field: "mobile", msg: `We already have an account with this mobile number: ${byMob}. ` +
+        "Type this mobile number in the Mobile box — your account opens by itself." });
     }
     // Owner 11-Oct: a bill name already in Tally becomes "NAME (BOOKING PLACE)"
     // by itself (Tally can't have two ledgers with one name) — no error.
@@ -1151,8 +1202,8 @@ exports.checkNewParty = onRequest(
     }
     const gst = String(c.taxId || "").toUpperCase().replace(/\s/g, "");
     if (/^\d{2}[A-Z]{5}\d{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/.test(gst) && NPCHECK.gstins[gst] && !byMob) {
-      errors.push({ field: "taxId", msg: `This GST number is already with us: ${NPCHECK.gstins[gst]}. ` +
-        "Please choose OLD CUSTOMER and search with your mobile number." });
+      errors.push({ field: "taxId", msg: `This GST number is already registered with us: ${NPCHECK.gstins[gst]}. ` +
+        "Please order from that account (type its mobile number in the Mobile box), or remove the GST number." });
     }
     const tr = npNorm(c.transport);
     if (tr && (c.country || "India") === "India" && !NPCHECK.transports.includes(tr)) {
@@ -1181,8 +1232,10 @@ exports.registerPush = onRequest(
     const mobiles = ((req.body && req.body.mobiles) || []).map((m) => String(m).replace(/\D/g, "").slice(-10))
       .filter((m) => m.length === 10).slice(0, 3);
     if (token.length < 20 || !mobiles.length) return res.status(400).json({ ok: false });
-    const id = require("crypto").createHash("sha1").update(token).digest("hex");
     const apns = String((req.body && req.body.apns) || "").replace(/[^0-9a-f]/gi, "").slice(0, 200);
+    // iPhone: keyed by the Apple address, so an FCM-token change never makes a
+    // second record (= two pushes per message).
+    const id = require("crypto").createHash("sha1").update(apns || token).digest("hex");
     await admin.firestore().collection("bbapp_push").doc(id).set({ token, mobiles, apns: apns || null,
       platform: String((req.body && req.body.platform) || "").slice(0, 10), at: Date.now() });
     return res.json({ ok: true });
@@ -1195,7 +1248,10 @@ async function pushTo(db, mobile, body) {
     if (snap.empty) return;
     const text = String(body || "New message").slice(0, 180);
     const iosDocs = snap.docs.filter((d) => d.get("apns"));
+    const sentApns = new Set();
     for (const d of iosDocs) {
+      if (sentApns.has(d.get("apns"))) continue; // old duplicate record
+      sentApns.add(d.get("apns"));
       const st = await apnsSend(d.get("apns"), text);
       if (st === 400 || st === 410) d.ref.set({ apns: null }, { merge: true }).catch(() => {});
     }
@@ -1236,10 +1292,15 @@ function apnsJwt() {
 function apnsSend(deviceToken, text, host = "api.push.apple.com") {
   const http2 = require("http2");
   return new Promise((resolve) => {
-    let done = false;
-    const finish = (v) => { if (!done) { done = true; resolve(v); } };
+    let done = false, c = null;
+    const finish = (v) => {
+      if (done) return;
+      done = true;
+      try { if (c) c.close(); } catch (e) { /* closed */ }
+      resolve(v);
+    };
     try {
-      const c = http2.connect("https://" + host);
+      c = http2.connect("https://" + host);
       c.on("error", () => finish(0));
       const req = c.request({ ":method": "POST", ":path": "/3/device/" + deviceToken,
         authorization: "bearer " + apnsJwt(), "apns-topic": "com.bbsynthetics.catalog",
@@ -1248,7 +1309,6 @@ function apnsSend(deviceToken, text, host = "api.push.apple.com") {
       req.on("response", (hd) => { status = hd[":status"]; });
       req.on("data", (d) => { out += d; });
       req.on("end", () => {
-        c.close();
         if (status !== 200) logger.warn("apns", { status, out: out.slice(0, 200), host });
         // a development (Xcode) build's token is only valid on the sandbox host
         if (status === 400 && /BadDeviceToken/.test(out) && host === "api.push.apple.com") {
@@ -1360,9 +1420,9 @@ exports.gstLookup = onRequest(
 
 /** Shop PC (NewPartyBot): a ledger it just made → found by mobile at once. */
 exports.registerParty = onRequest(
-  { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 2, invoker: "public" },
+  { region: "asia-south1", secrets: [PC_KEY], timeoutSeconds: 20, memory: "256MiB", maxInstances: 2, invoker: "public" },
   async (req, res) => {
-    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    if (req.method !== "POST" || !(pcOk(req) || req.get("x-app-key") === APP_KEY)) return res.status(403).json({ ok: false });
     const b = req.body || {};
     const rec = { name: String(b.name || "").slice(0, 120), address: String(b.address || "").slice(0, 300),
       dest: String(b.dest || "").slice(0, 60), pincode: String(b.pincode || "").slice(0, 10),
@@ -1383,9 +1443,9 @@ exports.registerParty = onRequest(
 
 /** Shop PC (parties_sync): drop live entries whose ledger no longer exists in Tally. */
 exports.pruneLiveParties = onRequest(
-  { region: "asia-south1", timeoutSeconds: 60, memory: "256MiB", maxInstances: 1, invoker: "public" },
+  { region: "asia-south1", secrets: [PC_KEY], timeoutSeconds: 60, memory: "256MiB", maxInstances: 1, invoker: "public" },
   async (req, res) => {
-    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    if (req.method !== "POST" || !pcOk(req)) return res.status(403).json({ ok: false });
     const db = admin.firestore();
     const snap = await db.collection("bbapp_parties_live").get();
     if (req.body && req.body.list) {
@@ -1438,9 +1498,13 @@ exports.advanceStart = onRequest(
     const docRef = admin.firestore().collection("bbapp_advances").doc(ref);
     const cur = (await docRef.get()).data();
     if (cur && cur.state === "paid") return res.json({ ok: true, state: "paid", paid: cur.paid, utr: cur.utr });
+    // Tester 13-Oct: a phone clock hours ahead made every screenshot "before
+    // the order" — the order time is the server's, at most 30 min back.
+    const now = Date.now();
+    const orderAt = Math.max(Math.min(Number(b.orderAt) || now, now), now - 30 * 60e3);
     await docRef.set({ ref, due, billName: String(b.billName || "").slice(0, 120), mobile: String(b.mobile || "").slice(0, 20),
-      total: Math.round(Number(b.total) || 0), orderAt: Number(b.orderAt) || Date.now(),
-      state: "pending", ...(cur ? {} : { at: Date.now() }) }, { merge: true });
+      total: Math.round(Number(b.total) || 0),
+      state: "pending", ...(cur ? {} : { at: now, orderAt }) }, { merge: true });
     return res.json({ ok: true, state: "pending" });
   },
 );
@@ -1459,13 +1523,23 @@ exports.advanceProof = onRequest(
     const a = (await docRef.get()).data();
     if (!a) return res.json({ ok: false, error: "Please go back and press PLACE ORDER again." });
     if (a.state === "paid") return res.json({ ok: true, paid: a.paid, utr: a.utr });
-    const p = await geminiJson(img, "image/jpeg", ADV_PROMPT, ADV_SCHEMA);
     const fail = (msg) => res.json({ ok: false, error: msg });
+    // Tester 13-Oct: the SAME screenshot sent twice (no UTR readable) was
+    // counted twice — every image is remembered by its hash.
+    const hash = require("crypto").createHash("sha1").update(img).digest("hex");
+    const have = (a.parts || []).reduce((t, x) => t + (x.amt || 0), 0);
+    if ((a.hashes || []).includes(hash)) {
+      return fail(`This screenshot is already received (${inr(have)} of the ${inr(a.due)} advance). Please pay ${inr(Math.max(0, a.due - have))} more and send that screenshot.`);
+    }
+    const usedImg = await db.collection("bbapp_advances").where("hashes", "array-contains", hash).get();
+    if (usedImg.docs.some((x) => x.id !== ref)) return fail("This payment screenshot was already used for another order.");
+    const p = await geminiJson(img, "image/jpeg", ADV_PROMPT, ADV_SCHEMA);
     if (!p) return fail("Could not read the screenshot right now — please try again in a minute.");
     if (!p.amount || p.amount <= 0) return fail("This does not look like a payment screenshot. Please send the screenshot of your payment.");
     if (p.success === false) return fail("This payment does not show as successful. Please send the screenshot of a successful payment.");
-    const who = `${p.payee || ""} ${p.payeeAccount || ""}`.toUpperCase().replace(/[^A-Z0-9@.]/g, "");
-    const ours = who.includes("SYNTHETIC") || who.includes("173947529358") || who.includes("270320110001776");
+    // Only OUR name / UPI id / account — "XYZ SYNTHETICS" must not pass.
+    const who = `${p.payee || ""} ${p.payeeAccount || ""}`.toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const ours = who.includes("BBSYNTHETIC") || who.includes("173947529358") || who.includes("270320110001776");
     if (!ours) return fail(`This payment went to "${p.payee || p.payeeAccount || "someone else"}". The advance must be paid to B.B SYNTHETICS only.`);
     const tm = /^\d{1,2}:\d{2}$/.test(String(p.time || "")) ? String(p.time).padStart(5, "0") : null;
     const dt = /^\d{4}-\d{2}-\d{2}$/.test(String(p.date || "")) ? p.date
@@ -1480,18 +1554,22 @@ exports.advanceProof = onRequest(
       const used2 = await db.collection("bbapp_advances").where("utr", "==", utr).get();
       if ([...used.docs, ...used2.docs].some((x) => x.id !== ref)) return fail("This payment screenshot was already used for another order.");
     }
-    // Test 12-Oct: part-payments add up (₹5,000 now + ₹4,770 later).
-    const parts = (a.parts || []).filter((x) => !utr || x.utr !== utr);
-    parts.push({ amt: Math.round(p.amount), utr: utr || null, paidAt: isNaN(paidAt) ? null : paidAt });
+    // Test 12-Oct: part-payments add up (₹5,000 now + ₹4,770 later). The
+    // same payment again (same UTR, or no UTR but same amount + time) is one.
+    const amt = Math.round(p.amount);
+    const at = isNaN(paidAt) ? null : paidAt;
+    const parts = (a.parts || []).filter((x) => !(utr ? x.utr === utr : (!x.utr && x.amt === amt && at && x.paidAt === at)));
+    parts.push({ amt, utr: utr || null, paidAt: at, hash });
     const sum = parts.reduce((t, x) => t + x.amt, 0);
     const path = `advances/${ref}${parts.length > 1 ? "-" + parts.length : ""}.jpg`;
     await admin.storage().bucket().file(path).save(img, { contentType: "image/jpeg" });
     const utrs = parts.map((x) => x.utr).filter(Boolean);
+    const hashes = admin.firestore.FieldValue.arrayUnion(hash);
     if (sum + 1 < a.due) {
-      await docRef.set({ parts, utrs, utr: utrs[0] || null, path }, { merge: true });
+      await docRef.set({ parts, utrs, hashes, utr: utrs[0] || null, path }, { merge: true });
       return fail(`Received ${inr(sum)} of the ${inr(a.due)} advance. Please pay ${inr(a.due - sum)} more and send that screenshot too.`);
     }
-    await docRef.set({ state: "paid", parts, utrs, paid: sum, utr: utrs.join(", ") || null, payee: p.payee || null,
+    await docRef.set({ state: "paid", parts, utrs, hashes, paid: sum, utr: utrs.join(", ") || null, payee: p.payee || null,
       paidAt: isNaN(paidAt) ? null : paidAt, path, verifiedAt: Date.now() }, { merge: true });
     return res.json({ ok: true, paid: sum, utr: utrs.join(", ") || null });
   },
@@ -1514,9 +1592,9 @@ exports.advanceReminder = onSchedule(
 
 /** Shop PC (NewPartyBot): a new customer's advance screenshot. */
 exports.advanceImage = onRequest(
-  { region: "asia-south1", timeoutSeconds: 30, memory: "256MiB", maxInstances: 2, invoker: "public" },
+  { region: "asia-south1", secrets: [PC_KEY], timeoutSeconds: 30, memory: "256MiB", maxInstances: 2, invoker: "public" },
   async (req, res) => {
-    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    if (req.method !== "POST" || !(pcOk(req) || req.get("x-app-key") === APP_KEY)) return res.status(403).json({ ok: false });
     const ref = String((req.body && req.body.ref) || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
     const a = ref ? (await admin.firestore().collection("bbapp_advances").doc(ref).get()).data() : null;
     if (!a || a.state !== "paid" || !a.path) return res.json({ ok: false });

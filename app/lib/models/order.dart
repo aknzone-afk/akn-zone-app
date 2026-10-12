@@ -128,6 +128,15 @@ class Order {
   bool awaitingAdvance;
   int? advancePaid;
   String? advanceUtr;
+
+  /// Telegram chat + ids of this order's messages (details; album photos,
+  /// "ORDER NO. N", the dots) and whether the cloud has them. A staff reply
+  /// to ANY of them reaches the customer's chat; registration is retried
+  /// until it succeeds (tester 13-Oct: one lost call = no status, no bill).
+  String? tgChat;
+  int? tgMsgId;
+  List<int> tgExtraIds;
+  bool registered;
   String? lastError;
 
   Order({
@@ -147,8 +156,12 @@ class Order {
     this.awaitingAdvance = false,
     this.advancePaid,
     this.advanceUtr,
+    this.tgChat,
+    this.tgMsgId,
+    List<int>? tgExtraIds,
+    this.registered = false,
     this.lastError,
-  });
+  }) : tgExtraIds = tgExtraIds ?? [];
 
   int get totalPcs => items.fold(0, (s, i) => s + i.qty);
 
@@ -182,6 +195,10 @@ class Order {
         if (awaitingAdvance) 'hold': true,
         if (advancePaid != null) 'adv': advancePaid,
         if (advanceUtr != null) 'advUtr': advanceUtr,
+        if (tgChat != null) 'chat': tgChat,
+        if (tgMsgId != null) 'msgId': tgMsgId,
+        if (tgExtraIds.isNotEmpty) 'extra': tgExtraIds,
+        'reg': registered,
         'err': lastError,
       };
 
@@ -206,6 +223,10 @@ class Order {
         awaitingAdvance: (j['hold'] ?? false) as bool,
         advancePaid: j['adv'] as int?,
         advanceUtr: j['advUtr'] as String?,
+        tgChat: j['chat'] as String?,
+        tgMsgId: (j['msgId'] as num?)?.toInt(),
+        tgExtraIds: [for (final e in (j['extra'] as List? ?? const [])) (e as num).toInt()],
+        registered: (j['reg'] ?? false) as bool,
         lastError: j['err'] as String?,
       );
 }
