@@ -125,9 +125,9 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
     }
     // mode == order → share at original prices, nothing to change.
 
-    // Step 2 — share as separate pictures or one combined PDF.
-    final asPdf = await _chooseShareFormat();
-    if (asPdf == null || !mounted) return;
+    // Owner 12-Oct: no "Pictures / One PDF" choice — straight to the share
+    // sheet with the pictures.
+    const asPdf = false;
 
     await _doShare(
       favPhotos,
@@ -135,41 +135,6 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
       gstPercent: gstPercent,
       manualPrices: manualPrices,
       asPdf: asPdf,
-    );
-  }
-
-  /// Final step before WhatsApp: send as separate pictures or one PDF.
-  /// Returns true = PDF, false = pictures, null = cancelled.
-  Future<bool?> _chooseShareFormat() {
-    final scheme = Theme.of(context).colorScheme;
-    return showModalBottomSheet<bool>(
-      context: context,
-      isScrollControlled: true,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 16),
-            UText('Send as', style: Theme.of(ctx).textTheme.titleMedium),
-            const SizedBox(height: 8),
-            ListTile(
-              leading: Icon(Icons.image_rounded, color: scheme.primary),
-              title: const UText('Pictures'),
-              subtitle: const UText('Each design as a separate image'),
-              onTap: () => Navigator.pop(ctx, false),
-            ),
-            ListTile(
-              leading:
-                  Icon(Icons.picture_as_pdf_rounded, color: scheme.primary),
-              title: const UText('One PDF'),
-              subtitle:
-                  const UText('All designs together in a single PDF file'),
-              onTap: () => Navigator.pop(ctx, true),
-            ),
-            const SizedBox(height: 12),
-          ],
-        ),
-      ),
     );
   }
 
@@ -377,9 +342,8 @@ class _PriceModeSheet extends StatelessWidget {
                 style: Theme.of(context).textTheme.titleMedium),
             const SizedBox(height: 8),
             ListTile(
-              leading: Icon(Icons.storefront_rounded, color: scheme.primary),
-              title: const UText('Send to supplier'),
-              subtitle: const UText('AKN ZONE · SURAT — to order'),
+              leading: const Icon(Icons.chat_rounded, color: Color(0xFF25D366)),
+              title: const UText('Send on WhatsApp'),
               onTap: () => Navigator.pop(context, _PriceMode.order),
             ),
             const Divider(height: 1),
