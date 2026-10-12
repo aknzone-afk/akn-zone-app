@@ -178,6 +178,16 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                         const SizedBox(height: 6),
                         if (sent)
                           _Steps(status: _st[o.number]?.status)
+                        else if (o.awaitingAdvance)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: FilledButton.icon(
+                              style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B8E3A)),
+                              onPressed: () => context.push('/advance/${Uri.encodeComponent(o.number)}'),
+                              icon: const Icon(Icons.payments_rounded, size: 18),
+                              label: const Text('PAY 10% ADVANCE TO CONFIRM'),
+                            ),
+                          )
                         else
                           Text(o.lastError ?? t('Waiting to send', 'भेजना बाकी')),
                         if (sent && (_st[o.number]?.bill ?? false))

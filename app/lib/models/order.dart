@@ -122,6 +122,12 @@ class Order {
 
   /// The separate "ORDER NO. N" message (owner 11-Oct) reached the group.
   bool noSent;
+
+  /// NEW customer: held on the phone until the 10% advance is verified
+  /// (owner 12-Oct); then sent with [advancePaid].
+  bool awaitingAdvance;
+  int? advancePaid;
+  String? advanceUtr;
   String? lastError;
 
   Order({
@@ -138,6 +144,9 @@ class Order {
     this.detailsSent = false,
     this.dotsSent = false,
     this.noSent = false,
+    this.awaitingAdvance = false,
+    this.advancePaid,
+    this.advanceUtr,
     this.lastError,
   });
 
@@ -170,6 +179,9 @@ class Order {
         'details': detailsSent,
         'dots': dotsSent,
         'no': noSent,
+        if (awaitingAdvance) 'hold': true,
+        if (advancePaid != null) 'adv': advancePaid,
+        if (advanceUtr != null) 'advUtr': advanceUtr,
         'err': lastError,
       };
 
@@ -191,6 +203,9 @@ class Order {
         detailsSent: (j['details'] ?? false) as bool,
         dotsSent: (j['dots'] ?? j['details'] ?? false) as bool,
         noSent: (j['no'] ?? j['dots'] ?? j['details'] ?? false) as bool,
+        awaitingAdvance: (j['hold'] ?? false) as bool,
+        advancePaid: j['adv'] as int?,
+        advanceUtr: j['advUtr'] as String?,
         lastError: j['err'] as String?,
       );
 }

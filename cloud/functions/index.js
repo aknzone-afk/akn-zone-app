@@ -457,7 +457,7 @@ exports.tgWebhook = onRequest(
 
 /** The app registers the order's Telegram message (so replies map to it). */
 exports.registerOrder = onRequest(
-  { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
+  { region: "asia-south1", secrets: [TG_TOKEN], timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
     if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
     const ref = String((req.body && req.body.ref) || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
@@ -480,6 +480,22 @@ exports.registerOrder = onRequest(
         .map((k) => [k, String(c[k] || "").slice(0, 300)])) : null;
     await docRef.set({ msg, chat, mobile, billName, serial, addOnTo, ...(text ? { text } : {}), ...(cust ? { cust } : {}), ...(d.exists && d.get("status") ? {} : {
       status: "received", statusAt: admin.firestore.FieldValue.serverTimestamp() }) }, { merge: true });
+    // Owner 12-Oct: a new customer's verified 10% advance is the order's
+    // first payment (the bill balance asks only for the rest) + its
+    // screenshot goes under the order in the group.
+    const adv = (await db.collection("bbapp_advances").doc(ref).get()).data();
+    if (adv && adv.state === "paid" && !(d.exists && d.get("advanceAmt"))) {
+      await docRef.set({ advanceAmt: adv.paid, advanceUtr: adv.utr || null,
+        payments: [{ amt: Number(adv.paid), txn: adv.utr || "", paidAt: adv.paidAt || null, at: Date.now(), kind: "advance" }],
+        paidTotal: Number(adv.paid) }, { merge: true });
+      // Owner 12-Oct: the advance screenshot is the FIRST message of the
+      // customer's chat (and goes to the new-party group with the ledger).
+      try {
+        const [bytes] = await admin.storage().bucket().file(adv.path).download();
+        await addChat(db, ref, { from: "party", text: `💰 Advance ${inr(adv.paid)} paid (10%)${adv.utr ? " · UTR " + adv.utr : ""}`,
+          bytes, mime: "image/jpeg" });
+      } catch (e) { logger.warn("advance photo", { ref, error: e.message }); }
+    }
     return res.json({ ok: true });
   },
 );
@@ -1059,7 +1075,8 @@ exports.newParties = onRequest(
     const out = snap.docs.map((x) => ({ ref: x.id, ...x.data() }))
       .filter((o) => o.cust && !o.addOnTo && !o.partyQueuedAt)
       .sort((a, b) => (a.serial || 0) - (b.serial || 0)) // oldest first
-      .map((o) => ({ ref: o.ref, serial: o.serial || null, cust: o.cust }));
+      .map((o) => ({ ref: o.ref, serial: o.serial || null, cust: o.cust,
+        advance: o.advanceAmt ? { paid: o.advanceAmt, utr: o.advanceUtr || null } : null }));
     return res.json({ ok: true, parties: out });
   },
 );
@@ -1376,5 +1393,114 @@ exports.pruneLiveParties = onRequest(
       }
     }
     return res.json({ ok: true, dropped });
+  },
+);
+
+
+/* ───────────── NEW CUSTOMER 10% ADVANCE (owner, 12-Oct-2026) ─────────────
+ * A new customer's order is held on the phone until a 10% advance is paid to
+ * B.B SYNTHETICS (UPI QR / bank). The payment screenshot is read here:
+ * payee must be B.B SYNTHETICS (name / UPI vyapar.173947529358@hdfcbank /
+ * A/c 270320110001776), amount >= the advance, successful, made after the
+ * order, UTR never used before. Only then does the app send the order to the
+ * group. Unpaid after 24 h → a reminder in the Party order group.
+ */
+const ORDER_GROUP = -5370195204;
+const ADV_PROMPT = "This should be a payment screenshot (UPI app like GPay/PhonePe/Paytm/BHIM, or a bank app NEFT/RTGS/IMPS). " +
+  "Return JSON: amount (number, rupees paid), date (YYYY-MM-DD of the payment as shown), time (HH:MM 24-hour as shown), " +
+  "txnId (UPI ref no. / UTR / transaction id, digits and letters only), success (true only if it clearly says successful/completed/paid), " +
+  "payee (the RECEIVER's name exactly as shown), payeeAccount (receiver's UPI id or account number, as shown). Use null when not shown. " +
+  "If it is not a payment screenshot, amount = null.";
+const ADV_SCHEMA = { type: "object", properties: {
+  amount: { type: ["number", "null"] }, date: { type: ["string", "null"] }, time: { type: ["string", "null"] },
+  txnId: { type: ["string", "null"] }, success: { type: ["boolean", "null"] }, payee: { type: ["string", "null"] },
+  payeeAccount: { type: ["string", "null"] } }, required: ["amount"] };
+
+exports.advanceStart = onRequest(
+  { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
+  async (req, res) => {
+    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    const b = req.body || {};
+    const ref = String(b.ref || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
+    const due = Math.round(Number(b.due) || 0);
+    if (!ref || due <= 0) return res.status(400).json({ ok: false });
+    const docRef = admin.firestore().collection("bbapp_advances").doc(ref);
+    const cur = (await docRef.get()).data();
+    if (cur && cur.state === "paid") return res.json({ ok: true, state: "paid", paid: cur.paid, utr: cur.utr });
+    await docRef.set({ ref, due, billName: String(b.billName || "").slice(0, 120), mobile: String(b.mobile || "").slice(0, 20),
+      total: Math.round(Number(b.total) || 0), orderAt: Number(b.orderAt) || Date.now(),
+      state: "pending", ...(cur ? {} : { at: Date.now() }) }, { merge: true });
+    return res.json({ ok: true, state: "pending" });
+  },
+);
+
+exports.advanceProof = onRequest(
+  { region: "asia-south1", secrets: [GEMINI_API_KEY], timeoutSeconds: 120, memory: "512MiB", maxInstances: 3, invoker: "public", cors: true },
+  async (req, res) => {
+    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
+    if (limited("a:" + ip)) return res.status(429).json({ ok: false });
+    const ref = String((req.body && req.body.ref) || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
+    const img = Buffer.from(String((req.body && req.body.image) || ""), "base64");
+    if (!ref || !img.length || img.length > 6 * 1024 * 1024) return res.status(400).json({ ok: false });
+    const db = admin.firestore();
+    const docRef = db.collection("bbapp_advances").doc(ref);
+    const a = (await docRef.get()).data();
+    if (!a) return res.json({ ok: false, error: "Please go back and press PLACE ORDER again." });
+    if (a.state === "paid") return res.json({ ok: true, paid: a.paid, utr: a.utr });
+    const p = await geminiJson(img, "image/jpeg", ADV_PROMPT, ADV_SCHEMA);
+    const fail = (msg) => res.json({ ok: false, error: msg });
+    if (!p) return fail("Could not read the screenshot right now — please try again in a minute.");
+    if (!p.amount || p.amount <= 0) return fail("This does not look like a payment screenshot. Please send the screenshot of your payment.");
+    if (p.success === false) return fail("This payment does not show as successful. Please send the screenshot of a successful payment.");
+    const who = `${p.payee || ""} ${p.payeeAccount || ""}`.toUpperCase().replace(/[^A-Z0-9@.]/g, "");
+    const ours = who.includes("SYNTHETIC") || who.includes("173947529358") || who.includes("270320110001776");
+    if (!ours) return fail(`This payment went to "${p.payee || p.payeeAccount || "someone else"}". The advance must be paid to B.B SYNTHETICS only.`);
+    if (p.amount + 1 < a.due) return fail(`Paid ${inr(p.amount)} — the advance is ${inr(a.due)}. Please pay ${inr(a.due - p.amount)} more and send that screenshot too.`);
+    const tm = /^\d{1,2}:\d{2}$/.test(String(p.time || "")) ? String(p.time).padStart(5, "0") : null;
+    const dt = /^\d{4}-\d{2}-\d{2}$/.test(String(p.date || "")) ? p.date
+      : (tm ? new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10) : null);
+    const paidAt = dt ? Date.parse(`${dt}T${tm || "23:59"}:00+05:30`) : NaN;
+    if (!isNaN(paidAt) && paidAt < Math.floor((a.orderAt || 0) / 60000) * 60000 - 10 * 60e3) {
+      return fail("This screenshot is from before your order. Please send the screenshot of the payment you made now.");
+    }
+    const utr = String(p.txnId || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (utr) {
+      const used = await db.collection("bbapp_advances").where("utr", "==", utr).get();
+      if (used.docs.some((x) => x.id !== ref)) return fail("This payment screenshot was already used for another order.");
+    }
+    const path = `advances/${ref}.jpg`;
+    await admin.storage().bucket().file(path).save(img, { contentType: "image/jpeg" });
+    await docRef.set({ state: "paid", paid: Math.round(p.amount), utr: utr || null, payee: p.payee || null,
+      paidAt: isNaN(paidAt) ? null : paidAt, path, verifiedAt: Date.now() }, { merge: true });
+    return res.json({ ok: true, paid: Math.round(p.amount), utr: utr || null });
+  },
+);
+
+exports.advanceReminder = onSchedule(
+  { region: "asia-south1", schedule: "every 60 minutes", secrets: [TG_TOKEN], timeoutSeconds: 120, memory: "256MiB" },
+  async () => {
+    const db = admin.firestore();
+    const snap = await db.collection("bbapp_advances").where("state", "==", "pending").get();
+    for (const d of snap.docs) {
+      const a = d.data();
+      if (a.reminded || Date.now() - (a.at || 0) < 24 * 3600e3) continue;
+      await tg("sendMessage", { chat_id: ORDER_GROUP,
+        text: `⏳ NEW CUSTOMER has not paid the 10% advance yet\n${a.billName || "-"} · ${a.mobile || "-"}\nOrder approx ${inr(a.total)} · advance ${inr(a.due)}\nPlease call them.` });
+      await d.ref.set({ reminded: Date.now() }, { merge: true });
+    }
+  },
+);
+
+/** Shop PC (NewPartyBot): a new customer's advance screenshot. */
+exports.advanceImage = onRequest(
+  { region: "asia-south1", timeoutSeconds: 30, memory: "256MiB", maxInstances: 2, invoker: "public" },
+  async (req, res) => {
+    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    const ref = String((req.body && req.body.ref) || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
+    const a = ref ? (await admin.firestore().collection("bbapp_advances").doc(ref).get()).data() : null;
+    if (!a || a.state !== "paid" || !a.path) return res.json({ ok: false });
+    const [bytes] = await admin.storage().bucket().file(a.path).download();
+    return res.json({ ok: true, paid: a.paid, utr: a.utr || null, data: bytes.toString("base64") });
   },
 );

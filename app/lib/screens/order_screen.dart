@@ -721,6 +721,10 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         note: _note.text,
         lockNote: _lockNote,
         onStep: (s) => step.value = s,
+        // Owner 12-Oct: NEW Indian customer pays a 10% advance first.
+        holdForAdvance: customer.kind != 'old' &&
+            customer.isIndia &&
+            OrderService.activeParcel(ref.read(sharedPreferencesProvider)) == null,
       );
     } catch (e) {
       order = null;
@@ -738,6 +742,10 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     // Owner: the cart empties by itself once the order is placed.
     await ref.read(favoritesProvider.notifier).clear();
     if (!mounted) return;
+    if (order.awaitingAdvance) {
+      context.go('/advance/${Uri.encodeComponent(order.number)}');
+      return;
+    }
     await _showDone(order);
     if (!mounted) return;
     context.go('/');

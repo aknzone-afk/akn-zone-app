@@ -536,6 +536,7 @@ class OrderService {
     required String note,
     String? lockNote,
     void Function(String step)? onStep,
+    bool holdForAdvance = false,
   }) async {
     final parcel = activeParcel(prefs);
     final order = Order(
@@ -608,6 +609,12 @@ class OrderService {
     await saveCustomer(prefs, customer);
 
     onStep?.call('Sending order…');
+    if (holdForAdvance) {
+      // New customer: wait for the 10% advance (AdvanceScreen) before sending.
+      order.awaitingAdvance = true;
+      await _saveOrder(prefs, order);
+      return order;
+    }
     await _trySend(prefs, dio, order, onStep: onStep);
     return order;
   }
@@ -621,13 +628,26 @@ class OrderService {
     var sent = 0;
     try {
       for (final o in history(prefs).reversed) {
-        if (o.status != OrderStatus.pending) continue;
+        if (o.status != OrderStatus.pending || o.awaitingAdvance) continue;
         if (await _trySend(prefs, dio, o)) sent++;
       }
     } finally {
       _retrying = false;
     }
     return sent;
+  }
+
+  /// Advance verified → release the held order and send it now.
+  static Future<Order?> advancePaid(
+      SharedPreferences prefs, Dio dio, String number, int paid, String? utr) async {
+    final o = history(prefs).where((x) => x.number == number).firstOrNull;
+    if (o == null) return null;
+    o.awaitingAdvance = false;
+    o.advancePaid = paid;
+    o.advanceUtr = utr;
+    await _saveOrder(prefs, o);
+    await _trySend(prefs, dio, o);
+    return o;
   }
 
   static Future<Order?> retryOne(
@@ -980,6 +1000,10 @@ class OrderService {
       }
     }
     if (o.note.isNotEmpty) b.writeln('📝 <b>Note:</b> ${_esc(o.note)}');
+    if (o.advancePaid != null) {
+      b.writeln('✅ <b>ADVANCE ${formatRupees(o.advancePaid!)} PAID (10%)</b>'
+          '${o.advanceUtr != null ? ' · UTR ${_esc(o.advanceUtr!)}' : ''}');
+    }
     // Owner: no date / phone / app version. "ORDER NO. N" and the two dots
     // go as their own messages right after (see _trySend).
     return b.toString().trimRight();
