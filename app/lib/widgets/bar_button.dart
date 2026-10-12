@@ -12,6 +12,9 @@ class BarButton extends StatelessWidget {
 
   /// For black screens (the selection screen): dark box, light outline.
   final bool dark;
+
+  /// Icon above the word (narrow home bar with four buttons).
+  final bool stacked;
   const BarButton({
     super.key,
     required this.icon,
@@ -21,6 +24,7 @@ class BarButton extends StatelessWidget {
     this.dot = false,
     this.color,
     this.dark = false,
+    this.stacked = false,
   });
 
   @override
@@ -36,7 +40,28 @@ class BarButton extends StatelessWidget {
       child: InkWell(
         borderRadius: BorderRadius.circular(12),
         onTap: onTap,
-        child: SizedBox(
+        child: stacked
+            ? SizedBox(
+                height: 50,
+                child: Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                  Badge(
+                    isLabelVisible: count > 0 || dot,
+                    smallSize: 8,
+                    label: count > 0 ? Text('$count') : null,
+                    backgroundColor: const Color(0xFF1B8E3A),
+                    child: Icon(icon, size: 21, color: fg),
+                  ),
+                  const SizedBox(height: 3),
+                  FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: Text(label,
+                        maxLines: 1,
+                        style: TextStyle(
+                            color: fg, fontSize: 10.5, fontWeight: FontWeight.w800, letterSpacing: 0.6)),
+                  ),
+                ]),
+              )
+            : SizedBox(
           height: 42,
           child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
             Badge(

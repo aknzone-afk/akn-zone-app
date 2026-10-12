@@ -10,6 +10,7 @@ import '../models/folder.dart';
 import '../providers/providers.dart';
 import 'tutorial_screen.dart';
 import '../services/geofence_service.dart';
+import '../widgets/bar_button.dart';
 import '../widgets/filter_sheet.dart';
 import '../widgets/loading_collage.dart';
 import '../widgets/photo_stack.dart';
@@ -42,38 +43,57 @@ class HomeScreen extends ConsumerWidget {
     }
 
     return Scaffold(
+      // Owner 12-Oct: only the AKN ZONE logo (no "Surat saree manufacturer"
+      // text) + four boxed buttons with icon AND word.
       appBar: AppBar(
-        toolbarHeight: 64,
-        titleSpacing: 12,
-        title: const _BrandTitle(),
-        actions: [
-          IconButton(
-            tooltip: 'How to order (video)',
-            icon: const Icon(Icons.help_outline_rounded),
-            onPressed: () {
-              if (Tutorial.videoId(ref.read(sharedPreferencesProvider)) == null) {
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                    content: Text('How-to-order video coming soon.')));
-                return;
-              }
-              context.push('/tutorial');
-            },
-          ),
-          IconButton(
-            tooltip: 'Search design number',
-            onPressed: () => context.push('/search'),
-            icon: const Icon(Icons.search_rounded),
-          ),
-          IconButton(
-            tooltip: 'Filter',
-            onPressed: () => FilterSheet.show(context),
-            icon: Badge(
-              isLabelVisible: filter.isActive,
-              child: const Icon(Icons.tune_rounded),
+        toolbarHeight: 66,
+        leadingWidth: 64,
+        leading: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
+          child: Image.asset('assets/icon/bb_logo.png', fit: BoxFit.contain),
+        ),
+        titleSpacing: 4,
+        title: Row(children: [
+          Expanded(
+            child: BarButton(
+              stacked: true,
+              icon: Icons.play_circle_outline_rounded,
+              label: 'TUTORIAL',
+              onTap: () {
+                if (Tutorial.videoId(ref.read(sharedPreferencesProvider)) == null) {
+                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                      content: Text('How-to-order video coming soon.')));
+                  return;
+                }
+                context.push('/tutorial');
+              },
             ),
           ),
-          _HomeCartButton(),
-        ],
+          const SizedBox(width: 6),
+          Expanded(
+              child: BarButton(
+                  stacked: true,
+                  icon: Icons.search_rounded,
+                  label: 'SEARCH',
+                  onTap: () => context.push('/search'))),
+          const SizedBox(width: 6),
+          Expanded(
+              child: BarButton(
+                  stacked: true,
+                  icon: Icons.swap_vert_rounded,
+                  label: 'SORT',
+                  dot: filter.isActive,
+                  onTap: () => FilterSheet.show(context))),
+          const SizedBox(width: 6),
+          Expanded(
+              child: BarButton(
+                  stacked: true,
+                  icon: Icons.shopping_cart_outlined,
+                  label: 'MY CART',
+                  count: ref.watch(favoritesProvider).length,
+                  onTap: () => context.push('/favorites'))),
+        ]),
+        actions: const [SizedBox(width: 12)],
       ),
       body: RefreshIndicator(
         // Invisible spinner — the refresh happens silently in the background;
