@@ -100,7 +100,11 @@ class _ChatBubbleState extends ConsumerState<ChatBubble> with WidgetsBindingObse
   @override
   Widget build(BuildContext context) {
     final prefs = ref.read(sharedPreferencesProvider);
-    if (ChatService.mobiles(prefs).isEmpty || _path == '/chat' || _path.startsWith('/pick')) {
+    // Owner 12-Oct: the helpline sits on the HOME page only — on other pages
+    // just while a new shop message is waiting.
+    final waiting = _unread > 0 || _popup != null;
+    if (ChatService.mobiles(prefs).isEmpty || _path == '/chat' || _path.startsWith('/pick') ||
+        (_path != '/' && !waiting)) {
       return const SizedBox.shrink();
     }
     final pad = MediaQuery.of(context).padding.bottom;

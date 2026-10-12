@@ -1,3 +1,4 @@
+import 'dart:math' as math;
 import 'package:catalog_app/widgets/caps_text.dart';
 import 'dart:typed_data';
 import '../l10n.dart';
@@ -37,6 +38,19 @@ class PhotoDetailScreen extends ConsumerStatefulWidget {
 
 class _PhotoDetailScreenState extends ConsumerState<PhotoDetailScreen> {
   late final PageController _pageCtrl;
+
+  /// width / height of each photo, so the white strip sits right under it.
+  final Map<String, double> _aspect = {};
+  void _resolveAspect(Photo p) {
+    if (_aspect.containsKey(p.id)) return;
+    _aspect[p.id] = 1.3; // until known
+    RefreshableNetworkImage(p.detailUrl())
+        .resolve(const ImageConfiguration())
+        .addListener(ImageStreamListener((info, _) {
+      final a = info.image.width / info.image.height;
+      if (mounted && (a - (_aspect[p.id] ?? 0)).abs() > 0.01) setState(() => _aspect[p.id] = a);
+    }, onError: (_, __) {}));
+  }
   late int _currentIndex;
   late final List<String> _ids;
 
@@ -202,31 +216,21 @@ class _PhotoDetailScreenState extends ConsumerState<PhotoDetailScreen> {
           ],
         ),
         actions: [
-          // Owner, 11-Oct-2026: one clear box instead of cart / edit icons.
-          Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
-            child: FilledButton(
-              style: FilledButton.styleFrom(
-                backgroundColor: isFav ? const Color(0xFF1B8E3A) : Colors.white,
-                foregroundColor: isFav ? Colors.white : Colors.black,
-                padding: const EdgeInsets.symmetric(horizontal: 14),
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(8)),
-              ),
-              // Replace this view, so DONE returns straight to the folder.
-              onPressed: () => context.pushReplacement(
-                  '/pick/${Uri.encodeComponent(currentPhoto.id)}'),
-              child: Text(isFav ? t('✓ SELECTED', '✓ सिलेक्ट हो गया') : t('SELECT COLOURS / SETS', 'सिलेक्ट करें'),
-                  style: const TextStyle(
-                      fontWeight: FontWeight.w900, letterSpacing: 0.8)),
-            ),
-          ),
           const SizedBox(width: 6),
         ],
       ),
       body: Column(
         children: [
           Expanded(
+           child: LayoutBuilder(builder: (context, box) {
+            // Owner 12-Oct: a full-width WHITE strip joined to the bottom of
+            // the photo — "CLICK TO SELECT COLOURS / SETS".
+            _resolveAspect(currentPhoto);
+            final a = _aspect[currentPhoto.id] ?? 1.3;
+            final imgH = math.min(box.maxHeight - 52, box.maxWidth / a);
+            return Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+             SizedBox(
+              height: imgH,
             // PhotoViewGallery (instead of a raw PageView) resolves the
             // zoom-vs-swipe gesture conflict properly: while zoomed in, a drag
             // PANS the photo; only at normal zoom does a drag swipe pages.
@@ -281,6 +285,30 @@ class _PhotoDetailScreenState extends ConsumerState<PhotoDetailScreen> {
                 );
               },
             ),
+             ),
+             Material(
+              color: isFav ? const Color(0xFF1B8E3A) : Colors.white,
+              child: InkWell(
+                // Replace this view, so DONE returns straight to the folder.
+                onTap: () => context.pushReplacement(
+                    '/pick/${Uri.encodeComponent(currentPhoto.id)}'),
+                child: SizedBox(
+                  height: 52,
+                  width: double.infinity,
+                  child: Center(
+                    child: Text(
+                        isFav ? '✓ SELECTED — CLICK TO CHANGE' : 'CLICK TO SELECT COLOURS / SETS',
+                        style: TextStyle(
+                            color: isFav ? Colors.white : Colors.black,
+                            fontWeight: FontWeight.w900,
+                            fontSize: 15,
+                            letterSpacing: 1)),
+                  ),
+                ),
+              ),
+             ),
+            ]);
+           }),
           ),
           SimilarRow(photo: currentPhoto),
           _DetailFooter(
