@@ -200,11 +200,34 @@ class PhotoCard extends ConsumerWidget {
                 ),
               ),
             ),
+          if (removeMode)
+            Positioned(
+              top: 6,
+              right: 6,
+              child: Material(
+                color: const Color(0xE61B1A18),
+                shape: const CircleBorder(),
+                child: InkWell(
+                  customBorder: const CircleBorder(),
+                  onTap: () async {
+                    await ref.read(picksProvider.notifier).remove(photo.id);
+                    await ref.read(favoritesProvider.notifier).toggle(photo.id);
+                  },
+                  child: const Padding(
+                    padding: EdgeInsets.all(7),
+                    child: Icon(Icons.close_rounded, size: 20, color: Colors.white),
+                  ),
+                ),
+              ),
+            ),
           if (selectionMode && selected)
             Container(color: scheme.primary.withValues(alpha: 0.18)),
         ],
       ),
         ),
+        // Owner 12-Oct: in the CART no SELECTED strip (everything there is
+        // selected) — only a ✕ on the photo corner. Elsewhere: white line + box.
+        if (!removeMode) ...[
         // Owner 12-Oct: a thin white line between the photo and the box.
         Container(height: 2, color: Colors.white),
         SizedBox(
@@ -271,6 +294,7 @@ class PhotoCard extends ConsumerWidget {
                 ],
               ),
         ),
+        ],
       ]),
     );
   }
