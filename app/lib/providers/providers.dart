@@ -1039,8 +1039,47 @@ final photosProvider = Provider<List<Photo>>((ref) {
 /// the foreground (bumped from CatalogApp's lifecycle observer). So each folder
 /// tile shows a DIFFERENT photo from inside that folder every time the customer
 /// opens the app, instead of always the same first photo.
-final coverSeedProvider =
-    StateProvider<int>((ref) => Random().nextInt(0x7fffffff));
+// 12-Oct-2026: covers change once a DAY (not every launch), so a cover the
+// phone already downloaded is shown at once instead of a blank tile.
+final coverSeedProvider = StateProvider<int>((ref) {
+  final n = DateTime.now();
+  return n.year * 400 + n.month * 32 + n.day;
+});
+
+bool _coversWarmed = false;
+
+/// Downloads every folder's cover (all levels, 3 at a time) in the
+/// background, so opening any folder shows its sub-folder pictures at once.
+Future<void> warmAllFolderCovers(WidgetRef ref) async {
+  if (_coversWarmed) return;
+  final photos = ref.read(photosProvider);
+  if (photos.isEmpty) return;
+  _coversWarmed = true;
+  final seed = ref.read(coverSeedProvider);
+  final byPath = <String, List<String>>{};
+  for (final p in photos) {
+    final parts = p.folder.split('/');
+    for (var i = 1; i <= parts.length; i++) {
+      (byPath[parts.sublist(0, i).join('/')] ??= <String>[]).add(p.id);
+    }
+  }
+  final urls = <String>[];
+  _pickPreviewStack(byPath, seed, 4).forEach((_, ids) {
+    for (final id in ids.take(2)) {
+      urls.add(DriveUrls.thumbnail(id, width: kThumbnailWidth));
+    }
+  });
+  final queue = [...urls];
+  Future<void> worker() async {
+    while (queue.isNotEmpty) {
+      final u = queue.removeAt(0);
+      try {
+        await photoCacheManager.downloadFile(u);
+      } catch (_) {}
+    }
+  }
+  await Future.wait(List.generate(3, (_) => worker()));
+}
 
 /// Picks up to [count] DISTINCT photo ids per group — the first is the cover,
 /// the rest peek out behind it as the folder tile's photo stack. Seeded RNG so

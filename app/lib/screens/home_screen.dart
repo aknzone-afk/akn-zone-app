@@ -23,6 +23,10 @@ class HomeScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    // Warm every folder's cover in the background (once per launch).
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future<void>.delayed(const Duration(seconds: 3), () => warmAllFolderCovers(ref));
+    });
     // Geofence gate: block customers within 100 km of Surat (IP-based).
     // While the check is in-flight on first launch, show the loading collage
     // so the user never sees a blank screen.
