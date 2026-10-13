@@ -98,6 +98,8 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     }
     _oldMobile.addListener(_onMobileTyped);
     _taxId.addListener(_onTaxTyped);
+    // LIVE TEST: typing "TEST …" as bill name lifts the minimum at once.
+    _billName.addListener(_onBillNameTyped);
     // Tester 13-Oct: a customer saved as NEW is looked up again too — once
     // the shop has made their ledger they are an old customer (no advance).
     if (saved != null && saved.isIndia) {
@@ -129,6 +131,12 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
 
   /// Typing the mobile: as soon as it is a full number (+91 / 0 / spaces
   /// ignored) we look it up — no FIND tap needed.
+  bool _wasLiveTest = false;
+  void _onBillNameTyped() {
+    final now = OrderService.liveTest(ref.read(sharedPreferencesProvider), _billName.text);
+    if (now != _wasLiveTest && mounted) setState(() => _wasLiveTest = now);
+  }
+
   void _onMobileTyped() {
     final m = OrderService.normalizeIndianMobile(_oldMobile.text);
     if (m != null && m != _searched) {
@@ -318,6 +326,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     _pinDebounce?.cancel();
     _oldMobile.removeListener(_onMobileTyped);
     _taxId.removeListener(_onTaxTyped);
+    _billName.removeListener(_onBillNameTyped);
     for (final c in [
       _oldMobile,
       _billName,
@@ -414,8 +423,10 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
   }) _check(List<Photo> photos) {
     final v = OrderService.valueCheck(photos
         .map((p) => (price: p.price, qty: _qtyFor(p), sure: _qtySure(p))));
-    // Add-on window open (for THIS number) → no minimum.
-    if (OrderService.activeParcel(ref.read(sharedPreferencesProvider), mobile: _mobileNow) != null) {
+    // Add-on window open (for THIS number) → no minimum. Owner's LIVE TEST
+    // (bill name "TEST …") → no minimum either.
+    if (OrderService.activeParcel(ref.read(sharedPreferencesProvider), mobile: _mobileNow) != null ||
+        (_newForm && OrderService.liveTest(ref.read(sharedPreferencesProvider), _billName.text))) {
       return (known: v.known, unpriced: v.unpriced, below: false, progress: 1.0);
     }
     return v;

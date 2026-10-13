@@ -72,7 +72,16 @@ class OrderService {
   static const kTrialPrefix = 'AKNTEST-';
   static bool isTrial(String number) => number.startsWith(kTrialPrefix);
 
+  /// Owner 13-Oct LIVE TEST: bill name "TEST …" → token ₹5, no minimum.
+  /// Switched on by this TestFlight build only (remove before store release).
+  static bool liveTest(SharedPreferences p, String billName) =>
+      (p.getBool('live_test_v1') ?? false) && billName.trim().toUpperCase().startsWith('TEST');
+
   static Future<void> seedTrialOnce(SharedPreferences p) async {
+    if (p.getBool('live_test_seeded_v1') != true) {
+      await p.setBool('live_test_seeded_v1', true);
+      await p.setBool('live_test_v1', true);
+    }
     if (p.getBool('trial5_seeded_v2') == true) return;
     await p.setBool('trial5_seeded_v2', true);
     final rnd = Random();

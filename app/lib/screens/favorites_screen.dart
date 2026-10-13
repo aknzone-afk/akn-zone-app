@@ -56,6 +56,15 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
             'Your selection is ${OrderService.formatRupees(v.known)}. First complete ${MinOrderBar.minLabel} — select more designs or more pieces.',
             'आपका सिलेक्शन ${OrderService.formatRupees(v.known)} का है। पहले ${MinOrderBar.minLabel} पूरा करें — और डिज़ाइन या पीस चुनें।')),
         actions: [
+          // Owner's LIVE TEST (TestFlight only): bill name "TEST …", token ₹5.
+          if (ref.read(sharedPreferencesProvider).getBool('live_test_v1') ?? false)
+            TextButton(
+              onPressed: () {
+                Navigator.pop(ctx);
+                context.push('/order');
+              },
+              child: const Text('LIVE TEST (bill name TEST…)'),
+            ),
           FilledButton(
             onPressed: () {
               Navigator.pop(ctx);

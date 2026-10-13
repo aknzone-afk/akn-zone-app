@@ -42,6 +42,7 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
 
   int _due(Order o) {
     if (OrderService.isTrial(o.number)) return 5; // owner's ₹5 trial
+    if (OrderService.liveTest(ref.read(sharedPreferencesProvider), o.customer.billName)) return 5; // LIVE TEST
     final t = o.approxTotal ?? 0;
     if (t <= 0) return 5000;
     return ((t * 0.10) / 10).ceil() * 10; // 10%, rounded up to ₹10
