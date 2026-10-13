@@ -378,6 +378,16 @@ exports.tgWebhook = onRequest(
     const u = req.body || {};
     const db = admin.firestore();
     try {
+      // Owner 13-Oct: the "Akn zone - auto receipts bot" group gets every
+      // verified token screenshot + ledger name (old HDFC group untouched).
+      const gc = u.message && u.message.chat;
+      if (gc && /auto\s*receipt/i.test(String(gc.title || ""))) {
+        const cur = (await db.collection("bbapp_settings").doc("receipts").get()).data();
+        if (!cur || String(cur.chat) !== String(gc.id)) {
+          await db.collection("bbapp_settings").doc("receipts").set({ chat: gc.id, title: gc.title, at: Date.now() });
+          await tg("sendMessage", { chat_id: gc.id, text: "✅ Connected — every verified AKN Zone app token screenshot will come here with the party's ledger name." });
+        }
+      }
       if (u.callback_query) {
         const q = u.callback_query;
         if (q.data === "n") {
@@ -1759,6 +1769,22 @@ exports.tokenButton = onRequest(
     if (!r.ok) return res.json({ ok: false, error: r.description || "telegram refused" });
     const ledger = String((req.body && req.body.ledger) || "").slice(0, 120);
     await docRef.set({ tokenMsg: { chat, msg: r.result.message_id }, ...(ledger ? { ledgerName: ledger } : {}) }, { merge: true });
+    try {
+      const rg = (await admin.firestore().collection("bbapp_settings").doc("receipts").get()).data();
+      const adv = (await admin.firestore().collection("bbapp_advances").doc(ref).get()).data();
+      if (rg && rg.chat && adv && adv.path) {
+        const [bytes] = await admin.storage().bucket().file(adv.path).download();
+        const fd = new FormData();
+        fd.append("chat_id", String(rg.chat));
+        fd.append("caption", `${(ledger || "LEDGER NOT MADE — " + (d.billName || "?")).toUpperCase()}\n` +
+          `📱 AKN ZONE APP TOKEN ${inr(d.advanceAmt)}${adv.utr ? " · UTR " + adv.utr : ""}${d.serial ? " · ORDER NO. " + d.serial : ""}`);
+        fd.append("photo", new Blob([bytes], { type: "image/jpeg" }), "token.jpg");
+        const x = await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/sendPhoto`, { method: "POST", body: fd }).then((y) => y.json());
+        if (!x.ok) logger.warn("receipts group photo", { ref, desc: x.description });
+      } else if (!rg) {
+        logger.warn("receipts group not connected — add @Aknzonesales_bot to 'Akn zone - auto receipts bot'");
+      }
+    } catch (e) { logger.warn("receipts group photo", { ref, error: e.message }); }
     return res.json({ ok: true });
   },
 );
