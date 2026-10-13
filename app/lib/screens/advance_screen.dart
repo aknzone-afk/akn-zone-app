@@ -11,10 +11,15 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
+import 'package:qr_flutter/qr_flutter.dart';
+import 'dart:ui' as ui;
+import 'package:flutter/rendering.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../models/order.dart';
 import '../providers/providers.dart';
 import '../services/order_service.dart';
+import '../services/upi_qr.dart';
 
 /// NEW customer: 10% advance before the order goes to the shop (owner,
 /// 12-Oct-2026). UPI QR / UPI app / bank transfer to B.B SYNTHETICS, then the
@@ -77,17 +82,88 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
     }
   }
 
+  /// UPI apps, opened on their home screen (never a pay link — refused for
+  /// a merchant id). iPhone + Android schemes, the first that opens wins.
+  static const _apps = [
+    (name: 'PhonePe', urls: ['phonepe://'], color: Color(0xFF5F259F)),
+    (name: 'Google Pay', urls: ['gpay://', 'tez://upi/'], color: Color(0xFF1A73E8)),
+    (name: 'Paytm', urls: ['paytmmp://', 'paytm://'], color: Color(0xFF00B9F1)),
+    (name: 'BHIM', urls: ['bhim://'], color: Color(0xFFF47C20)),
+  ];
+
+  Future<void> _payWithApp(int due) async {
+    await Clipboard.setData(const ClipboardData(text: _upi));
+    if (!mounted) return;
+    final pick = await showModalBottomSheet<List<String>>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('✅ UPI ID copied — pay ${OrderService.formatRupees(due)}',
+                style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w900)),
+            const SizedBox(height: 6),
+            Text('In the app tap "To UPI ID" (PhonePe) / "Pay UPI ID" (Google Pay) → PASTE → '
+                'the name must be B B SYNTHETICS → enter ${OrderService.formatRupees(due)} → Pay.\n'
+                'Then come back and upload the screenshot.',
+                style: const TextStyle(height: 1.4)),
+            const SizedBox(height: 8),
+            for (final a in _apps)
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: CircleAvatar(
+                    backgroundColor: a.color,
+                    child: Text(a.name[0], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900))),
+                title: Text('Open ${a.name}', style: const TextStyle(fontWeight: FontWeight.w800)),
+                trailing: const Icon(Icons.open_in_new_rounded),
+                onTap: () => Navigator.pop(ctx, a.urls),
+              ),
+            // Owner 13-Oct: any bank's own app works the same way.
+            ListTile(
+              contentPadding: EdgeInsets.zero,
+              leading: const CircleAvatar(
+                  backgroundColor: Color(0xFF004C8F),
+                  child: Icon(Icons.account_balance_rounded, color: Colors.white)),
+              title: const Text('My bank app (HDFC, Kotak, SBI, ICICI, Axis…)',
+                  style: TextStyle(fontWeight: FontWeight.w800)),
+              subtitle: const Text('Open it yourself → UPI → "Pay to UPI ID" → paste'),
+              onTap: () => Navigator.pop(ctx, const <String>[]),
+            ),
+          ]),
+        ),
+      ),
+    );
+    if (pick == null || pick.isEmpty) return;
+    for (final u in pick) {
+      final ok = await launchUrl(Uri.parse(u), mode: LaunchMode.externalApplication).catchError((_) => false);
+      if (ok) return;
+    }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('That app is not on this phone — open your UPI app yourself; the UPI ID is copied.')));
+    }
+  }
+
   /// The QR as a picture: Save it (or share it to the UPI app), then in the
   /// UPI app "Scan QR" → gallery. Works even when a link is refused.
+  final _qrKey = GlobalKey();
+
   Future<void> _shareQr() async {
-    // The QR is already on screen — take it from the image cache (the plain
-    // download failed on iPhone, owner 13-Oct); download only if missing.
+    // The amount QR card on screen, as a picture (scan it from the gallery);
+    // the shop's printed QR only if that fails.
     final box = context.findRenderObject() as RenderBox?;
     try {
-      final cached = await DefaultCacheManager().getSingleFile(_qr);
-      final f = File('${(await getTemporaryDirectory()).path}/BB_SYNTHETICS_UPI_QR.jpg');
-      await f.writeAsBytes(await cached.readAsBytes(), flush: true);
-      await Share.shareXFiles([XFile(f.path, mimeType: 'image/jpeg')],
+      final f = File('${(await getTemporaryDirectory()).path}/BB_SYNTHETICS_UPI_QR.png');
+      final rb = _qrKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
+      final img = rb == null ? null : await rb.toImage(pixelRatio: 3);
+      final png = img == null ? null : await img.toByteData(format: ui.ImageByteFormat.png);
+      if (png != null) {
+        await f.writeAsBytes(png.buffer.asUint8List(), flush: true);
+      } else {
+        await f.writeAsBytes(await (await DefaultCacheManager().getSingleFile(_qr)).readAsBytes(), flush: true);
+      }
+      await Share.shareXFiles([XFile(f.path, mimeType: 'image/png')],
           text: 'B.B SYNTHETICS — UPI QR',
           sharePositionOrigin: box == null ? null : box.localToGlobal(Offset.zero) & box.size);
     } catch (e) {
@@ -99,27 +175,34 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
   }
 
 
+  /// Owner 13-Oct: one or SEVERAL screenshots (₹2,000 + ₹1,000 + …) — each
+  /// is read by the cloud, which adds them up; done when the total covers it.
   Future<void> _upload() async {
-    final x = await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 1800, imageQuality: 85);
-    if (x == null || !mounted) return;
+    final xs = await ImagePicker().pickMultiImage(maxWidth: 1800, imageQuality: 85, limit: 10);
+    if (xs.isEmpty || !mounted) return;
     setState(() {
       _busy = true;
       _error = null;
     });
+    String? last;
     try {
-      final r = await ref.read(dioProvider).post<dynamic>('$_cloud/advanceProof',
-          data: {'ref': widget.number, 'image': base64Encode(await x.readAsBytes())},
-          options: Options(
-              headers: _hdr,
-              contentType: Headers.jsonContentType,
-              sendTimeout: const Duration(seconds: 60),
-              receiveTimeout: const Duration(seconds: 120)));
-      final d = r.data is String ? jsonDecode(r.data as String) : r.data;
-      if (d is Map && d['ok'] == true) {
-        await _paid((d['paid'] as num).toInt(), d['utr'] as String?);
-        return;
+      for (var i = 0; i < xs.length; i++) {
+        final r = await ref.read(dioProvider).post<dynamic>('$_cloud/advanceProof',
+            data: {'ref': widget.number, 'image': base64Encode(await xs[i].readAsBytes())},
+            options: Options(
+                headers: _hdr,
+                contentType: Headers.jsonContentType,
+                sendTimeout: const Duration(seconds: 60),
+                receiveTimeout: const Duration(seconds: 120)));
+        final d = r.data is String ? jsonDecode(r.data as String) : r.data;
+        if (d is Map && d['ok'] == true) {
+          await _paid((d['paid'] as num).toInt(), d['utr'] as String?);
+          return;
+        }
+        final msg = (d is Map ? d['error'] : null)?.toString() ?? 'Could not check — please try again.';
+        last = xs.length > 1 ? 'Screenshot ${i + 1} of ${xs.length}: $msg' : msg;
       }
-      setState(() => _error = (d is Map ? d['error'] : null)?.toString() ?? 'Could not check — please try again.');
+      setState(() => _error = last);
     } catch (_) {
       setState(() => _error = 'No internet — please try again.');
     } finally {
@@ -215,9 +298,19 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
                 style: const TextStyle(color: Colors.black54)),
           ]),
         ),
+        const SizedBox(height: 14),
+        SizedBox(
+          height: 54,
+          child: FilledButton.icon(
+            style: FilledButton.styleFrom(backgroundColor: green),
+            onPressed: () => _payWithApp(due),
+            icon: const Icon(Icons.account_balance_wallet_rounded),
+            label: Text('PAY ${OrderService.formatRupees(due)} WITH UPI APP',
+                style: const TextStyle(fontWeight: FontWeight.w900)),
+          ),
+        ),
         const SizedBox(height: 18),
-        // Owner 13-Oct: no "pay with UPI app" link (the bank refused it) —
-        // only the QR, big and clear; any UPI app can pay it.
+        // Owner 13-Oct: the QR, big and clear; any UPI app can pay it.
         Text('SCAN THIS QR & PAY ${OrderService.formatRupees(due)}',
             textAlign: TextAlign.center,
             style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
@@ -225,14 +318,50 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
         const Text('Google Pay · PhonePe · Paytm · BHIM · any UPI app',
             textAlign: TextAlign.center, style: TextStyle(color: Colors.black54)),
         const SizedBox(height: 10),
+        // Owner 13-Oct: the shop's own HDFC QR with the amount written in — scan, Pay.
         LayoutBuilder(
           builder: (_, c) => Center(
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(14),
-              child: CachedNetworkImage(
-                  imageUrl: _qr, width: c.maxWidth.clamp(240.0, 420.0), fit: BoxFit.contain),
+            child: RepaintBoundary(
+              key: _qrKey,
+              child: Container(
+                width: c.maxWidth.clamp(240.0, 380.0),
+                padding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
+                decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: const Color(0xFF0B2C7A), width: 2)),
+                child: Column(mainAxisSize: MainAxisSize.min, children: [
+                  const Text('B B SYNTHETICS',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900, color: Color(0xFF0B2C7A))),
+                  const SizedBox(height: 8),
+                  QrImageView(
+                    data: UpiQr.withAmount(due),
+                    backgroundColor: Colors.white,
+                    errorCorrectionLevel: QrErrorCorrectLevel.M,
+                    padding: const EdgeInsets.all(6),
+                  ),
+                  const SizedBox(height: 6),
+                  Text('Amount ${OrderService.formatRupees(due)} — filled in when you scan',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(fontWeight: FontWeight.w800, color: Color(0xFF1B8E3A))),
+                ]),
+              ),
             ),
           ),
+        ),
+        const SizedBox(height: 6),
+        ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          title: const Text('Amount QR not working? Use the shop QR (type the amount yourself)',
+              style: TextStyle(fontSize: 13)),
+          children: [
+            Center(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(14),
+                child: CachedNetworkImage(imageUrl: _qr, width: 260, fit: BoxFit.contain),
+              ),
+            ),
+          ],
         ),
         const SizedBox(height: 10),
         const Text('Paying from this same phone? Save the QR, then in your UPI app tap Scan → Gallery.',
@@ -244,6 +373,37 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
             icon: const Icon(Icons.download_rounded),
             label: const Text('SAVE QR'),
           ),
+        ),
+        const SizedBox(height: 18),
+        // Owner 13-Oct: paying by typing the UPI ID works in every UPI app
+        // (a link from our app is refused — merchant id, no payment gateway).
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: green.withValues(alpha: 0.5))),
+          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Text('OR PAY ${OrderService.formatRupees(due)} TO THIS UPI ID',
+                style: const TextStyle(fontWeight: FontWeight.w900)),
+            const SizedBox(height: 8),
+            Row(children: [
+              const Expanded(
+                child: SelectableText(_upi,
+                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+              ),
+              FilledButton.icon(
+                style: FilledButton.styleFrom(backgroundColor: green),
+                onPressed: () => _copy(_upi, 'UPI ID'),
+                icon: const Icon(Icons.copy_rounded, size: 18),
+                label: const Text('COPY'),
+              ),
+            ]),
+            const SizedBox(height: 8),
+            Text('1. Open any UPI app (PhonePe, Google Pay, Paytm, your bank app) → "Pay to UPI ID".\n'
+                '2. Paste the UPI ID, enter ${OrderService.formatRupees(due)} — the name shown must be B B SYNTHETICS.\n'
+                '3. Pay, take a screenshot and upload it below.',
+                style: const TextStyle(color: Colors.black87, height: 1.4)),
+          ]),
         ),
         const SizedBox(height: 16),
         const Text('OR BANK TRANSFER (NEFT / RTGS / IMPS)', style: TextStyle(fontWeight: FontWeight.w800)),
@@ -270,7 +430,7 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
             icon: _busy
                 ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                 : const Icon(Icons.upload_rounded),
-            label: Text(_busy ? 'CHECKING PAYMENT…' : 'UPLOAD PAYMENT SCREENSHOT',
+            label: Text(_busy ? 'CHECKING PAYMENT…' : 'UPLOAD PAYMENT SCREENSHOT(S)',
                 style: const TextStyle(fontWeight: FontWeight.w900)),
           ),
         ),

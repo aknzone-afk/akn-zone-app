@@ -88,11 +88,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _load();
   }
 
+  /// Owner 13-Oct: several payment screenshots at once — each one is read
+  /// and added to the bill's payments (the cloud keeps the total).
   Future<void> _photo() async {
-    final x = await ImagePicker().pickImage(
-        source: ImageSource.gallery, maxWidth: 1800, imageQuality: 85);
-    if (x == null) return;
-    await _send(image: await x.readAsBytes());
+    final xs = await ImagePicker().pickMultiImage(maxWidth: 1800, imageQuality: 85, limit: 10);
+    for (final x in xs) {
+      if (!mounted) return;
+      await _send(image: await x.readAsBytes());
+    }
   }
 
   @override
