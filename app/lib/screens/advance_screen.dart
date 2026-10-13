@@ -1,22 +1,12 @@
 import 'dart:convert';
-import 'dart:io';
 
-import 'package:cached_network_image/cached_network_image.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:qr_flutter/qr_flutter.dart';
-import 'package:gal/gal.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
-import 'dart:ui' as ui;
-import 'package:flutter/rendering.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../models/order.dart';
 import '../providers/providers.dart';
@@ -35,9 +25,6 @@ class AdvanceScreen extends ConsumerStatefulWidget {
 }
 
 class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
-  static const _upi = 'vyapar.173947529358@hdfcbank'; // QR + shown UPI id
-  static const _qr =
-      'https://firebasestorage.googleapis.com/v0/b/akn-chat-a7dd8.firebasestorage.app/o/public%2Fupi-qr.jpg?alt=media&token=b37ef652-5ac6-4242-b241-2f4d90b3b468';
   static const _cloud = 'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net';
   static const _hdr = {'x-app-key': 'akn-zone-app-v3'};
 
@@ -84,108 +71,9 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
     }
   }
 
-  /// UPI apps, opened on their home screen (never a pay link — refused for
-  /// a merchant id). iPhone + Android schemes, the first that opens wins.
-  static const _apps = [
-    (name: 'PhonePe', urls: ['phonepe://'], color: Color(0xFF5F259F)),
-    (name: 'Google Pay', urls: ['gpay://', 'tez://upi/'], color: Color(0xFF1A73E8)),
-    (name: 'Paytm', urls: ['paytmmp://', 'paytm://'], color: Color(0xFF00B9F1)),
-    (name: 'BHIM', urls: ['bhim://'], color: Color(0xFFF47C20)),
-  ];
-
-  Future<void> _payWithApp(int due) async {
-    await Clipboard.setData(const ClipboardData(text: _upi));
-    if (!mounted) return;
-    final pick = await showModalBottomSheet<List<String>>(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
-          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('✅ UPI ID copied — pay ${OrderService.formatRupees(due)}',
-                style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w900)),
-            const SizedBox(height: 6),
-            Text('In the app tap "To UPI ID" (PhonePe) / "Pay UPI ID" (Google Pay) → PASTE → '
-                'the name must be B B SYNTHETICS → enter ${OrderService.formatRupees(due)} → Pay.\n'
-                'Then come back and upload the screenshot.',
-                style: const TextStyle(height: 1.4)),
-            const SizedBox(height: 8),
-            for (final a in _apps)
-              ListTile(
-                contentPadding: EdgeInsets.zero,
-                leading: CircleAvatar(
-                    backgroundColor: a.color,
-                    child: Text(a.name[0], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900))),
-                title: Text('Open ${a.name}', style: const TextStyle(fontWeight: FontWeight.w800)),
-                trailing: const Icon(Icons.open_in_new_rounded),
-                onTap: () => Navigator.pop(ctx, a.urls),
-              ),
-            // Owner 13-Oct: any bank's own app works the same way.
-            ListTile(
-              contentPadding: EdgeInsets.zero,
-              leading: const CircleAvatar(
-                  backgroundColor: Color(0xFF004C8F),
-                  child: Icon(Icons.account_balance_rounded, color: Colors.white)),
-              title: const Text('My bank app (HDFC, Kotak, SBI, ICICI, Axis…)',
-                  style: TextStyle(fontWeight: FontWeight.w800)),
-              subtitle: const Text('Open it yourself → UPI → "Pay to UPI ID" → paste'),
-              onTap: () => Navigator.pop(ctx, const <String>[]),
-            ),
-          ]),
-        ),
-      ),
-    );
-    if (pick == null || pick.isEmpty) return;
-    for (final u in pick) {
-      final ok = await launchUrl(Uri.parse(u), mode: LaunchMode.externalApplication).catchError((_) => false);
-      if (ok) return;
-    }
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('That app is not on this phone — open your UPI app yourself; the UPI ID is copied.')));
-    }
-  }
 
   /// The QR as a picture: Save it (or share it to the UPI app), then in the
   /// UPI app "Scan QR" → gallery. Works even when a link is refused.
-  final _qrKey = GlobalKey();
-
-  Future<void> _shareQr() async {
-    // The amount QR card on screen, as a picture (scan it from the gallery);
-    // the shop's printed QR only if that fails.
-    final box = context.findRenderObject() as RenderBox?;
-    try {
-      final f = File('${(await getTemporaryDirectory()).path}/BB_SYNTHETICS_UPI_QR.png');
-      final rb = _qrKey.currentContext?.findRenderObject() as RenderRepaintBoundary?;
-      final img = rb == null ? null : await rb.toImage(pixelRatio: 3);
-      final png = img == null ? null : await img.toByteData(format: ui.ImageByteFormat.png);
-      if (png != null) {
-        await f.writeAsBytes(png.buffer.asUint8List(), flush: true);
-        // Review 13-Oct: straight into the photo gallery — the share sheet
-        // has no "save" on many Android phones.
-        try {
-          await Gal.putImage(f.path, album: 'AKN Zone');
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                content: Text('QR saved in your photos — in your UPI app tap Scan → Gallery.')));
-          }
-          return;
-        } catch (_) {/* fall back to the share sheet */}
-      } else {
-        await f.writeAsBytes(await (await DefaultCacheManager().getSingleFile(_qr)).readAsBytes(), flush: true);
-      }
-      await Share.shareXFiles([XFile(f.path, mimeType: 'image/png')],
-          text: 'B.B SYNTHETICS — UPI QR',
-          sharePositionOrigin: box == null ? null : box.localToGlobal(Offset.zero) & box.size);
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Could not save the QR — take a screenshot of it instead, then Scan → Gallery in your UPI app.')));
-      }
-    }
-  }
-
 
   /// Owner 13-Oct: one or SEVERAL screenshots (₹2,000 + ₹1,000 + …) — each
   /// is read by the cloud, which adds them up; done when the total covers it.
@@ -261,11 +149,6 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
     if (mounted) context.go('/');
   }
 
-  void _copy(String v, String what) {
-    Clipboard.setData(ClipboardData(text: v));
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$what copied')));
-  }
-
   @override
   Widget build(BuildContext context) {
     final o = _order;
@@ -307,17 +190,6 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
                 style: const TextStyle(color: Colors.black54)),
           ]),
         ),
-        const SizedBox(height: 14),
-        SizedBox(
-          height: 54,
-          child: FilledButton.icon(
-            style: FilledButton.styleFrom(backgroundColor: green),
-            onPressed: () => _payWithApp(due),
-            icon: const Icon(Icons.account_balance_wallet_rounded),
-            label: Text('PAY ${OrderService.formatRupees(due)} WITH UPI APP',
-                style: const TextStyle(fontWeight: FontWeight.w900)),
-          ),
-        ),
         const SizedBox(height: 18),
         // Owner 13-Oct: the QR, big and clear; any UPI app can pay it.
         Text('SCAN THIS QR & PAY ${OrderService.formatRupees(due)}',
@@ -331,7 +203,6 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
         LayoutBuilder(
           builder: (_, c) => Center(
             child: RepaintBoundary(
-              key: _qrKey,
               child: Container(
                 width: c.maxWidth.clamp(240.0, 380.0),
                 padding: const EdgeInsets.fromLTRB(18, 14, 18, 14),
@@ -358,66 +229,6 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
             ),
           ),
         ),
-        const SizedBox(height: 6),
-        ExpansionTile(
-          tilePadding: EdgeInsets.zero,
-          title: const Text('Amount QR not working? Use the shop QR (type the amount yourself)',
-              style: TextStyle(fontSize: 13)),
-          children: [
-            Center(
-              child: ClipRRect(
-                borderRadius: BorderRadius.circular(14),
-                child: CachedNetworkImage(imageUrl: _qr, width: 260, fit: BoxFit.contain),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
-        const Text('Paying from this same phone? Save the QR, then in your UPI app tap Scan → Gallery.',
-            textAlign: TextAlign.center, style: TextStyle(color: Colors.black54)),
-        const SizedBox(height: 6),
-        Center(
-          child: OutlinedButton.icon(
-            onPressed: _shareQr,
-            icon: const Icon(Icons.download_rounded),
-            label: const Text('SAVE QR'),
-          ),
-        ),
-        const SizedBox(height: 18),
-        // Owner 13-Oct: paying by typing the UPI ID works in every UPI app
-        // (a link from our app is refused — merchant id, no payment gateway).
-        Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(color: green.withValues(alpha: 0.5))),
-          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('OR PAY ${OrderService.formatRupees(due)} TO THIS UPI ID',
-                style: const TextStyle(fontWeight: FontWeight.w900)),
-            const SizedBox(height: 8),
-            Row(children: [
-              const Expanded(
-                child: SelectableText(_upi,
-                    style: TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
-              ),
-              FilledButton.icon(
-                style: FilledButton.styleFrom(backgroundColor: green),
-                onPressed: () => _copy(_upi, 'UPI ID'),
-                icon: const Icon(Icons.copy_rounded, size: 18),
-                label: const Text('COPY'),
-              ),
-            ]),
-            const SizedBox(height: 8),
-            Text('1. Open any UPI app (PhonePe, Google Pay, Paytm, your bank app) → "Pay to UPI ID".\n'
-                '2. Paste the UPI ID, enter ${OrderService.formatRupees(due)} — the name shown must be B B SYNTHETICS.\n'
-                '3. Pay, take a screenshot and upload it below.',
-                style: const TextStyle(color: Colors.black87, height: 1.4)),
-          ]),
-        ),
-        const SizedBox(height: 16),
-        // Owner 13-Oct: HDFC only (QR / UPI id) — no bank transfer, no Kotak.
-        const Text('⚠️ The name must always be B B SYNTHETICS (HDFC). If any other name shows, it is not our account — do not pay.',
-            style: TextStyle(color: Color(0xFFC62828), fontWeight: FontWeight.w700)),
         const SizedBox(height: 18),
         if (_error != null)
           Padding(
@@ -432,13 +243,10 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
             icon: _busy
                 ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
                 : const Icon(Icons.upload_rounded),
-            label: Text(_busy ? 'CHECKING PAYMENT…' : 'UPLOAD PAYMENT SCREENSHOT(S)',
+            label: Text(_busy ? 'CHECKING PAYMENT…' : 'SHARE PAYMENT SCREENSHOT',
                 style: const TextStyle(fontWeight: FontWeight.w900)),
           ),
         ),
-        const SizedBox(height: 8),
-        const Text('After the screenshot is verified your order goes to us immediately.',
-            textAlign: TextAlign.center, style: TextStyle(color: Colors.black54)),
       ]),
     ),
     );
