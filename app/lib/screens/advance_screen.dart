@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:dio/dio.dart';
@@ -7,6 +8,8 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../models/order.dart';
@@ -84,8 +87,30 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
     (name: 'BHIM', scheme: 'bhim://upi/pay', color: Color(0xFFF47C20)),
   ];
 
+  // From the shop's own BharatQR (tags 52 + 27/62.05): the merchant category
+  // and terminal reference HDFC needs, else the payment is refused.
+  static const _mcc = '5651';
+  static const _tr = 'STQD19855341781331177222';
+
   String _query(int due) => 'pa=$_upi&pn=${Uri.encodeComponent('B B SYNTHETICS')}'
-      '&am=$due&cu=INR&tn=${Uri.encodeComponent('Token ${widget.number}')}';
+      '&mc=$_mcc&tr=$_tr&am=$due&cu=INR&tn=${Uri.encodeComponent('Token ${widget.number}')}';
+
+  /// The QR as a picture: Save it (or share it to the UPI app), then in the
+  /// UPI app "Scan QR" → gallery. Works even when a link is refused.
+  Future<void> _shareQr() async {
+    try {
+      final r = await ref.read(dioProvider).get<List<int>>(_qr, options: Options(responseType: ResponseType.bytes));
+      final f = File('${(await getTemporaryDirectory()).path}/BB_SYNTHETICS_UPI_QR.jpg');
+      await f.writeAsBytes(r.data!, flush: true);
+      await Share.shareXFiles([XFile(f.path, mimeType: 'image/jpeg')],
+          text: 'B.B SYNTHETICS — UPI QR');
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Could not get the QR — please check internet.')));
+      }
+    }
+  }
 
   Future<bool> _open(String url) =>
       launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication).catchError((_) => false);
@@ -275,6 +300,14 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
           child: ClipRRect(
             borderRadius: BorderRadius.circular(12),
             child: CachedNetworkImage(imageUrl: _qr, width: 240, fit: BoxFit.contain),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Center(
+          child: OutlinedButton.icon(
+            onPressed: _shareQr,
+            icon: const Icon(Icons.download_rounded),
+            label: const Text('SAVE QR → SCAN IT FROM GALLERY IN YOUR UPI APP'),
           ),
         ),
         const SizedBox(height: 16),
