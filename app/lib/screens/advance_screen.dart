@@ -74,7 +74,7 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
 
   Future<void> _payUpi(int due) async {
     final uri = Uri.parse('upi://pay?pa=$_upi&pn=${Uri.encodeComponent('B B SYNTHETICS')}'
-        '&am=$due&cu=INR&tn=${Uri.encodeComponent('Advance ${widget.number}')}');
+        '&am=$due&cu=INR&tn=${Uri.encodeComponent('Token ${widget.number}')}');
     final ok = await launchUrl(uri, mode: LaunchMode.externalApplication).catchError((_) => false);
     if (!ok && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
@@ -123,11 +123,11 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         icon: const Icon(Icons.check_circle_rounded, size: 52, color: Color(0xFF2E7D32)),
-        title: const Text('Advance received — order placed!'),
+        title: const Text('Token received — order placed!'),
         content: Text(
-          '${OrderService.formatRupees(paid)} advance verified.\n'
+          '${OrderService.formatRupees(paid)} token verified.\n'
           '${o?.serial != null ? 'ORDER NO. ${o!.serial}\n' : ''}'
-          'It will be adjusted in your bill. We will contact you shortly.',
+          'It will be deducted from your final bill. We will contact you shortly.',
           textAlign: TextAlign.center,
         ),
         actions: [
@@ -168,13 +168,13 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
       },
       child: Scaffold(
       appBar: AppBar(
-        title: const Text('PAY 10% ADVANCE'),
+        title: const Text('PAY 10% TOKEN'),
         // Tester 12-Oct: a way out — the order waits in My Orders.
         leading: IconButton(
           icon: const Icon(Icons.close_rounded),
           onPressed: () {
             ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                content: Text('Your order is saved — pay the advance any time from My Orders.')));
+                content: Text('Your order is saved — pay the token any time from My Orders.')));
             context.go('/');
           },
         ),
@@ -186,12 +186,12 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
               color: const Color(0xFFE8F5E9), borderRadius: BorderRadius.circular(12),
               border: Border.all(color: green.withValues(alpha: 0.4))),
           child: Column(children: [
-            const Text('To confirm your first order, please pay a 10% advance',
+            const Text('Please pay a 10% token so we can process your order',
                 textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w700)),
             const SizedBox(height: 6),
             Text(OrderService.formatRupees(due),
                 style: const TextStyle(fontSize: 34, fontWeight: FontWeight.w900, color: green)),
-            Text('of approx ${OrderService.formatRupees(o.approxTotal ?? 0)} · adjusted in your bill',
+            Text('of approx ${OrderService.formatRupees(o.approxTotal ?? 0)} · it will be deducted from your final bill',
                 style: const TextStyle(color: Colors.black54)),
           ]),
         ),

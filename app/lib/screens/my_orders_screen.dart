@@ -167,7 +167,7 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                                 '${o.addOnTo != null ? '  (ADD IN NO. ${orders.where((x) => x.number == o.addOnTo).firstOrNull?.serial ?? '-'})' : ''}'
                             : (o.addOnTo != null
                                 ? 'ADD IN ORDER NO. ${orders.where((x) => x.number == o.addOnTo).firstOrNull?.serial ?? '-'}'
-                                : (o.awaitingAdvance ? 'WAITING FOR 10% ADVANCE' : 'ORDER (sending…)')),
+                                : (o.awaitingAdvance ? 'WAITING FOR 10% TOKEN' : 'ORDER (sending…)')),
                         style: const TextStyle(fontWeight: FontWeight.w700)),
                     subtitle: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -187,7 +187,7 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                               style: FilledButton.styleFrom(backgroundColor: const Color(0xFF1B8E3A)),
                               onPressed: () => context.push('/advance/${Uri.encodeComponent(o.number)}'),
                               icon: const Icon(Icons.payments_rounded, size: 18),
-                              label: const Text('PAY 10% ADVANCE TO CONFIRM'),
+                              label: const Text('PAY 10% TOKEN TO PROCESS ORDER'),
                             ),
                           )
                         else

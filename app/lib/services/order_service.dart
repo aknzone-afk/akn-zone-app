@@ -1178,7 +1178,7 @@ class OrderService {
     }
     final advance = o.advancePaid == null
         ? ''
-        : '✅ <b>ADVANCE ${formatRupees(o.advancePaid!)} PAID (10%)</b>'
+        : '✅ <b>TOKEN ${formatRupees(o.advancePaid!)} PAID (10%)</b>'
             '${o.advanceUtr != null ? ' · UTR ${_clipEsc(o.advanceUtr!, 60)}' : ''}';
     if (o.note.isNotEmpty) {
       // The note gets whatever room is left under 4000 characters.

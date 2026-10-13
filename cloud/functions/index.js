@@ -121,6 +121,8 @@ const BOX_PROMPT =
   "even if it shows 2-3 strips of different colour or pattern side by side (body, pallu, blouse piece). BUT every FOLDED saree is a separate saree — even when it lies ON TOP of " +
   "the open saree or has the same colours; folded pieces usually carry their own design-number sticker. Never merge a folded piece into the " +
   "open saree's box. " +
+  "A STITCHED BLOUSE (ready-made blouse with sleeves / neck, or a folded blouse piece) shown with a saree is part of that saree — " +
+  "NEVER give it its own box, point or count, even when it lies separately below or beside the saree (owner, 13-Oct). " +
   "Find EVERY saree (spread and folded). For each give box_2d " +
   "[ymin, xmin, ymax, xmax] normalised to 0-1000 tightly around that saree's VISIBLE part, its colour, and a label point " +
   "[y, x] (0-1000): the CENTRE of the largest area where ONLY that saree's own colour is visible — never on an edge, a fold line, " +
@@ -561,7 +563,7 @@ exports.registerOrder = onRequest(
       // customer's chat (and goes to the new-party group with the ledger).
       try {
         const [bytes] = await admin.storage().bucket().file(adv.path).download();
-        await addChat(db, ref, { from: "party", text: `💰 Advance ${inr(adv.paid)} paid (10%)${adv.utr ? " · UTR " + adv.utr : ""}`,
+        await addChat(db, ref, { from: "party", text: `💰 Token ${inr(adv.paid)} paid (10%)${adv.utr ? " · UTR " + adv.utr : ""}`,
           bytes, mime: "image/jpeg" });
       } catch (e) { logger.warn("advance photo", { ref, error: e.message }); }
     }
@@ -767,7 +769,7 @@ async function handleBillPhoto(db, m) {
   const balance = b.grandTotal ? Math.max(0, Number(b.grandTotal) - advPaid) : 0;
   await addChat(db, main.id, { from: "shop", text: "🧾 Sir, please make the payment — Bill" + (b.billNo ? " " + b.billNo : "") +
     (b.grandTotal ? " · " + inr(b.grandTotal) : "") +
-    (advPaid > 0 && b.grandTotal ? ` (advance ${inr(advPaid)} received — balance ${inr(balance)})` : "") +
+    (advPaid > 0 && b.grandTotal ? ` (token ${inr(advPaid)} received — deducted, balance ${inr(balance)})` : "") +
     ". Send the payment screenshot here 🙏", fileId, mime });
   const no = main.serial ? `ORDER NO. ${main.serial}` : "the order";
   return reply(`✅ Bill sent to ${main.billName} — ${no}${b.billNo ? " · Bill " + b.billNo : ""}${b.grandTotal ? " · ₹" + b.grandTotal : ""}`);
@@ -1614,7 +1616,7 @@ exports.advanceProof = onRequest(
     const hash = require("crypto").createHash("sha1").update(img).digest("hex");
     const have = (a.parts || []).reduce((t, x) => t + (x.amt || 0), 0);
     if ((a.hashes || []).includes(hash)) {
-      return fail(`This screenshot is already received (${inr(have)} of the ${inr(a.due)} advance). Please pay ${inr(Math.max(0, a.due - have))} more and send that screenshot.`);
+      return fail(`This screenshot is already received (${inr(have)} of the ${inr(a.due)} token). Please pay ${inr(Math.max(0, a.due - have))} more and send that screenshot.`);
     }
     const usedImg = await db.collection("bbapp_advances").where("hashes", "array-contains", hash).get();
     if (usedImg.docs.some((x) => x.id !== ref)) return fail("This payment screenshot was already used for another order.");
@@ -1625,7 +1627,7 @@ exports.advanceProof = onRequest(
     // Only OUR name / UPI id / account — "XYZ SYNTHETICS" must not pass.
     const who = `${p.payee || ""} ${p.payeeAccount || ""}`.toUpperCase().replace(/[^A-Z0-9]/g, "");
     const ours = who.includes("BBSYNTHETIC") || who.includes("173947529358") || who.includes("270320110001776");
-    if (!ours) return fail(`This payment went to "${p.payee || p.payeeAccount || "someone else"}". The advance must be paid to B.B SYNTHETICS only.`);
+    if (!ours) return fail(`This payment went to "${p.payee || p.payeeAccount || "someone else"}". The token must be paid to B.B SYNTHETICS only.`);
     const tm = /^\d{1,2}:\d{2}$/.test(String(p.time || "")) ? String(p.time).padStart(5, "0") : null;
     const dt = /^\d{4}-\d{2}-\d{2}$/.test(String(p.date || "")) ? p.date
       : (tm ? new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10) : null);
@@ -1652,7 +1654,7 @@ exports.advanceProof = onRequest(
     const hashes = admin.firestore.FieldValue.arrayUnion(hash);
     if (sum + 1 < a.due) {
       await docRef.set({ parts, utrs, hashes, utr: utrs[0] || null, path }, { merge: true });
-      return fail(`Received ${inr(sum)} of the ${inr(a.due)} advance. Please pay ${inr(a.due - sum)} more and send that screenshot too.`);
+      return fail(`Received ${inr(sum)} of the ${inr(a.due)} token. Please pay ${inr(a.due - sum)} more and send that screenshot too.`);
     }
     await docRef.set({ state: "paid", parts, utrs, hashes, paid: sum, utr: utrs.join(", ") || null, payee: p.payee || null,
       paidAt: isNaN(paidAt) ? null : paidAt, path, verifiedAt: Date.now() }, { merge: true });
@@ -1669,7 +1671,7 @@ exports.advanceReminder = onSchedule(
       const a = d.data();
       if (a.reminded || Date.now() - (a.at || 0) < 24 * 3600e3) continue;
       await tg("sendMessage", { chat_id: ORDER_GROUP,
-        text: `⏳ NEW CUSTOMER has not paid the 10% advance yet\n${a.billName || "-"} · ${a.mobile || "-"}\nOrder approx ${inr(a.total)} · advance ${inr(a.due)}\nPlease call them.` });
+        text: `⏳ NEW CUSTOMER has not paid the 10% token yet\n${a.billName || "-"} · ${a.mobile || "-"}\nOrder approx ${inr(a.total)} · token ${inr(a.due)}\nPlease call them.` });
       await d.ref.set({ reminded: Date.now() }, { merge: true });
     }
   },
