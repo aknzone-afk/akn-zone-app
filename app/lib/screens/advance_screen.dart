@@ -72,13 +72,72 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
     }
   }
 
+  /// Owner 13-Oct: every UPI app on the phone, each opening straight on the
+  /// payment screen with B.B SYNTHETICS + the amount filled — the customer
+  /// only presses Pay. (iPhone has no "choose app" for upi:// — it opened
+  /// whichever app registered first — so each app has its own button.)
+  static const _apps = [
+    (name: 'PhonePe', scheme: 'phonepe://pay', color: Color(0xFF5F259F)),
+    (name: 'Google Pay', scheme: 'tez://upi/pay', color: Color(0xFF1A73E8)),
+    (name: 'Paytm', scheme: 'paytmmp://pay', color: Color(0xFF00B9F1)),
+    (name: 'BHIM', scheme: 'bhim://upi/pay', color: Color(0xFFF47C20)),
+  ];
+
+  String _query(int due) => 'pa=$_upi&pn=${Uri.encodeComponent('B B SYNTHETICS')}'
+      '&am=$due&cu=INR&tn=${Uri.encodeComponent('Token ${widget.number}')}';
+
+  Future<bool> _open(String url) =>
+      launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication).catchError((_) => false);
+
   Future<void> _payUpi(int due) async {
-    final uri = Uri.parse('upi://pay?pa=$_upi&pn=${Uri.encodeComponent('B B SYNTHETICS')}'
-        '&am=$due&cu=INR&tn=${Uri.encodeComponent('Token ${widget.number}')}');
-    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication).catchError((_) => false);
+    final q = _query(due);
+    // Installed apps first (needs the schemes in Info.plist / <queries>).
+    final have = <String>{};
+    for (final a in _apps) {
+      if (await canLaunchUrl(Uri.parse('${a.scheme}?$q')).catchError((_) => false)) have.add(a.name);
+    }
+    if (!mounted) return;
+    final apps = [..._apps.where((a) => have.contains(a.name)), ..._apps.where((a) => !have.contains(a.name))];
+    final pick = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Text('Pay ${OrderService.formatRupees(due)} with', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
+          const SizedBox(height: 4),
+          const Text('B.B SYNTHETICS and the amount are filled in — just press Pay.',
+              textAlign: TextAlign.center, style: TextStyle(color: Colors.black54)),
+          const SizedBox(height: 8),
+          for (final a in apps)
+            ListTile(
+              leading: CircleAvatar(
+                  backgroundColor: a.color,
+                  child: Text(a.name[0], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900))),
+              title: Text(a.name, style: const TextStyle(fontWeight: FontWeight.w800)),
+              subtitle: have.isEmpty || have.contains(a.name) ? null : const Text('Not found on this phone'),
+              trailing: const Icon(Icons.chevron_right_rounded),
+              onTap: () => Navigator.pop(ctx, a.scheme),
+            ),
+          ListTile(
+            leading: const CircleAvatar(backgroundColor: Color(0xFF1B8E3A),
+                child: Icon(Icons.account_balance_wallet_rounded, color: Colors.white)),
+            title: const Text('Any other UPI app', style: TextStyle(fontWeight: FontWeight.w800)),
+            subtitle: const Text('Cred, Amazon Pay, bank apps…'),
+            trailing: const Icon(Icons.chevron_right_rounded),
+            onTap: () => Navigator.pop(ctx, 'upi://pay'),
+          ),
+          const SizedBox(height: 8),
+        ]),
+      ),
+    );
+    if (pick == null || !mounted) return;
+    var ok = await _open('$pick?$q');
+    // Google Pay on iPhone also answers to gpay://
+    if (!ok && pick.startsWith('tez://')) ok = await _open('gpay://upi/pay?$q');
+    if (!ok && pick != 'upi://pay') ok = await _open('upi://pay?$q');
     if (!ok && mounted) {
       ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('No UPI app found — scan the QR code or use bank transfer.')));
+          content: Text('That app is not on this phone — choose another, scan the QR code or use bank transfer.')));
     }
   }
 
