@@ -23,6 +23,14 @@ class PiecesNotifier extends StateNotifier<Map<String, int>> {
   static const _kKey = 'pieces_v1';
   static const _kBoxKey = 'pieces_boxes_v1';
   static const _kPtKey = 'pieces_points_v1';
+  static const _kMergedKey = 'pieces_merged_v1';
+
+  /// Owner 13-Oct: the PC now decides (by looking at the photo) whether the
+  /// top is ONE open saree — such boxes arrive already joined. Then the app
+  /// must not join a top ROW of folded sarees by itself (P126 / P117 lost
+  /// colours that way).
+  late bool _merged = _prefs.getBool(_kMergedKey) ?? false;
+  List<List<int>> _oao(List<List<int>> b) => _merged ? b : openAsOne(b);
 
   /// key → label point per saree [y, x] (0-1000): the centre of a plain,
   /// single-colour part of that saree — where its number is drawn.
@@ -92,7 +100,7 @@ class PiecesNotifier extends StateNotifier<Map<String, int>> {
   List<List<int>>? boxesFor(Photo p) {
     final k = keyFor(p);
     final found = _boxes[k] ?? _boxes[_noExt(k)];
-    final raw = found == null ? null : openAsOne(found);
+    final raw = found == null ? null : _oao(found);
     final fixed = _fixed[fixKey(p.designNumber)];
     if (raw == null || fixed == null || fixed >= raw.length || fixed < 1) return raw;
     return _mergeTo(raw, fixed);
@@ -211,7 +219,7 @@ class PiecesNotifier extends StateNotifier<Map<String, int>> {
     final n = state[k] ?? state[_noExt(k)];
     // Same rule for the count: the split open saree counts once.
     final found = _boxes[k] ?? _boxes[_noExt(k)];
-    if (n != null && found != null && n == found.length) return openAsOne(found).length;
+    if (n != null && found != null && n == found.length) return _oao(found).length;
     return n;
   }
 
@@ -239,6 +247,8 @@ class PiecesNotifier extends StateNotifier<Map<String, int>> {
       final points = Map<String, dynamic>.from((j['points'] ?? const {}) as Map);
       await _prefs.setString(_kPtKey, jsonEncode(points));
       _points = _indexPoints(points);
+      _merged = j['merged'] == 1;
+      await _prefs.setBool(_kMergedKey, _merged);
       await _prefs.setInt(_kAtKey, DateTime.now().millisecondsSinceEpoch);
       if (mounted) state = _index(pieces);
     } catch (_) {
