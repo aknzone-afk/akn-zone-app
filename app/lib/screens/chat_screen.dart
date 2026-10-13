@@ -1,9 +1,12 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../providers/providers.dart';
 import '../services/chat_service.dart';
@@ -29,7 +32,8 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   void initState() {
     super.initState();
     _load();
-    _poll = Timer.periodic(const Duration(seconds: 8), (_) => _load());
+    // Tester 13-Oct: 20 s (was 8) — each poll now fetches only new messages.
+    _poll = Timer.periodic(const Duration(seconds: 20), (_) => _load());
   }
 
   @override
@@ -193,9 +197,11 @@ class _ChatImage extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    if ((mime ?? '').contains('pdf')) {
-      return const Padding(padding: EdgeInsets.all(4), child: Text('📄 PDF bill (see My Orders → VIEW BILL)'));
-    }
+    // Tester 13-Oct: a PDF / Excel / any non-image file from the shop opened
+    // as a broken picture (or pointed to VIEW BILL, which shows only the
+    // bill) — it is a tap-to-open file tile now (opens / shares the file).
+    final mt = mime ?? 'image/jpeg';
+    if (!mt.startsWith('image/')) return _FileTile(mobile: mobile, id: id, mime: mt);
     final key = '$mobile/$id';
     final have = _bytes[key];
     if (have != null) return _image(context, have);
@@ -223,7 +229,65 @@ class _ChatImage extends ConsumerWidget {
             body: InteractiveViewer(maxScale: 6, child: Center(child: Image.memory(bytes)))))),
     child: ClipRRect(
         borderRadius: BorderRadius.circular(8),
-        child: Image.memory(bytes, width: 220, fit: BoxFit.cover, gaplessPlayback: true)),
+        child: Image.memory(bytes, width: 220, fit: BoxFit.cover, gaplessPlayback: true,
+            errorBuilder: (_, __, ___) => const Text('📎 File (cannot show)'))),
   );
+  }
+}
+
+class _FileTile extends ConsumerStatefulWidget {
+  final String mobile, id, mime;
+  const _FileTile({required this.mobile, required this.id, required this.mime});
+
+  @override
+  ConsumerState<_FileTile> createState() => _FileTileState();
+}
+
+class _FileTileState extends ConsumerState<_FileTile> {
+  bool _busy = false;
+
+  static const _ext = {
+    'pdf': 'pdf', 'spreadsheetml': 'xlsx', 'ms-excel': 'xls', 'wordprocessingml': 'docx',
+    'msword': 'doc', 'zip': 'zip', 'csv': 'csv', 'text/plain': 'txt',
+  };
+
+  Future<void> _open() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      final b = await ChatService.file(ref.read(dioProvider), widget.mobile, widget.id);
+      if (b == null) throw Exception('no file');
+      final ext = _ext.entries.where((e) => widget.mime.contains(e.key)).map((e) => e.value).firstOrNull ?? 'bin';
+      final dir = await getTemporaryDirectory();
+      final f = File('${dir.path}/AKN_ZONE_${widget.id}.$ext');
+      await f.writeAsBytes(b, flush: true);
+      await Share.shareXFiles([XFile(f.path, mimeType: widget.mime)]);
+    } catch (_) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Could not open the file — please check internet and try again.')));
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final pdf = widget.mime.contains('pdf');
+    return InkWell(
+      onTap: _open,
+      child: Padding(
+        padding: const EdgeInsets.all(4),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          _busy
+              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+              : Icon(pdf ? Icons.picture_as_pdf_rounded : Icons.attach_file_rounded, size: 20),
+          const SizedBox(width: 6),
+          Text(pdf ? 'PDF — tap to open' : 'File — tap to open',
+              style: const TextStyle(fontWeight: FontWeight.w600)),
+        ]),
+      ),
+    );
   }
 }

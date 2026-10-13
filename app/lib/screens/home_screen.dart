@@ -108,11 +108,10 @@ class HomeScreen extends ConsumerWidget {
         elevation: 0,
         strokeWidth: 0,
         onRefresh: () async {
-          // Start version checks immediately (light HEAD requests), then walk.
-          // ignore: discarded_futures
-          ref.read(photoFreshnessProvider)();
-          await ref.read(catalogServiceProvider).load(force: true);
-          ref.invalidate(catalogProvider);
+          // Tester 13-Oct: one guarded walk shared with the background
+          // re-scan (no second concurrent Drive walk); the version checks
+          // start at once and their price reads wait for the walk.
+          await ref.read(pullToRefreshProvider)();
           await ref.read(catalogProvider.future);
         },
         child: _buildBody(ref, catalogAsync),
@@ -406,11 +405,13 @@ void _showShopInfo(BuildContext context) {
   const mapsUrl = 'https://maps.app.goo.gl/ZDC7mJpa3jKkJxaU8';
   const phone = '7016638059';
 
+  // Tester 13-Oct: launch directly (like advance_screen) instead of gating on
+  // canLaunchUrl, which is false on Android 11+ when the browser/dialer isn't
+  // declared in <queries> — the tap silently did nothing.
   Future<void> openUrl(String url) async {
-    final uri = Uri.parse(url);
-    if (await canLaunchUrl(uri)) {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
-    }
+    try {
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    } catch (_) {/* no app can open it — nothing to do */}
   }
 
   showDialog<void>(

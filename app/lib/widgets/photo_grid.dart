@@ -32,7 +32,11 @@ class PhotoGrid extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     if (photos.isEmpty) return const _Empty();
     final selection = ref.watch(selectionProvider);
-    final selectionMode = selection.isNotEmpty;
+    // Tester 13-Oct: the cart (removeMode) has no multi-select bar, so a hold
+    // there used to tick photos with no way to use or leave it, and every tap
+    // then only toggled a tick instead of opening SELECT COLOURS / SETS.
+    // The cart never enters selection mode now.
+    final selectionMode = !removeMode && selection.isNotEmpty;
 
     final allIds = photos.map((p) => p.id).toList(growable: false);
     WidgetsBinding.instance
@@ -76,8 +80,9 @@ class PhotoGrid extends ConsumerWidget {
                           if (id == p.id || !_isPicked(ref, id)) id
                       ],
                     ),
-              onLongPress: () =>
-                  ref.read(selectionProvider.notifier).toggle(p.id),
+              onLongPress: removeMode
+                  ? () {}
+                  : () => ref.read(selectionProvider.notifier).toggle(p.id),
               onSelectToggle: () =>
                   ref.read(selectionProvider.notifier).toggle(p.id),
             ),

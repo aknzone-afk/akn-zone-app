@@ -11,22 +11,37 @@ import '../services/picks_service.dart';
 class SelectionBottomBar extends ConsumerWidget {
   const SelectionBottomBar({super.key});
 
-  Future<void> _addToCart(WidgetRef ref) async {
+  /// Tester 13-Oct: true while a SEND TO CART run is in progress — a second
+  /// quick tap is ignored instead of racing the first one.
+  static bool _adding = false;
+
+  /// Returns false when a previous tap is still adding (nothing done).
+  Future<bool> _addToCart(WidgetRef ref) async {
+    if (_adding) return false;
     final ids = ref.read(selectionProvider).toList();
-    if (ids.isEmpty) return;
-    final favs = ref.read(favoritesProvider);
-    final notifier = ref.read(favoritesProvider.notifier);
-    // Tester 12-Oct: nothing goes into the cart without a quantity — a bulk
-    // "send to cart" adds 1 SET of each design (tap it to change).
-    final picks = ref.read(picksProvider);
-    for (final id in ids) {
-      final pk = picks[id];
-      if (pk == null || pk.isEmpty) {
-        await ref.read(picksProvider.notifier).set(id, const PickState(sets: 1));
+    if (ids.isEmpty) return false;
+    _adding = true;
+    try {
+      final notifier = ref.read(favoritesProvider.notifier);
+      // Tester 12-Oct: nothing goes into the cart without a quantity — a bulk
+      // "send to cart" adds 1 SET of each design (tap it to change).
+      // Tester 13-Oct: picks are read LIVE per design (not a snapshot), the
+      // pick is saved BEFORE the design joins the cart (a design with no pick
+      // can never be in the cart), and add() never removes.
+      for (final id in ids) {
+        final pk = ref.read(picksProvider)[id];
+        if (pk == null || pk.isEmpty) {
+          await ref
+              .read(picksProvider.notifier)
+              .set(id, const PickState(sets: 1));
+        }
+        await notifier.add(id);
       }
-      if (!favs.contains(id)) await notifier.toggle(id);
+      ref.read(selectionProvider.notifier).clear();
+      return true;
+    } finally {
+      _adding = false;
     }
-    ref.read(selectionProvider.notifier).clear();
   }
 
   @override
@@ -59,8 +74,8 @@ class SelectionBottomBar extends ConsumerWidget {
               FilledButton.icon(
                 onPressed: () async {
                   final n = ref.read(selectionProvider).length;
-                  await _addToCart(ref);
-                  if (context.mounted) {
+                  final added = await _addToCart(ref);
+                  if (added && context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                         content: Text('$n design${n == 1 ? '' : 's'} added as 1 SET each — tap a design to change.')));
                   }

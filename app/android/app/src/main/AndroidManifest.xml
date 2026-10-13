@@ -102,5 +102,16 @@
         </intent>
         <package android:name="com.whatsapp" />
         <package android:name="com.whatsapp.w4b" />
+        <!-- Tester 13-Oct: Android 11+ hides the browser and dialer without
+             these, so canLaunchUrl() said "no" and the shop-info map link and
+             phone number did nothing. -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="https" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:scheme="tel" />
+        </intent>
     </queries>
 </manifest>

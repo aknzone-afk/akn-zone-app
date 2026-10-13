@@ -315,11 +315,8 @@ class _FolderScaffold extends ConsumerWidget {
         elevation: 0,
         strokeWidth: 0,
         onRefresh: () async {
-          // Start version checks immediately (light HEAD requests), then walk.
-          // ignore: discarded_futures
-          ref.read(photoFreshnessProvider)();
-          await ref.read(catalogServiceProvider).load(force: true);
-          ref.invalidate(catalogProvider);
+          // Tester 13-Oct: shared, guarded walk — see pullToRefreshProvider.
+          await ref.read(pullToRefreshProvider)();
           await ref.read(catalogProvider.future);
         },
         child: body,

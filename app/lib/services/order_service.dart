@@ -33,6 +33,18 @@ class PincodeInfo {
   String get label => '$district, $state';
 }
 
+/// Tester 13-Oct: thrown by [OrderService.place] when some photos could not
+/// be downloaded even after retries. The order is NOT saved or sent, so a
+/// design is never silently dropped — the customer is told and taps again.
+class OrderPhotosMissing implements Exception {
+  /// D.No of each design whose photo is missing ('' when it has none).
+  final List<String> designs;
+  const OrderPhotosMissing(this.designs);
+
+  @override
+  String toString() => 'Could not prepare ${designs.length} photo(s)';
+}
+
 /// Places orders: validates the form, renders the photos exactly as the
 /// customer selected / marked them, keeps a device-side history + send queue,
 /// and posts each order to the shop's Telegram group — all the photos first,
@@ -584,14 +596,24 @@ class OrderService {
         final ph = photos[i];
         Uint8List? bytes = await editService.read(ph.id);
         if (bytes == null || bytes.isEmpty) {
-          try {
-            final res = await dio.get<List<int>>(
-              DriveUrls.thumbnail(ph.id, width: 1600),
-              options: Options(responseType: ResponseType.bytes),
-            );
-            bytes = Uint8List.fromList(res.data ?? const []);
-          } catch (_) {
+          // Tester 13-Oct: 3 tries — one failed download on a weak signal
+          // used to drop the design from the order without a word.
+          for (var attempt = 0; attempt < 3; attempt++) {
+            try {
+              final res = await dio.get<List<int>>(
+                DriveUrls.thumbnail(ph.id, width: 1600),
+                options: Options(responseType: ResponseType.bytes),
+              );
+              final got = Uint8List.fromList(res.data ?? const []);
+              if (got.isNotEmpty) {
+                bytes = got;
+                break;
+              }
+            } catch (_) {}
             bytes = null;
+            if (attempt < 2) {
+              await Future<void>.delayed(Duration(seconds: 1 + attempt * 2));
+            }
           }
         }
         final pick = picks[ph.id];
@@ -618,6 +640,20 @@ class OrderService {
     }
 
     await Future.wait(List.generate(min(6, max(1, photos.length)), (_) => worker()));
+    // Tester 13-Oct: owner rule — an order must never silently lose a design.
+    // A photo that still couldn't be prepared stops the order HERE (nothing
+    // saved, nothing sent, cart untouched) and the customer is told which.
+    final missing = <String>[
+      for (var i = 0; i < photos.length; i++)
+        if (!File(p.join(dir.path, '$i.jpg')).existsSync())
+          order.items[i].designNumber ?? '',
+    ];
+    if (missing.isNotEmpty) {
+      try {
+        dir.deleteSync(recursive: true);
+      } catch (_) {}
+      throw OrderPhotosMissing(missing);
+    }
     // New customer: held for the 10% advance (AdvanceScreen). The flag is in
     // the FIRST save, so a crash right here can never let a retry send it.
     order.awaitingAdvance = holdForAdvance;
@@ -816,8 +852,12 @@ class OrderService {
       await _keepSmallCopies(dir);
       return true;
     } catch (e) {
+      // Tester 13-Oct: a 400 is Telegram refusing the message (not the
+      // network) — say so, so it isn't mistaken for "no internet".
       order.lastError = e is DioException
-          ? 'No internet / server busy — will retry'
+          ? (e.response?.statusCode == 400
+              ? 'Shop group refused the message: ${_tgError(e)} — will retry'
+              : 'No internet / server busy — will retry')
           : 'Will retry: $e';
       await _saveOrder(prefs, order);
       return false;
@@ -887,6 +927,17 @@ class OrderService {
     ];
   }
 
+  /// Telegram's own error text from a refused request (or the status code).
+  static String _tgError(DioException e) {
+    try {
+      final d = e.response?.data;
+      final m = d is String ? jsonDecode(d) : d;
+      final desc = m is Map ? m['description'] : null;
+      if (desc != null) return '$desc';
+    } catch (_) {}
+    return 'HTTP ${e.response?.statusCode}';
+  }
+
   static int? _msgId(dynamic sent) => (sent is Map && sent['result'] is Map)
       ? (sent['result']['message_id'] as num?)?.toInt()
       : null;
@@ -897,14 +948,26 @@ class OrderService {
     order.registered = false;
   }
 
-  static Future<String> _details(SharedPreferences prefs, Order order) =>
-      detailsText(order,
-          mainSerial: order.addOnTo == null
-              ? null
-              : history(prefs)
-                  .where((x) => x.number == order.addOnTo)
-                  .firstOrNull
-                  ?.serial);
+  static Future<String> _details(SharedPreferences prefs, Order order) async {
+    // Tester 13-Oct: safety net for orders queued by an older app version —
+    // any design whose photo file is missing is named in the details, so the
+    // shop still knows it was ordered.
+    final dir = await viewDir(order.number);
+    final noPhoto = <String>[
+      if (dir != null)
+        for (var i = 0; i < order.items.length; i++)
+          if (!File(p.join(dir.path, '$i.jpg')).existsSync())
+            order.items[i].designNumber ?? '#${i + 1}',
+    ];
+    return detailsText(order,
+        noPhoto: noPhoto,
+        mainSerial: order.addOnTo == null
+            ? null
+            : history(prefs)
+                .where((x) => x.number == order.addOnTo)
+                .firstOrNull
+                ?.serial);
+  }
 
   /// Tells the cloud this order's Telegram messages (status buttons, staff
   /// replies → the customer's chat, NewPartyBot ledger). Idempotent.
@@ -1001,6 +1064,38 @@ class OrderService {
       .replaceAll('<', '&lt;')
       .replaceAll('>', '&gt;');
 
+  /// Tester 13-Oct: Telegram refuses a message over 4096 characters, and a
+  /// pasted long note/address kept the order stuck "pending" forever. Cuts
+  /// [s] to at most [limit] characters at a LINE end (a word end when one
+  /// line is very long) and marks the cut with "…".
+  static String _clipAtLineEnd(String s, int limit) {
+    if (s.length <= limit) return s;
+    const more = ' …';
+    final room = limit - more.length;
+    if (room <= 0) return '';
+    var cut = s.lastIndexOf('\n', room);
+    if (cut < room ~/ 2) cut = s.lastIndexOf(' ', room);
+    if (cut < room ~/ 2) cut = room;
+    // Never split an emoji (UTF-16 surrogate pair).
+    if (cut > 1) {
+      final u = s.codeUnitAt(cut - 1);
+      if (u >= 0xD800 && u <= 0xDBFF) cut--;
+    }
+    return '${s.substring(0, cut).trimRight()}$more';
+  }
+
+  /// [s] clipped at a line end and HTML-escaped, at most [budget] characters
+  /// AFTER escaping ('&' grows to 5), so it can never break the 4096 limit.
+  static String _clipEsc(String s, int budget) {
+    var limit = budget;
+    while (true) {
+      final e = _esc(_clipAtLineEnd(s, limit));
+      if (e.length <= budget) return e;
+      if (limit <= 0) return '';
+      limit -= max(1, e.length - budget);
+    }
+  }
+
   static String formatWhen(DateTime t) {
     const m = [
       'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
@@ -1027,7 +1122,8 @@ class OrderService {
   }
 
   /// The details message posted under the photos.
-  static Future<String> detailsText(Order o, {int? mainSerial}) async {
+  static Future<String> detailsText(Order o,
+      {int? mainSerial, List<String> noPhoto = const []}) async {
     final c = o.customer;
 
     final mobileDigits = c.isIndia
@@ -1048,34 +1144,50 @@ class OrderService {
     if (unpriced > 0) {
       b.writeln('⚠️ <b>$unpriced design${unpriced == 1 ? '' : 's'} without price</b>');
     }
-    if ((o.lockNote ?? '').isNotEmpty) b.writeln(_esc(o.lockNote!));
+    if (noPhoto.isNotEmpty) {
+      b.writeln('⚠️ <b>Photo missing:</b> '
+          '${_clipEsc(noPhoto.map((d) => d.isEmpty ? '?' : 'D.No $d').join(', '), 600)}');
+    }
+    // Tester 13-Oct: every free-text field is clipped (see _clipEsc), so the
+    // details message always fits Telegram's 4096-character limit; the full
+    // text stays in the order saved on the phone.
+    if ((o.lockNote ?? '').isNotEmpty) b.writeln(_clipEsc(o.lockNote!, 400));
     if (c.kind == 'old') {
       // Owner: for an old customer only these — the rest is in Tally (and no
       // "OLD CUSTOMER" line; only a NEW customer is marked).
       b.writeln();
-      b.writeln('👤 <b>Bill Name:</b> ${_esc(c.billName)}');
-      b.writeln('📍 <b>Booking Place:</b> ${_esc(c.bookingPlace)}');
+      b.writeln('👤 <b>Bill Name:</b> ${_clipEsc(c.billName, 200)}');
+      b.writeln('📍 <b>Booking Place:</b> ${_clipEsc(c.bookingPlace, 200)}');
     } else {
-      if (!c.isIndia) b.writeln('🌍 <b>Country: ${_esc(c.country.toUpperCase())}</b>');
+      if (!c.isIndia) {
+        b.writeln('🌍 <b>Country: ${_clipEsc(c.country.toUpperCase(), 100)}</b>');
+      }
       b.writeln('🆕 <b>NEW CUSTOMER</b>');
       b.writeln();
-      b.writeln('👤 <b>Bill Name:</b> ${_esc(c.billName)}');
-      b.writeln('🏠 <b>Address:</b> ${_esc(c.address)}');
-      b.writeln('📍 <b>Booking Place:</b> ${_esc(c.bookingPlace)}');
-      b.writeln('📮 <b>${c.isIndia ? 'Pincode' : 'Postal Code'}:</b> ${_esc(c.pincode)}');
+      b.writeln('👤 <b>Bill Name:</b> ${_clipEsc(c.billName, 200)}');
+      b.writeln('🏠 <b>Address:</b> ${_clipEsc(c.address, 600)}');
+      b.writeln('📍 <b>Booking Place:</b> ${_clipEsc(c.bookingPlace, 200)}');
+      b.writeln('📮 <b>${c.isIndia ? 'Pincode' : 'Postal Code'}:</b> ${_clipEsc(c.pincode, 40)}');
       b.writeln('📱 <b>Mobile:</b> ${_esc(shownMobile)} · '
           '<a href="https://wa.me/$waNumber">WhatsApp</a>');
-      b.writeln('🚚 <b>Transport:</b> ${_esc(c.transport.isEmpty ? '-' : c.transport)}');
+      b.writeln('🚚 <b>Transport:</b> ${_clipEsc(c.transport.isEmpty ? '-' : c.transport, 200)}');
       if (c.taxId.trim().isNotEmpty) {
         final label = (kind != null && !kind.startsWith('!')) ? kind : 'GST/PAN/Aadhaar';
-        b.writeln('🧾 <b>$label:</b> ${_esc(c.taxId.trim().toUpperCase())}');
+        b.writeln('🧾 <b>$label:</b> ${_clipEsc(c.taxId.trim().toUpperCase(), 60)}');
       }
     }
-    if (o.note.isNotEmpty) b.writeln('📝 <b>Note:</b> ${_esc(o.note)}');
-    if (o.advancePaid != null) {
-      b.writeln('✅ <b>ADVANCE ${formatRupees(o.advancePaid!)} PAID (10%)</b>'
-          '${o.advanceUtr != null ? ' · UTR ${_esc(o.advanceUtr!)}' : ''}');
+    final advance = o.advancePaid == null
+        ? ''
+        : '✅ <b>ADVANCE ${formatRupees(o.advancePaid!)} PAID (10%)</b>'
+            '${o.advanceUtr != null ? ' · UTR ${_clipEsc(o.advanceUtr!, 60)}' : ''}';
+    if (o.note.isNotEmpty) {
+      // The note gets whatever room is left under 4000 characters.
+      const label = '📝 <b>Note:</b> ';
+      final room = 4000 - b.length - advance.length - label.length - 2;
+      final note = _clipEsc(o.note, room);
+      if (note.isNotEmpty) b.writeln('$label$note');
     }
+    if (advance.isNotEmpty) b.writeln(advance);
     // Owner: no date / phone / app version. "ORDER NO. N" and the two dots
     // go as their own messages right after (see _trySend).
     return b.toString().trimRight();

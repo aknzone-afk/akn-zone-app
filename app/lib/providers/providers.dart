@@ -286,16 +286,22 @@ final FutureProvider<CatalogResult> catalogProvider =
 
     CatalogResult shown;
     bool liveScraped = false;
+    // Tester 13-Oct: after the 90-s timeout the walk keeps running (the
+    // catch-up now joins it instead of starting a second one), so its
+    // progress callbacks must stop feeding the loading screen once it's gone.
+    var loadingScreenUp = true;
     try {
       shown = await svc
           .load(
             force: true,
             onProgress: (folders, photos) {
+              if (!loadingScreenUp) return;
               final cur = ref.read(scrapeProgressProvider);
               ref.read(scrapeProgressProvider.notifier).state =
                   cur.copyWith(foldersDone: folders, photosFound: photos);
             },
             onPhotoDiscovered: (photo) {
+              if (!loadingScreenUp) return;
               final n = ref.read(discoveredPhotosProvider.notifier);
               final cur = n.state;
               n.state = cur.length >= kMaxDiscoveredForCollage
@@ -312,6 +318,7 @@ final FutureProvider<CatalogResult> catalogProvider =
     } catch (_) {
       shown = result; // unreachable / too slow → bundled seed fallback
     }
+    loadingScreenUp = false;
 
     // Warm folder covers so the grid opens fully painted (preparing phase).
     // Owner: a little longer is fine — the home grid must open with EVERY
@@ -456,8 +463,9 @@ Future<int> _runPriceOcrOnce(Ref ref, {required bool silent}) async {
         final photo = queue.removeAt(0);
         try {
           // The viewer may have read it meanwhile; don't download it twice.
+          // Tester 13-Oct: through the shared OCR gate (see _withOcrSlot).
           final r = await cache.isPending(photo.id)
-              ? await ocr.recognize(photo.id)
+              ? await _withOcrSlot(() => ocr.recognize(photo.id))
               : null;
           if (r != null && r.ok) {
             // Prefer verified seed over ML Kit when versions match.
@@ -660,25 +668,58 @@ Future<void> _applyNewVersion(Ref ref, Photo p, String live,
   }
   await cache.saveDriveVersions({p.id: live}, needsReread: {p.id});
   if (!readNow) return;
-  final ocr = PriceOcr(dio: ref.read(dioProvider));
-  try {
-    final r = await ocr.recognize(p.id);
-    if (r.ok) {
-      // Prefer verified seed over ML Kit when versions match.
-      final s = await _verifiedSeedPrice(ref.container, p.id, r.version ?? live);
-      await cache.saveOcr(
-        photoId: p.id,
-        fabricName: null,
-        price: s?.price ?? r.price,
-        priceText: s?.priceText ?? r.priceText,
-        ocrText: s?.ocrText ?? r.text,
-        state: OcrState.done,
-        driveVersion: r.version ?? live,
-      );
-      ref.container.invalidate(catalogProvider);
+  // Tester 13-Oct: the version check runs 16 HEAD workers and each could start
+  // its own ML Kit read here — 16 at once, while 12 already crashed the iPhone
+  // (kOcrConcurrency=5). The reader is now made and run inside the shared OCR
+  // gate, so at most kOcrConcurrency reads run app-wide; HEADs stay 16-wide.
+  await _withOcrSlot(() async {
+    final ocr = PriceOcr(dio: ref.read(dioProvider));
+    try {
+      final r = await ocr.recognize(p.id);
+      if (r.ok) {
+        // Prefer verified seed over ML Kit when versions match.
+        final s =
+            await _verifiedSeedPrice(ref.container, p.id, r.version ?? live);
+        await cache.saveOcr(
+          photoId: p.id,
+          fabricName: null,
+          price: s?.price ?? r.price,
+          priceText: s?.priceText ?? r.priceText,
+          ocrText: s?.ocrText ?? r.text,
+          state: OcrState.done,
+          driveVersion: r.version ?? live,
+        );
+        ref.container.invalidate(catalogProvider);
+      }
+    } catch (_) {/* stays pending; the OCR step retries it */} finally {
+      ocr.close();
     }
-  } catch (_) {/* stays pending; the OCR step retries it */} finally {
-    ocr.close();
+  });
+}
+
+/// Tester 13-Oct: one app-wide gate for ML Kit price reads (the version
+/// check's inline re-reads AND the OCR step), at most [kOcrConcurrency] at a
+/// time, so the two can never add up past the limit that keeps low-end phones
+/// alive. A freed slot is handed straight to the next waiter (FIFO).
+int _ocrSlotsBusy = 0;
+final Queue<Completer<void>> _ocrSlotWaiters = Queue<Completer<void>>();
+
+Future<T> _withOcrSlot<T>(Future<T> Function() read) async {
+  if (_ocrSlotsBusy >= kOcrConcurrency) {
+    final turn = Completer<void>();
+    _ocrSlotWaiters.add(turn);
+    await turn.future; // the releasing reader passes its slot on to us
+  } else {
+    _ocrSlotsBusy++;
+  }
+  try {
+    return await read();
+  } finally {
+    if (_ocrSlotWaiters.isNotEmpty) {
+      _ocrSlotWaiters.removeFirst().complete();
+    } else {
+      _ocrSlotsBusy--;
+    }
   }
 }
 
@@ -821,6 +862,37 @@ final catalogResumeCheckProvider = Provider<void Function()>((ref) {
 /// ignoring the hourly throttle.
 final photoFreshnessProvider = Provider<Future<void> Function()>((ref) {
   return () => _freshnessPass(ref, forceVersionCheck: true);
+});
+
+/// Tester 13-Oct: pull-to-refresh (home + folder screens). It used to call
+/// load(force: true) directly, outside the [_resyncRun] guard — a second full
+/// walk next to a running re-scan, and the freshness pass (started first)
+/// could read prices before the pull's walk added its new photos. Now it joins
+/// the running re-scan or registers its own walk as [_resyncRun] BEFORE the
+/// freshness pass starts, so that pass waits for it. Never throws.
+final pullToRefreshProvider = Provider<Future<void> Function()>((ref) {
+  return () async {
+    var walk = _resyncRun;
+    if (walk == null) {
+      final svc = ref.read(catalogServiceProvider);
+      _lastResyncAttempt = DateTime.now();
+      final run = () async {
+        try {
+          await svc.load(force: true);
+        } catch (_) {/* silent — the cached catalog stays on screen */}
+      }();
+      _resyncRun = run;
+      run.whenComplete(() {
+        if (identical(_resyncRun, run)) _resyncRun = null;
+      });
+      walk = run;
+    }
+    // Light HEAD checks start at once; their price reads wait for the walk.
+    // ignore: discarded_futures
+    _freshnessPass(ref, forceVersionCheck: true);
+    await walk;
+    ref.container.invalidate(catalogProvider);
+  };
 });
 
 /// Guard so we only kick off one background warm-cache pass per app session.
@@ -1040,11 +1112,10 @@ final photosProvider = Provider<List<Photo>>((ref) {
       );
 });
 
-/// Random seed for folder cover ("key") photos. Re-randomised on every app
-/// open — cold launch (this initial value) and each time the app returns to
-/// the foreground (bumped from CatalogApp's lifecycle observer). So each folder
-/// tile shows a DIFFERENT photo from inside that folder every time the customer
-/// opens the app, instead of always the same first photo.
+/// Seed for folder cover ("key") photos, so each folder tile shows a photo
+/// from inside that folder instead of always the same first one. Tester
+/// 13-Oct: no longer re-randomised on resume (those covers were never warmed
+/// → blank tiles); it only changes with the date.
 // 12-Oct-2026: covers change once a DAY (not every launch), so a cover the
 // phone already downloaded is shown at once instead of a blank tile.
 final coverSeedProvider = StateProvider<int>((ref) {
@@ -1231,6 +1302,15 @@ class FavoritesNotifier extends StateNotifier<Set<String>> {
   }
 
   bool isFavorite(String id) => state.contains(id);
+
+  /// Tester 13-Oct: adds [id] to the cart; a no-op when it's already there.
+  /// Bulk "SEND TO CART" used toggle() on a stale snapshot, so a quick second
+  /// tap toggled designs back OUT and wiped their picks. Never removes.
+  Future<void> add(String id) async {
+    if (state.contains(id)) return;
+    state = {...state, id};
+    await _service.setStarred(id, true);
+  }
 
   Future<void> toggle(String id) async {
     final isNow = !state.contains(id);

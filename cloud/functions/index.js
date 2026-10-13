@@ -44,13 +44,25 @@ const MAX_BYTES = 3 * 1024 * 1024;
 const PER_IP_PER_HOUR = 120;
 
 const hits = new Map(); // ip → [timestamps] (per instance; good enough)
-function limited(ip) {
+function limited(ip, max = PER_IP_PER_HOUR) {
   const now = Date.now();
   const arr = (hits.get(ip) || []).filter((t) => now - t < 3600e3);
   arr.push(now);
   hits.set(ip, arr);
   if (hits.size > 5000) hits.clear();
-  return arr.length > PER_IP_PER_HOUR;
+  return arr.length > max;
+}
+
+/**
+ * Tester 13-Oct: ONE customer key everywhere (orders, chat, push, AKN Chat):
+ * an Indian number = its last 10 digits (+91 / 0 prefixes dropped); a foreign
+ * number (7-15 digits) = all its digits. Before, foreign numbers were cut to a
+ * fake "+91" tail and 7-9 digit numbers had no chat at all.
+ */
+function custKey(raw) {
+  const d = String(raw || "").replace(/\D/g, "");
+  if (d.length > 10 && /^(0|91)+$/.test(d.slice(0, -10))) return d.slice(-10);
+  return d.length >= 7 && d.length <= 15 ? d : "";
 }
 
 exports.readMarks = onRequest(
@@ -267,21 +279,23 @@ exports.nextOrderNo = onRequest(
 const TG_TOKEN = defineSecret("BBAPP_TG_TOKEN");
 const TG_SECRET = defineSecret("BBAPP_TG_SECRET");
 // Owner (11-Oct-2026): RECEIVED is automatic. Then ONE button at a time:
-//   🧺 Maal nikalna chalu  →  (3 hours later) 📦 Packed  →  🚚 Dispatched  →  ✅ Delivered
+//   🧺 Maal nikalna chalu  →  🧾 Bill  →  💰 Payment  →  🚚 Dispatched  →  📄 Bilty
 // A done step stays as "✔ <step> — by <name>" (name = the tapper's Telegram
 // name); tapping the LATEST done step again undoes it.
+// Tester 13-Oct: an automatic step can be undone by a human too (a wrongly
+// matched bill locked the order) — `clear` = the data that step brought.
 const STEPS = [
   { k: "g", status: "getting_ready", label: "🧺 Maal nikalna chalu", by: "readyBy", at: "readyAt" },
   { k: "b", status: "bill_sent", label: "🧾 Bill sent for payment", by: "billBy", at: "billAt", auto: true,
-    wait: "⏳ Waiting for bill (post it in the Bill group)" },
+    wait: "⏳ Waiting for bill (post it in the Bill group)",
+    clear: ["billFileId", "billMime", "billNo", "billTotal", "billSentAt", "billGroup"] },
   { k: "y", status: "payment_received", label: "💰 Payment received", by: "paidBy", at: "paidAt" },
   { k: "d", status: "dispatched", label: "🚚 Dispatched", by: "dispatchedBy", at: "dispatchedAt", auto: true,
-    wait: "⏳ Dispatched ticks when the parcel date is in Daily Parcels" },
+    wait: "⏳ Dispatched ticks when the parcel date is in Daily Parcels", clear: ["parcelDate"] },
   { k: "l", status: "bilty", label: "📄 Bilty", by: "biltyBy", at: "biltyAt", auto: true,
-    wait: "⏳ Bilty ticks when the bilty no. is entered" },
+    wait: "⏳ Bilty ticks when the bilty no. is entered", clear: ["lr", "bilty"] },
 ];
 const ORDER = ["received", ...STEPS.map((x) => x.status)];
-const PACK_AFTER_MS = 3 * 3600 * 1000;
 const STATUSES = Object.fromEntries(STEPS.map((x) => [x.k, x.status]));
 
 function hhmm(ms) {
@@ -312,6 +326,8 @@ function statusText(d, fallbackPlain) {
  * e.g. "🧺 ✅ Akshay 11:10" (tap again = undo, only by that person). After an
  * undo: a plain line "↩️ Undone Akshay 11:20" and the step's button again.
  * Automatic steps show a ⏳ waiting line.
+ * Tester 13-Oct: the intent is in the data — "s|" = DO (pending step),
+ * "u|" = UNDO (done step) — so a double tap can never flip a step back.
  */
 const firstName = (x) => String(x || "").trim().split(/\s+/)[0] || "?";
 function statusKeyboard(ref, d) {
@@ -325,7 +341,7 @@ function statusKeyboard(ref, d) {
     const done = [...log].reverse().find((e) => e.a === "do" && e.k === curStep.k);
     const icon = String(curStep.label).split(" ")[0];
     const who = done ? `${firstName(done.by)} ${hhmm(done.at)}` : "";
-    rows.push([{ text: `${icon} ✅ ${who}`.trim().slice(0, 60), callback_data: `s|${curStep.k}|${ref}`.slice(0, 64) }]);
+    rows.push([{ text: `${icon} ✅ ${who}`.trim().slice(0, 60), callback_data: `u|${curStep.k}|${ref}`.slice(0, 64) }]);
   }
   if (last && last.a === "undo") {
     rows.push([{ text: `↩️ Undone ${firstName(last.by)} ${hhmm(last.at)}`.slice(0, 60), callback_data: "n" }]);
@@ -368,11 +384,10 @@ exports.tgWebhook = onRequest(
         }
         const [tag, k, ref] = String(q.data || "").split("|");
         const step = STEPS.find((x) => x.k === k);
-        if (tag === "s" && step && step.auto) {
-          await tg("answerCallbackQuery", { callback_query_id: q.id, text: "This step ticks by itself." });
-          return res.status(200).send("ok");
-        }
-        if (tag === "s" && step && ref) {
+        // Tester 13-Oct: "s" = DO, "u" = UNDO. Buttons already in the group
+        // carry "s" on the done step too — that tap is now "Already done" (no
+        // write) and the buttons are redrawn, so the next tap is a real undo.
+        if ((tag === "s" || tag === "u") && step && ref) {
           const docRef = db.collection("bbapp_orders").doc(ref);
           const name = [q.from && q.from.first_name, q.from && q.from.last_name].filter(Boolean).join(" ")
             || (q.from && q.from.username) || "staff";
@@ -381,8 +396,11 @@ exports.tgWebhook = onRequest(
             const cur = (d.exists && d.get("status")) || "received";
             const ci = ORDER.indexOf(cur), ni = ORDER.indexOf(step.status);
             const del = admin.firestore.FieldValue.delete();
-            if (ni === ci) {
-              // Undo the latest step — only by the person who tapped it.
+            if (tag === "u") {
+              if (ni > ci) return { ok: false, msg: "Nothing to undo.", redraw: true };
+              if (ni < ci) return { ok: false, msg: "Undo the later step first." };
+              // Undo the latest step — only by the person who tapped it
+              // (an automatic step, uid 0, by anyone).
               const lg = d.get("log") || [];
               const lastDo = [...lg].reverse().find((e) => e.a === "do" && e.k === step.k);
               if (lastDo && lastDo.uid && q.from && lastDo.uid !== q.from.id) {
@@ -391,20 +409,29 @@ exports.tgWebhook = onRequest(
               const upd = { status: ORDER[ci - 1], [step.by]: del, [step.at]: del,
                 statusAt: admin.firestore.FieldValue.serverTimestamp(),
                 log: admin.firestore.FieldValue.arrayUnion({ a: "undo", k: step.k, by: name, at: Date.now(), uid: (q.from && q.from.id) || 0 }) };
-              if (step.status === "getting_ready") upd.packShown = del;
+              // Tester 13-Oct: a wrong bill / parcel date / bilty is removed
+              // with its step, so the right one can be sent again.
+              for (const f of step.clear || []) upd[f] = del;
+              // Tester 13-Oct: an auto-ticked payment undone = the screenshot
+              // that ticked it was bad — it no longer counts (else the next
+              // screenshot ticks it again on the old total).
+              if (step.k === "y" && lastDo && !lastDo.uid) {
+                const pays = (d.get("payments") || []).map((x) => ({ ...x }));
+                let i = pays.length - 1;
+                while (i >= 0 && (pays[i].kind === "advance" || pays[i].voided)) i--;
+                if (i >= 0) {
+                  pays[i].voided = true;
+                  pays[i].voidedBy = name;
+                  upd.payments = pays;
+                  upd.paidTotal = pays.filter((x) => !x.voided).reduce((t, x) => t + (Number(x.amt) || 0), 0);
+                }
+              }
               tx.set(docRef, upd, { merge: true });
               return { ok: true, msg: `Undone: ${step.label}` };
             }
-            if (ni < ci) return { ok: false, msg: "Undo the later step first." };
+            if (ni <= ci) return { ok: false, msg: "Already done.", redraw: true };
+            if (step.auto) return { ok: false, msg: "This step ticks by itself." };
             if (ni !== ci + 1) return { ok: false, msg: "Not yet — do the steps in order." };
-            if (step.status === "packed") {
-              const g = d.get("readyAt");
-              const at = (g ? g.toMillis() : Date.now()) + PACK_AFTER_MS;
-              if (Date.now() < at) {
-                const hhmm = new Date(at).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit" });
-                return { ok: false, msg: `Packed opens at ${hhmm} (3 hours after Maal nikalna chalu).` };
-              }
-            }
             tx.set(docRef, { status: step.status, [step.by]: name,
               [step.at]: admin.firestore.FieldValue.serverTimestamp(),
               statusAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -421,6 +448,13 @@ exports.tgWebhook = onRequest(
               disable_web_page_preview: true,
               reply_markup: statusKeyboard(ref, fresh),
             });
+          } else if (verdict.redraw && q.message) {
+            // Old-style or stale buttons → today's buttons (only if they differ;
+            // Telegram refuses an edit that changes nothing).
+            const kb = statusKeyboard(ref, (await docRef.get()).data() || {});
+            if (JSON.stringify(kb) !== JSON.stringify(q.message.reply_markup || {})) {
+              await tg("editMessageReplyMarkup", { chat_id: q.message.chat.id, message_id: q.message.message_id, reply_markup: kb });
+            }
           }
         } else {
           await tg("answerCallbackQuery", { callback_query_id: q.id });
@@ -487,7 +521,7 @@ exports.registerOrder = onRequest(
     const chat = String((req.body && req.body.chat) || "").replace(/[^0-9-]/g, "");
     const msg = Number(req.body && req.body.msg) || 0;
     const text = cutAt((req.body && req.body.text) || "", 3500);
-    const mobile = String((req.body && req.body.mobile) || "").replace(/\D/g, "").slice(-10);
+    const mobile = custKey(req.body && req.body.mobile);
     const billName = String((req.body && req.body.billName) || "").slice(0, 120);
     const serial = Number(req.body && req.body.serial) || null;
     const addOnTo = String((req.body && req.body.addOnTo) || "").slice(0, 40) || null;
@@ -552,7 +586,7 @@ exports.orderStatus = onRequest(
       const i = info[sn.id];
       if (sn.exists && i && !sn.get("mobile")) {
         await sn.ref.set({
-          mobile: String(i.mobile || "").replace(/\D/g, "").slice(-10),
+          mobile: custKey(i.mobile),
           billName: String(i.billName || "").slice(0, 120),
           serial: Number(i.serial) || null,
           addOnTo: String(i.addOnTo || "").slice(0, 40) || null,
@@ -615,22 +649,9 @@ exports.phoneLock = onRequest(
 );
 
 
-/** Every 10 minutes: orders 3 h past "Maal nikalna chalu" get their Packed button. */
+// Tester 13-Oct: packTimer removed — there is no "Packed" step any more; it
+// only re-sent identical buttons (Telegram 400 "not modified") every 10 min.
 const { onSchedule } = require("firebase-functions/v2/scheduler");
-exports.packTimer = onSchedule(
-  { schedule: "every 10 minutes", region: "asia-south1", secrets: [TG_TOKEN], timeoutSeconds: 120, memory: "256MiB" },
-  async () => {
-    const db = admin.firestore();
-    const snap = await db.collection("bbapp_orders").where("status", "==", "getting_ready").get();
-    for (const doc of snap.docs) {
-      const d = doc.data();
-      if (d.packShown || !d.readyAt || !d.msg || !d.chat) continue;
-      if (Date.now() - d.readyAt.toMillis() < PACK_AFTER_MS) continue;
-      await tg("editMessageReplyMarkup", { chat_id: d.chat, message_id: d.msg, reply_markup: statusKeyboard(doc.id, d) });
-      await doc.ref.set({ packShown: true }, { merge: true });
-    }
-  },
-);
 
 
 /* ───────────── BILL GROUP + PAYMENT (owner, 11-Oct-2026) ─────────────
@@ -814,9 +835,11 @@ async function checkPayment(db, ref, img) {
   const r = await db.runTransaction(async (t) => {
     const cur = (await t.get(mainDoc)).data() || {};
     const pays = cur.payments || [];
-    if (txn && pays.some((x) => x.txn === txn)) return { dup: true, total: pays.reduce((a, x) => a + x.amt, 0) };
+    // Tester 13-Oct: a payment voided by undoing 💰 never counts (sum or dup).
+    const sum = () => pays.filter((x) => !x.voided).reduce((a, x) => a + x.amt, 0);
+    if (txn && pays.some((x) => !x.voided && x.txn === txn)) return { dup: true, total: sum() };
     pays.push({ amt: Number(p.amount), txn, paidAt: isNaN(paidAt) ? null : paidAt, at: Date.now() });
-    const total = pays.reduce((a, x) => a + x.amt, 0);
+    const total = sum();
     t.set(mainDoc, { payments: pays, paidTotal: total }, { merge: true });
     return { dup: false, total };
   });
@@ -939,10 +962,17 @@ async function addChat(db, ref, m) {
   } catch (e) {
     logger.warn("AKN Chat mirror failed", { ref, error: e.message });
   }
+  // Tester 13-Oct: a photo whose only copy was the mirror (mirror failed, or
+  // the number is not usable there) was lost while the app showed "sent" —
+  // keep it in Storage ourselves; if even that fails, the send fails.
+  if (m.bytes && !m.fileId && !storagePath) {
+    storagePath = `bbapp-chat/${ref}/${Date.now()}_${Math.random().toString(36).slice(2, 8)}.${String(m.mime || "").includes("pdf") ? "pdf" : "jpg"}`;
+    await admin.storage().bucket().file(storagePath).save(m.bytes, { contentType: m.mime || "image/jpeg" });
+  }
   await db.collection("bbapp_chat").add({ ref, cust: o.mobile || "", from: m.from, text: m.text || "",
     fileId: m.fileId || null, storagePath: m.fileId ? null : storagePath, mime: m.mime || null,
     by: m.by || "", at: Date.now(), mirrored: true });
-  if (m.from === "shop" && o.mobile) await pushTo(db, String(o.mobile).replace(/\D/g, "").slice(-10), m.text || "📎 Sent you a file");
+  if (m.from === "shop" && o.mobile) await pushTo(db, custKey(o.mobile), m.text || "📎 Sent you a file");
 }
 
 /* ───────────── AKN Chat "AKN App" tab (owner, 11-Oct-2026) ─────────────
@@ -953,12 +983,16 @@ async function addChat(db, ref, m) {
  * never answers these; botEnabled false; numbers["99999"].bot false.
  */
 const AKZ_PNID = "99999";
-const akzChatId = (mob) => `91${mob}_${AKZ_PNID}`;
+// Tester 13-Oct: a foreign customer's chip is their own full number, never
+// "91" + a 10-digit tail (custKey keeps an Indian number at 10 digits).
+const akzWaId = (mob) => (mob.length === 10 ? `91${mob}` : mob);
+const akzShow = (mob) => (mob.length === 10 ? `+91 ${mob}` : `+${mob}`);
+const akzChatId = (mob) => `${akzWaId(mob)}_${AKZ_PNID}`;
 let akzTabReady = false;
 
 async function mirrorToAknChat(db, o, m) {
-  const mob = String(o.mobile || "").replace(/\D/g, "").slice(-10);
-  if (mob.length !== 10) return null;
+  const mob = custKey(o.mobile);
+  if (!mob) return null;
   const { Timestamp, FieldValue } = admin.firestore;
   if (!akzTabReady) {
     await db.collection("settings").doc("app").set({ numbers: { [AKZ_PNID]: { label: "AKN App", bot: false } } }, { merge: true });
@@ -975,7 +1009,7 @@ async function mirrorToAknChat(db, o, m) {
   let media = {};
   let storagePath = null;
   if (bytes) {
-    storagePath = `wa-media/${AKZ_PNID}/91${mob}/${msgId}.${isPdf ? "pdf" : "jpg"}`;
+    storagePath = `wa-media/${AKZ_PNID}/${akzWaId(mob)}/${msgId}.${isPdf ? "pdf" : "jpg"}`;
     const token = require("crypto").randomUUID();
     const file = admin.storage().bucket().file(storagePath);
     await file.save(bytes, { contentType: mime, metadata: { metadata: { firebaseStorageDownloadTokens: token } } });
@@ -990,7 +1024,7 @@ async function mirrorToAknChat(db, o, m) {
   const msg = {
     direction: inbound ? "in" : "out", from: inbound ? "customer" : "bot", type,
     status: inbound ? "received" : "sent", statusRank: inbound ? null : 1,
-    wamid: null, waId: `91${mob}`, phoneNumberId: AKZ_PNID, timestamp: now,
+    wamid: null, waId: akzWaId(mob), phoneNumberId: AKZ_PNID, timestamp: now,
     createdAt: FieldValue.serverTimestamp(), replyToWamid: null, senderStaffId: null, error: null,
     mediaStatus: "none", text: type === "text" ? text : null, caption: type === "text" ? null : (text || null),
     mediaPath: null, mediaMime: null, fileName: null, fileSize: null, aknzSource: true, ...media,
@@ -999,14 +1033,18 @@ async function mirrorToAknChat(db, o, m) {
   await db.runTransaction(async (t) => {
     const c = await t.get(chatRef);
     const base = c.exists ? {} : { pinned: false, needsAttention: false, botPausedUntil: null, createdAt: now,
-      profileName: o.billName || `+91 ${mob}` };
+      profileName: o.billName || akzShow(mob) };
     t.set(chatRef.collection("messages").doc(msgId), msg);
     t.set(chatRef, {
-      ...base, waId: `91${mob}`, phoneNumberId: AKZ_PNID, name: o.billName || `+91 ${mob}`, botEnabled: false,
+      ...base, waId: akzWaId(mob), phoneNumberId: AKZ_PNID, name: o.billName || akzShow(mob), botEnabled: false,
       lastMessageText: (type === "text" ? text : (type === "image" ? "📷 Photo" : "📄 Bill")).slice(0, 200),
       lastMessageAt: now, lastMessageType: type, updatedAt: now,
       windowExpiresAt: Timestamp.fromMillis(Date.now() + 3650 * 86400e3),
       ...(inbound ? { unreadCount: FieldValue.increment(1), lastCustomerMsgAt: now } : {}),
+      // Tester 13-Oct: a staff reply from the Telegram group (m.by = the
+      // staff name) answers the chat — clear the chip like aknChatOut does.
+      // Automatic notes (bill, payment) leave an unanswered chat unread.
+      ...(!inbound && m.by ? { unreadCount: 0, needsAttention: false, lastHumanSendAt: now } : {}),
     }, { merge: true });
   });
   return storagePath;
@@ -1023,7 +1061,9 @@ exports.aknChatOut = onDocumentCreated(
     // Staff drafts: direction "out" + senderStaffId (the app doesn't always set from).
     if (!d || d.direction !== "out" || d.aknzSource || d.from === "bot" || !(d.senderStaffId || d.from === "staff")) return;
     const db = admin.firestore();
-    const mob = chatId.slice(0, chatId.indexOf("_")).slice(-10);
+    // "91" + 10 digits = an Indian customer; anything else = a foreign key.
+    const wa = chatId.slice(0, chatId.indexOf("_"));
+    const mob = wa.length === 12 && wa.startsWith("91") ? wa.slice(2) : wa;
     const ords = await db.collection("bbapp_orders").where("mobile", "==", mob).get();
     const latest = ords.docs.map((x) => ({ id: x.id, ...x.data() }))
       .sort((a, b) => ((b.serial || 0) - (a.serial || 0)) ||
@@ -1080,7 +1120,9 @@ exports.chatSend = onRequest(
     const mid = sent && sent.result && sent.result.message_id;
     if (mid) await db.collection("bbapp_msgmap").doc(`${d.chat}_${mid}`).set({ ref });
     const fileId = sent && sent.result && sent.result.photo ? sent.result.photo[sent.result.photo.length - 1].file_id : null;
-    await addChat(db, ref, { from: "party", text, fileId, mime: fileId ? "image/jpeg" : null });
+    // Tester 13-Oct: the bytes go along too — a failed Telegram send must not
+    // lose the screenshot (it is still kept in Storage / AKN Chat).
+    await addChat(db, ref, { from: "party", text, fileId, bytes: img, mime: img ? "image/jpeg" : null });
     let paid = false;
     if (img && (d.status || "received") === "bill_sent") paid = await checkPayment(db, ref, img);
     return res.json({ ok: true, paid });
@@ -1091,24 +1133,58 @@ exports.chatList = onRequest(
   { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
     if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
+    // A phone polls its 1-3 numbers every 20 s — the limit only stops guessing.
+    if (limited("cl:" + ip, 1500)) return res.status(429).json({ ok: false });
     // ONE chat per customer (owner): all messages for this mobile.
-    const cust = String((req.body && req.body.mobile) || "").replace(/\D/g, "").slice(-10);
-    if (cust.length !== 10) return res.status(400).json({ ok: false });
-    const snap = await admin.firestore().collection("bbapp_chat").where("cust", "==", cust).get();
-    const msgs = snap.docs.map((x) => ({ id: x.id, ...x.data() })).sort((a, b) => a.at - b.at).slice(-200)
+    const cust = custKey(req.body && req.body.mobile);
+    if (!cust) return res.status(400).json({ ok: false });
+    const db = admin.firestore();
+    if (!(await deviceOwns(db, req.body && req.body.device, cust))) return res.status(403).json({ ok: false, error: "not linked" });
+    // Tester 13-Oct: only messages newer than `since` (the app keeps the rest)
+    // — reading the whole chat every poll drained the free Firestore quota.
+    const since = Math.max(0, Number(req.body && req.body.since) || 0);
+    let docs;
+    try {
+      let qy = db.collection("bbapp_chat").where("cust", "==", cust);
+      if (since) qy = qy.where("at", ">", since);
+      docs = (await qy.orderBy("at", "desc").limit(200).get()).docs;
+    } catch (e) {
+      // Index (cust ↑, at ↓) not built yet → the old full read, still correct.
+      logger.warn("chatList index", { error: e.message });
+      docs = (await db.collection("bbapp_chat").where("cust", "==", cust).get()).docs
+        .filter((x) => (x.get("at") || 0) > since);
+    }
+    const msgs = docs.map((x) => ({ id: x.id, ...x.data() })).sort((a, b) => a.at - b.at).slice(-200)
       .map((m) => ({ id: m.id, from: m.from, text: m.text, at: m.at, by: m.by, file: !!(m.fileId || m.storagePath), mime: m.mime }));
     return res.json({ ok: true, msgs });
   },
 );
 
+/**
+ * Tester 13-Oct: chats, bills and payment screenshots only for a phone linked
+ * to that number (bbapp_devices — phoneLock links a number when this phone
+ * places an order for it). Before, any guessed mobile opened them.
+ */
+async function deviceOwns(db, device, cust) {
+  const id = String(device || "").replace(/[^a-z0-9-]/gi, "").slice(0, 64);
+  if (!id || !cust) return false;
+  const d = await db.collection("bbapp_devices").doc(id).get();
+  return ((d.exists && d.get("mobiles")) || []).some((x) => custKey(x) === cust);
+}
+
 exports.chatFile = onRequest(
   { region: "asia-south1", secrets: [TG_TOKEN], timeoutSeconds: 30, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
     if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
-    const cust = String((req.body && req.body.mobile) || "").replace(/\D/g, "").slice(-10);
+    const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
+    if (limited("cf:" + ip, 600)) return res.status(429).json({ ok: false });
+    const cust = custKey(req.body && req.body.mobile);
     const id = String((req.body && req.body.id) || "").slice(0, 64);
-    const m = id ? (await admin.firestore().collection("bbapp_chat").doc(id).get()).data() : null;
-    if (!m || m.cust !== cust || (!m.fileId && !m.storagePath)) return res.json({ ok: false });
+    const db = admin.firestore();
+    if (!(await deviceOwns(db, req.body && req.body.device, cust))) return res.status(403).json({ ok: false, error: "not linked" });
+    const m = id ? (await db.collection("bbapp_chat").doc(id).get()).data() : null;
+    if (!m || !cust || m.cust !== cust || (!m.fileId && !m.storagePath)) return res.json({ ok: false });
     const bytes = m.fileId ? await tgFileBytes(m.fileId)
       : await admin.storage().bucket().file(m.storagePath).download().then((r) => r[0]).catch(() => null);
     if (!bytes) return res.json({ ok: false });
@@ -1125,7 +1201,9 @@ exports.chatFile = onRequest(
 exports.newParties = onRequest(
   { region: "asia-south1", secrets: [PC_KEY], timeoutSeconds: 30, memory: "256MiB", maxInstances: 1, invoker: "public" },
   async (req, res) => {
-    if (req.method !== "POST" || !(pcOk(req) || req.get("x-app-key") === APP_KEY)) return res.status(403).json({ ok: false });
+    // Tester 13-Oct: shop PC only (x-pc-key) — the app key ships inside the
+    // APK and must never open or change party data.
+    if (req.method !== "POST" || !pcOk(req)) return res.status(403).json({ ok: false });
     const db = admin.firestore();
     for (const r of ((req.body && req.body.ack) || []).slice(0, 50)) {
       await db.collection("bbapp_orders").doc(String(r).replace(/[^A-Z0-9-]/gi, "")).set(
@@ -1184,7 +1262,10 @@ exports.checkNewParty = onRequest(
     const c = (req.body && req.body.cust) || {};
     const errors = [], soft = [];
     const mob = String(c.mobile || "").replace(/\D/g, "").slice(-10);
-    const byMob = (mob && ((PARTIES[mob] || [])[0] || {}).name) || (mob && NPCHECK.mobiles[mob]);
+    // Tester 13-Oct: only an Indian number can be an Indian party's — a
+    // foreign number's last 10 digits matched one, named it and blocked the order.
+    const inMob = (c.country || "India") === "India" && /^[6-9]\d{9}$/.test(mob);
+    const byMob = inMob && ((((PARTIES[mob] || [])[0] || {}).name) || NPCHECK.mobiles[mob]);
     if (byMob) {
       errors.push({ field: "mobile", msg: `We already have an account with this mobile number: ${byMob}. ` +
         "Type this mobile number in the Mobile box — your account opens by itself." });
@@ -1229,8 +1310,7 @@ exports.registerPush = onRequest(
   async (req, res) => {
     if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
     const token = String((req.body && req.body.token) || "").slice(0, 400);
-    const mobiles = ((req.body && req.body.mobiles) || []).map((m) => String(m).replace(/\D/g, "").slice(-10))
-      .filter((m) => m.length === 10).slice(0, 3);
+    const mobiles = ((req.body && req.body.mobiles) || []).map(custKey).filter(Boolean).slice(0, 3);
     if (token.length < 20 || !mobiles.length) return res.status(400).json({ ok: false });
     const apns = String((req.body && req.body.apns) || "").replace(/[^0-9a-f]/gi, "").slice(0, 200);
     // iPhone: keyed by the Apple address, so an FCM-token change never makes a
@@ -1424,7 +1504,9 @@ exports.gstLookup = onRequest(
 exports.registerParty = onRequest(
   { region: "asia-south1", secrets: [PC_KEY], timeoutSeconds: 20, memory: "256MiB", maxInstances: 2, invoker: "public" },
   async (req, res) => {
-    if (req.method !== "POST" || !(pcOk(req) || req.get("x-app-key") === APP_KEY)) return res.status(403).json({ ok: false });
+    // Tester 13-Oct: shop PC only (x-pc-key) — the app key ships inside the
+    // APK and must never open or change party data.
+    if (req.method !== "POST" || !pcOk(req)) return res.status(403).json({ ok: false });
     const b = req.body || {};
     const rec = { name: String(b.name || "").slice(0, 120), address: String(b.address || "").slice(0, 300),
       dest: String(b.dest || "").slice(0, 60), pincode: String(b.pincode || "").slice(0, 10),
@@ -1597,7 +1679,9 @@ exports.advanceReminder = onSchedule(
 exports.advanceImage = onRequest(
   { region: "asia-south1", secrets: [PC_KEY], timeoutSeconds: 30, memory: "256MiB", maxInstances: 2, invoker: "public" },
   async (req, res) => {
-    if (req.method !== "POST" || !(pcOk(req) || req.get("x-app-key") === APP_KEY)) return res.status(403).json({ ok: false });
+    // Tester 13-Oct: shop PC only (x-pc-key) — the app key ships inside the
+    // APK and must never open or change party data.
+    if (req.method !== "POST" || !pcOk(req)) return res.status(403).json({ ok: false });
     const ref = String((req.body && req.body.ref) || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
     const a = ref ? (await admin.firestore().collection("bbapp_advances").doc(ref).get()).data() : null;
     if (!a || a.state !== "paid" || !a.path) return res.json({ ok: false });

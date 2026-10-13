@@ -724,6 +724,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     );
 
     Order? order;
+    OrderPhotosMissing? missingPhotos;
     try {
       order = await OrderService.place(
         prefs: ref.read(sharedPreferencesProvider),
@@ -753,6 +754,9 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
             customer.isIndia &&
             OrderService.activeParcel(ref.read(sharedPreferencesProvider), mobile: customer.mobile) == null,
       );
+    } on OrderPhotosMissing catch (e) {
+      order = null;
+      missingPhotos = e;
     } catch (e) {
       order = null;
     }
@@ -760,6 +764,33 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     Navigator.of(context, rootNavigator: true).pop(); // progress dialog
     setState(() => _sending = false);
 
+    // Tester 13-Oct: some photos could not be downloaded even after retries —
+    // the order was NOT placed (nothing is dropped silently); say which.
+    final miss = missingPhotos;
+    if (order == null && miss != null) {
+      final names = miss.designs
+          .map((d) => d.isEmpty ? '?' : 'D.No $d')
+          .take(12)
+          .join(', ');
+      final more = miss.designs.length > 12 ? ' …' : '';
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(t('Order not placed yet', 'ऑर्डर अभी नहीं हुआ')),
+          content: Text(t(
+              '${miss.designs.length} photo(s) could not be downloaded: '
+                  '$names$more\n\nPlease check your internet and tap Place order again. Your cart is safe.',
+              '${miss.designs.length} फोटो डाउनलोड नहीं हुई: $names$more\n\n'
+                  'इंटरनेट जाँचें और फिर से ऑर्डर भेजें दबाएँ। आपका कार्ट सुरक्षित है।')),
+          actions: [
+            FilledButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('OK')),
+          ],
+        ),
+      );
+      return;
+    }
     if (order == null) {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(t('Could not place the order. Please try again.', 'ऑर्डर नहीं हुआ, फिर से कोशिश करें।'))));

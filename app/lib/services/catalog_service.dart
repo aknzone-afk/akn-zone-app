@@ -129,12 +129,28 @@ class CatalogService {
       }
     }
 
-    return _scrapeAndReturn(
+    // Tester 13-Oct: one live Drive walk at a time. The first-launch 90-s
+    // timeout only abandons its Future — the walk keeps going — and the
+    // catch-up, a pull-to-refresh or a resume re-scan then started a SECOND
+    // full walk beside it on the same slow network. A caller arriving while
+    // a walk runs now shares that walk (its own progress callbacks are not
+    // attached; only the first caller's are).
+    final running = _liveWalk;
+    if (running != null) return running;
+    final walk = _scrapeAndReturn(
       allowFallback: hasLocal,
       onProgress: onProgress,
       onPhotoDiscovered: onPhotoDiscovered,
     );
+    _liveWalk = walk;
+    walk.then<void>((_) {}, onError: (_) {}).whenComplete(() {
+      if (identical(_liveWalk, walk)) _liveWalk = null;
+    });
+    return walk;
   }
+
+  /// The live Drive walk in progress, if any (see [load]).
+  Future<CatalogResult>? _liveWalk;
 
   /// Once per bundled manifest: correct cached prices with the manifest's
   /// verified ones, before anything is shown. Fixes prices misread earlier

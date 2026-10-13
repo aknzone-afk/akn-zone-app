@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart' show compute;
 import 'package:html/parser.dart' as html_parser;
 
 import 'drive_urls.dart';
@@ -207,7 +208,7 @@ class DriveScraper {
           ),
         );
         networkOk = true;
-        final items = parseEmbeddedFolderHtml(res.data ?? '');
+        final items = await _parseOffThread(res.data ?? '');
         if (items.length > bestItems.length) bestItems = items;
         // Bail on the first non-empty parse; otherwise re-try in case Drive
         // raced its own JS rendering and served a sparse page.
@@ -218,6 +219,20 @@ class DriveScraper {
       await Future<void>.delayed(Duration(milliseconds: 250 * (attempt + 1)));
     }
     return (items: bestItems, networkOk: networkOk);
+  }
+
+  /// Tester 13-Oct: a Drive folder page is hundreds of KB of HTML; parsing it
+  /// on the UI isolate froze the loading collage (and scrolling during silent
+  /// re-scans) on low-end phones. The walk visits one folder at a time, so at
+  /// most one short-lived parse isolate exists. If an isolate can't be made
+  /// (rare, low memory) it falls back to parsing here, as before.
+  static Future<List<DriveItem>> _parseOffThread(String body) async {
+    if (body.isEmpty) return const <DriveItem>[];
+    try {
+      return await compute(parseEmbeddedFolderHtml, body);
+    } catch (_) {
+      return parseEmbeddedFolderHtml(body);
+    }
   }
 
   static bool _isImage(String filename) {

@@ -1,5 +1,3 @@
-import 'dart:math';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -157,10 +155,12 @@ class _CatalogAppState extends ConsumerState<CatalogApp>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    // Fresh folder cover ("key") photos every time the app returns to the
-    // foreground, so the catalog looks different each time it's opened.
+    // Tester 13-Oct: no new cover seed on resume any more. Covers use the
+    // DAILY seed (coverSeedProvider) and are pre-warmed once for that seed;
+    // a random seed here picked covers that were never downloaded, so tiles
+    // showed blank after switching to WhatsApp and back. Owner rule: covers
+    // must never show blank, so the daily seed wins over per-resume change.
     if (state == AppLifecycleState.resumed) {
-      ref.read(coverSeedProvider.notifier).state = Random().nextInt(0x7fffffff);
       // Returning from the background doesn't rebuild the catalog, so run the
       // (throttled) Drive re-scan and replaced-photo check here too.
       ref.read(catalogResumeCheckProvider)();
