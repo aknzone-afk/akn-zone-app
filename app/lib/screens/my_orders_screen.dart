@@ -28,7 +28,7 @@ class MyOrdersScreen extends ConsumerStatefulWidget {
 
 class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
   String? _busy;
-  Map<String, ({String? status, String? lr, bool bill, int? adv, bool tokenRecv, bool tokenMiss, int? tokenDue})> _st = {};
+  Map<String, ({String? status, String? lr, bool bill, int? adv, bool tokenRecv, bool tokenMiss, int? tokenDue, String? tokenMethod})> _st = {};
 
   @override
   void initState() {
@@ -186,7 +186,8 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                               adv: _st[o.number]?.adv ?? o.advancePaid,
                               tokenRecv: _st[o.number]?.tokenRecv ?? false,
                               tokenMiss: _st[o.number]?.tokenMiss ?? false,
-                              tokenDue: _st[o.number]?.tokenDue)
+                              tokenDue: _st[o.number]?.tokenDue,
+                              tokenMethod: _st[o.number]?.tokenMethod)
                         else if (o.awaitingAdvance)
                           Padding(
                             padding: const EdgeInsets.only(top: 4),
@@ -296,7 +297,8 @@ class _Steps extends StatelessWidget {
   final bool tokenRecv; // bank check (or the shop) confirmed the money
   final bool tokenMiss; // not in the bank by the deadline
   final int? tokenDue; // ms — 12:00 the day after payment
-  const _Steps({required this.status, this.adv, this.tokenRecv = false, this.tokenMiss = false, this.tokenDue});
+  final String? tokenMethod; // upi (auto bank check) / bank / kotak (checked by hand)
+  const _Steps({required this.status, this.adv, this.tokenRecv = false, this.tokenMiss = false, this.tokenDue, this.tokenMethod});
 
   static const _keys = ['received', 'getting_ready', 'bill_sent', 'payment_received', 'dispatched', 'bilty'];
   static const _names = ['Sent to shop', 'Getting order ready', 'Bill sent for payment', 'Payment received', 'Dispatched', 'Bilty'];
@@ -309,6 +311,10 @@ class _Steps extends StatelessWidget {
     // 12:00 next day)", then the usual steps. Steps appear ONE BY ONE:
     // every done step + only the next one.
     String due() {
+      if (tokenMethod == 'bank' || tokenMethod == 'kotak') return 'Money being checked by our team';
+      if (tokenDue != null && DateTime.now().millisecondsSinceEpoch > tokenDue!) {
+        return 'Money being confirmed with the bank';
+      }
       if (tokenDue == null) return 'Money confirmation by 12:00 tomorrow';
       final d = DateTime.fromMillisecondsSinceEpoch(tokenDue!);
       const m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];

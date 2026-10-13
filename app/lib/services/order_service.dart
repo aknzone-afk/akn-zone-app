@@ -287,7 +287,7 @@ class OrderService {
 
   /// Shop status per order (received → getting ready → packed → dispatched)
   /// and the LR / dispatch text the shop replied with.
-  static Future<Map<String, ({String? status, String? lr, bool bill, int? adv, bool tokenRecv, bool tokenMiss, int? tokenDue})>> fetchStatuses(
+  static Future<Map<String, ({String? status, String? lr, bool bill, int? adv, bool tokenRecv, bool tokenMiss, int? tokenDue, String? tokenMethod})>> fetchStatuses(
       Dio dio, List<String> refs, {Map<String, Map<String, dynamic>> info = const {}}) async {
     if (refs.isEmpty) return {};
     final res = await dio.post<dynamic>(
@@ -299,7 +299,7 @@ class OrderService {
           receiveTimeout: const Duration(seconds: 20)),
     );
     final d = res.data is String ? jsonDecode(res.data as String) : res.data;
-    final out = <String, ({String? status, String? lr, bool bill, int? adv, bool tokenRecv, bool tokenMiss, int? tokenDue})>{};
+    final out = <String, ({String? status, String? lr, bool bill, int? adv, bool tokenRecv, bool tokenMiss, int? tokenDue, String? tokenMethod})>{};
     if (d is Map && d['orders'] is Map) {
       (d['orders'] as Map).forEach((k, v) {
         if (v is Map) {
@@ -310,7 +310,8 @@ class OrderService {
             adv: (v['adv'] as num?)?.toInt(),
             tokenRecv: v['tokenRecv'] == true,
             tokenMiss: v['tokenMiss'] == true,
-            tokenDue: (v['tokenDue'] as num?)?.toInt()
+            tokenDue: (v['tokenDue'] as num?)?.toInt(),
+            tokenMethod: v['tokenMethod'] as String?
           );
         }
       });

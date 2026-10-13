@@ -559,21 +559,27 @@ exports.registerOrder = onRequest(
     const cust = c && typeof c === "object" && c.kind !== "old" ? Object.fromEntries(
       ["country", "billName", "address", "bookingPlace", "pincode", "mobile", "transport", "taxId", "kind"]
         .map((k) => [k, String(c[k] || "").slice(0, 300)])) : null;
-    await docRef.set({ msg, chat, mobile, billName, serial, addOnTo, ...(text ? { text } : {}), ...(cust ? { cust } : {}), ...(d.exists && d.get("status") ? {} : {
-      status: "received", statusAt: admin.firestore.FieldValue.serverTimestamp() }) }, { merge: true });
     // Owner 12-Oct: a new customer's verified 10% advance is the order's
     // first payment (the bill balance asks only for the rest) + its
-    // screenshot goes under the order in the group.
+    // screenshot goes under the order in the group. Review 13-Oct: written
+    // in the SAME set as the status, so NewPartyBot never sees the order
+    // without its token.
     const adv = (await db.collection("bbapp_advances").doc(ref).get()).data();
-    if (adv && adv.state === "paid" && !(d.exists && d.get("advanceAmt"))) {
+    const newAdv = !!(adv && adv.state === "paid" && !(d.exists && d.get("advanceAmt")));
+    let tokenFields = {};
+    if (newAdv) {
       // One payment per screenshot (a part-paid advance has 2 UTRs): the
       // same screenshot sent again later as a "bill payment" is then a dup.
       const parts = (adv.parts && adv.parts.length) ? adv.parts
         : [{ amt: Number(adv.paid), utr: adv.utr || null, paidAt: adv.paidAt || null }];
       const payments = parts.map((x) => ({ amt: Number(x.amt) || 0, txn: x.utr || "", paidAt: x.paidAt || null, at: Date.now(), kind: "advance" }));
-      await docRef.set({ advanceAmt: adv.paid, advanceUtr: adv.utr || null, payments,
+      tokenFields = { advanceAmt: adv.paid, advanceUtr: adv.utr || null, payments,
         paidTotal: payments.reduce((t, x) => t + x.amt, 0), tokenDue: tokenDeadline(adv.paidAt || adv.verifiedAt || Date.now()),
-        tokenMethod: adv.method || "upi" }, { merge: true });
+        tokenMethod: adv.method || "upi" };
+    }
+    await docRef.set({ msg, chat, mobile, billName, serial, addOnTo, ...(text ? { text } : {}), ...(cust ? { cust } : {}), ...tokenFields,
+      ...(d.exists && d.get("status") ? {} : { status: "received", statusAt: admin.firestore.FieldValue.serverTimestamp() }) }, { merge: true });
+    if (newAdv) {
       // Owner 12-Oct: the advance screenshot is the FIRST message of the
       // customer's chat (and goes to the new-party group with the ledger).
       try {
@@ -615,7 +621,8 @@ exports.orderStatus = onRequest(
       if (s.exists) out[s.id] = { status: s.get("status") || null, lr: s.get("lr") || null,
         bill: !!s.get("billFileId"), billNo: s.get("billNo") || null, billTotal: s.get("billTotal") || null,
         adv: s.get("advanceAmt") || null, tokenRecv: !!s.get("tokenRecvAt"),
-        tokenMiss: !s.get("tokenRecvAt") && !!s.get("tokenMissAt"), tokenDue: s.get("tokenDue") || null };
+        tokenMiss: !s.get("tokenRecvAt") && !!s.get("tokenMissAt"), tokenDue: s.get("tokenDue") || null,
+        tokenMethod: s.get("tokenMethod") || null };
     }
     return res.json({ ok: true, orders: out });
   },
@@ -1619,8 +1626,16 @@ exports.advanceStart = onRequest(
     if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
     const b = req.body || {};
     const ref = String(b.ref || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
-    const due = Math.round(Number(b.due) || 0);
+    let due = Math.round(Number(b.due) || 0);
     if (!ref || due <= 0) return res.status(400).json({ ok: false });
+    // Review 13-Oct: the phone does not decide a small token. 10% of the
+    // order (rounded up to ₹10) unless the owner's LIVE TEST switch is on and
+    // this is his trial / "TEST…" order.
+    const total = Math.round(Number(b.total) || 0);
+    const live = ((await admin.firestore().collection("bbapp_settings").doc("livetest").get()).data() || {}).on === true;
+    const testy = ref.startsWith("AKNTEST-") || /^\s*TEST/i.test(String(b.billName || ""));
+    if (!(live && testy) && total > 0) due = Math.max(due, Math.ceil((total * 0.10) / 10) * 10);
+    if (!(live && testy) && ref.startsWith("AKNTEST-")) return res.status(403).json({ ok: false });
     const docRef = admin.firestore().collection("bbapp_advances").doc(ref);
     const cur = (await docRef.get()).data();
     if (cur && cur.state === "paid") return res.json({ ok: true, state: "paid", paid: cur.paid, utr: cur.utr });
@@ -1666,10 +1681,13 @@ exports.advanceProof = onRequest(
     if (p.success === false) return fail("This payment does not show as successful. Please send the screenshot of a successful payment.");
     // Only OUR name / UPI id / account — "XYZ SYNTHETICS" must not pass.
     const who = `${p.payee || ""} ${p.payeeAccount || ""}`.toUpperCase().replace(/[^A-Z0-9]/g, "");
-    const ours = who.includes("BBSYNTHETIC") || who.includes("173947529358") || who.includes("270320110001776")
-      // Owner 13-Oct: the PAY-by-link UPI id 88665369922@kotak (apps may mask its middle digits)
-      || who.includes("88665369922") || (who.includes("KOTAK") && /8866\d*22/.test(who.replace(/[^0-9]/g, "")));
-    if (!ours) return fail(`This payment went to "${p.payee || p.payeeAccount || "someone else"}". The token must be paid to B.B SYNTHETICS only.`);
+    const ours = who.includes("BBSYNTHETIC") || who.includes("173947529358");
+    if (!ours) return fail(`This payment went to "${p.payee || p.payeeAccount || "someone else"}". The token must be paid to B B SYNTHETICS only.`);
+    // Owner 13-Oct: HDFC only — not to our BOI / Kotak accounts (the morning
+    // bank check reads the HDFC report only).
+    if (who.includes("KOTAK") || who.includes("88665369922") || who.includes("270320110001776") || who.includes("BKID")) {
+      return fail("Please pay the token only to our HDFC QR / UPI id on this page (vyapar.173947529358@hdfcbank) — not to another bank account.");
+    }
     const tm = /^\d{1,2}:\d{2}$/.test(String(p.time || "")) ? String(p.time).padStart(5, "0") : null;
     const dt = /^\d{4}-\d{2}-\d{2}$/.test(String(p.date || "")) ? p.date
       : (tm ? new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10) : null);
@@ -1701,7 +1719,12 @@ exports.advanceProof = onRequest(
       await docRef.set({ parts, utrs, hashes, utr: utrs[0] || null, path }, { merge: true });
       return fail(`Received ${inr(sum)} of the ${inr(a.due)} token. Please pay ${inr(a.due - sum)} more and send that screenshot too.`);
     }
-    const method = who.includes("270320110001776") ? "bank" : "upi"; // BOI transfer = owner checks
+    // Where the money went (review 13-Oct): only the HDFC QR / Vyapar id is in
+    // the bank report the morning check reads; BOI transfers and the Kotak id
+    // are checked by hand.
+    const method = (who.includes("8866") && who.includes("KOTAK")) || who.includes("88665369922") ? "kotak"
+      : (who.includes("1776") || who.includes("BKID") || who.includes("BANKOFINDIA")) && !who.includes("VYAPAR") ? "bank"
+        : "upi";
     await docRef.set({ state: "paid", method, parts, utrs, hashes, paid: sum, utr: utrs.join(", ") || null, payee: p.payee || null,
       paidAt: isNaN(paidAt) ? null : paidAt, path, verifiedAt: Date.now() }, { merge: true });
     return res.json({ ok: true, paid: sum, utr: utrs.join(", ") || null });
@@ -1731,7 +1754,11 @@ exports.advanceReminder = onSchedule(
  * "Token received". Tap again (same person) = undo.
  */
 // Owner 13-Oct: no button — the HDFC bank check (token_confirm.py) ticks it.
-const moneyKeyboard = () => ({ inline_keyboard: [] });
+// Review 13-Oct: BOI transfers / the Kotak id are not in the HDFC report —
+// only those keep a "💰 Money received" button for the owner.
+const moneyKeyboard = (ref, d) => ({ inline_keyboard: d && (d.tokenMethod === "bank" || d.tokenMethod === "kotak") ? [[d.tokenRecvAt
+  ? { text: `💰 ✅ ${firstName(d.tokenRecvBy)}`, callback_data: `m|t|${ref}` }
+  : { text: "💰 Money received (checked in the bank)", callback_data: `m|t|${ref}` }]] : [] });
 
 function moneyText(d) {
   const head = `💰 TOKEN ${inr(d.advanceAmt || 0)} — ${escH(d.billName || "Party")}${d.serial ? " · ORDER NO. " + d.serial : ""}`;
@@ -1740,7 +1767,10 @@ function moneyText(d) {
     : e.a === "miss" ? `❌ Money NOT received by 12:00 — ${escH(e.by)} · ${hhmm(e.at)}`
       : `✔ Money received — by ${escH(e.by)} · ${hhmm(e.at)}`);
   const due = d.tokenDue ? new Date(Number(d.tokenDue) + 5.5 * 3600e3).toISOString().slice(0, 10).split("-").reverse().join("-") : "tomorrow";
-  return `${head}\n🏦 Bank check: automatic, by 12:00 on ${due}.${log.length ? "\n\n" + log.join("\n") : ""}`;
+  const how = d.tokenMethod === "bank" ? "🏦 Paid to BOI by bank transfer — please check the BOI account and tap the button."
+    : d.tokenMethod === "kotak" ? "🏦 Paid to the KOTAK UPI id — please check Kotak and tap the button."
+      : `🏦 Bank check: automatic, by 12:00 on ${due}.`;
+  return `${head}\n${how}${log.length ? "\n\n" + log.join("\n") : ""}`;
 }
 
 async function moneyReceivedTap(db, q, ref) {
@@ -1825,7 +1855,7 @@ exports.tokensPending = onRequest(
       if (o.tokenRecvAt && o.tallyDone) continue;
       if (o.tokenRecvAt && Date.now() - (o.tokenRecvAt.toMillis ? o.tokenRecvAt.toMillis() : 0) > 30 * 86400e3) continue;
       const a = (await db.collection("bbapp_advances").doc(x.id).get()).data() || {};
-      out.push({ ref: x.id, serial: o.serial || null, billName: o.billName || "", ledger: o.ledgerName || null,
+      out.push({ ref: x.id, serial: o.serial || null, billName: o.billName || "", ledger: o.ledgerName || null, mobile: o.mobile || "",
         amount: o.advanceAmt, utrs: a.utrs || (a.utr ? String(a.utr).split(/[ ,]+/) : []),
         paidAt: a.paidAt || a.verifiedAt || null, method: a.method || o.tokenMethod || "upi",
         due: o.tokenDue || tokenDeadline(a.paidAt || a.verifiedAt || Date.now()), missed: !!o.tokenMissAt,
@@ -1848,6 +1878,14 @@ exports.tokenConfirm = onRequest(
     const d = (await docRef.get()).data();
     if (!d || !d.advanceAmt) return res.json({ ok: false, error: "no token on this order" });
     const by = String(b.by || "HDFC bank check").slice(0, 60);
+    if (b.ask) {
+      if (!d.tokenAskAt && d.tokenMsg && d.tokenMsg.chat) {
+        await tg("sendMessage", { chat_id: d.tokenMsg.chat, reply_to_message_id: d.tokenMsg.msg,
+          text: `🏦 ${d.billName || "Party"}${d.serial ? " · ORDER NO. " + d.serial : ""}: token ${inr(d.advanceAmt)} — ${String(b.ask).slice(0, 300)}` });
+      }
+      await docRef.set({ tokenAskAt: Date.now() }, { merge: true });
+      return res.json({ ok: true });
+    }
     if (b.tally) {
       await docRef.set({ tallyDone: String(b.tally).slice(0, 200) }, { merge: true });
       return res.json({ ok: true });

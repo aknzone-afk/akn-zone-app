@@ -12,6 +12,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:gal/gal.dart';
 import 'dart:ui' as ui;
 import 'package:flutter/rendering.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -160,6 +161,16 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
       final png = img == null ? null : await img.toByteData(format: ui.ImageByteFormat.png);
       if (png != null) {
         await f.writeAsBytes(png.buffer.asUint8List(), flush: true);
+        // Review 13-Oct: straight into the photo gallery — the share sheet
+        // has no "save" on many Android phones.
+        try {
+          await Gal.putImage(f.path, album: 'AKN Zone');
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                content: Text('QR saved in your photos — in your UPI app tap Scan → Gallery.')));
+          }
+          return;
+        } catch (_) {/* fall back to the share sheet */}
       } else {
         await f.writeAsBytes(await (await DefaultCacheManager().getSingleFile(_qr)).readAsBytes(), flush: true);
       }
@@ -252,17 +263,6 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
     if (o == null) return Scaffold(appBar: AppBar(), body: const Center(child: Text('Order not found.')));
     final due = _due(o);
     const green = Color(0xFF1B8E3A);
-    Widget row(String k, String v) => Padding(
-          padding: const EdgeInsets.symmetric(vertical: 3),
-          child: Row(children: [
-            SizedBox(width: 110, child: Text(k, style: const TextStyle(color: Colors.black54))),
-            Expanded(child: Text(v, style: const TextStyle(fontWeight: FontWeight.w800))),
-            IconButton(
-                visualDensity: VisualDensity.compact,
-                icon: const Icon(Icons.copy_rounded, size: 18),
-                onPressed: () => _copy(v, k)),
-          ]),
-        );
     // Phone BACK button: go to the catalogue (not out of the app).
     return PopScope(
       canPop: false,
@@ -406,15 +406,8 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
           ]),
         ),
         const SizedBox(height: 16),
-        const Text('OR BANK TRANSFER (NEFT / RTGS / IMPS)', style: TextStyle(fontWeight: FontWeight.w800)),
-        const SizedBox(height: 4),
-        row('Account name', 'B.B. SYNTHETICS'),
-        row('A/c no.', '270320110001776'),
-        row('IFSC', 'BKID0002703'),
-        row('Bank', 'BANK OF INDIA'),
-        row('UPI ID', _upi),
-        const SizedBox(height: 8),
-        const Text('⚠️ The name must always be B.B. SYNTHETICS. If any other name shows, it is not our account — do not pay.',
+        // Owner 13-Oct: HDFC only (QR / UPI id) — no bank transfer, no Kotak.
+        const Text('⚠️ The name must always be B B SYNTHETICS (HDFC). If any other name shows, it is not our account — do not pay.',
             style: TextStyle(color: Color(0xFFC62828), fontWeight: FontWeight.w700)),
         const SizedBox(height: 18),
         if (_error != null)

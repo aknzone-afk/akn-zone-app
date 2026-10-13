@@ -68,6 +68,8 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save the payment QR to your photos, to scan it from the gallery in your UPI app.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Choose your payment screenshot to send to the shop.</string>
 	<key>NSCameraUsageDescription</key>
