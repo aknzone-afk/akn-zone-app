@@ -39,6 +39,7 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
       .firstOrNull;
 
   int _due(Order o) {
+    if (OrderService.isTrial(o.number)) return 5; // owner's ₹5 trial
     final t = o.approxTotal ?? 0;
     if (t <= 0) return 5000;
     return ((t * 0.10) / 10).ceil() * 10; // 10%, rounded up to ₹10
@@ -182,7 +183,9 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         icon: const Icon(Icons.check_circle_rounded, size: 52, color: Color(0xFF2E7D32)),
-        title: const Text('Token received — order placed!'),
+        title: Text(OrderService.isTrial(widget.number)
+            ? 'TRIAL PASSED — ₹5 screenshot verified!'
+            : 'Token received — order placed!'),
         content: Text(
           '${OrderService.formatRupees(paid)} token verified.\n'
           '${o?.serial != null ? 'ORDER NO. ${o!.serial}\n' : ''}'

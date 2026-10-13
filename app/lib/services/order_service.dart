@@ -67,6 +67,29 @@ class OrderService {
   /// (cloud orders / phone links / chats were reset; order numbers restart
   /// at 1). Bump [kDataEpoch] to wipe again.
   static const kDataEpoch = 1;
+  /// Owner 13-Oct: ₹5 trial order (prefix "AKNTEST") — the token page asks
+  /// exactly ₹5; after the screenshot passes it is removed, never sent.
+  static const kTrialPrefix = 'AKNTEST-';
+  static bool isTrial(String number) => number.startsWith(kTrialPrefix);
+
+  static Future<void> seedTrialOnce(SharedPreferences p) async {
+    if (p.getBool('trial5_seeded_v1') == true) return;
+    await p.setBool('trial5_seeded_v1', true);
+    final rnd = Random();
+    const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    final tag = List.generate(5, (_) => abc[rnd.nextInt(abc.length)]).join();
+    final o = Order(
+      number: '${kTrialPrefix}5RS-$tag',
+      createdAt: DateTime.now(),
+      items: [
+        OrderItem(photoId: 'trial-5', designNumber: 'TRIAL ₹5', folder: 'Trial', price: 5, qty: 1),
+      ],
+      customer: CustomerDetails(billName: 'TRIAL ₹5 PAYMENT TEST'),
+      awaitingAdvance: true,
+    );
+    await _saveOrder(p, o);
+  }
+
   static Future<void> wipeTestDataOnce(SharedPreferences p) async {
     if ((p.getInt('data_epoch') ?? 0) >= kDataEpoch) return;
     for (final k in [_kOrdersKey, _kCustomerKey, 'chat_seen_v1', 'chat_notified_v1',
@@ -690,6 +713,14 @@ class OrderService {
       SharedPreferences prefs, Dio dio, String number, int paid, String? utr) async {
     final o = history(prefs).where((x) => x.number == number).firstOrNull;
     if (o == null || o.status == OrderStatus.sent) return o;
+    if (isTrial(number)) {
+      o.awaitingAdvance = false;
+      o.advancePaid = paid;
+      o.advanceUtr = utr;
+      final rest = history(prefs).where((x) => x.number != number).toList();
+      await prefs.setString(_kOrdersKey, jsonEncode(rest.map((e) => e.toJson()).toList()));
+      return o;
+    }
     o.awaitingAdvance = false;
     o.advancePaid = paid;
     o.advanceUtr = utr;
@@ -740,6 +771,7 @@ class OrderService {
 
   static Future<bool> _trySend(SharedPreferences prefs, Dio dio, Order order,
       {void Function(String step)? onStep}) async {
+    if (isTrial(order.number)) return false; // ₹5 trial: never to the group
     if (!_inFlight.add(order.number)) return false;
     try {
       return await _trySendNow(prefs, dio, order, onStep: onStep);

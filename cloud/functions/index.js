@@ -1670,6 +1670,7 @@ exports.advanceReminder = onSchedule(
     for (const d of snap.docs) {
       const a = d.data();
       if (a.reminded || Date.now() - (a.at || 0) < 24 * 3600e3) continue;
+      if (String(d.id).startsWith("AKNTEST-")) continue; // owner's ₹5 payment trial
       await tg("sendMessage", { chat_id: ORDER_GROUP,
         text: `⏳ NEW CUSTOMER has not paid the 10% token yet\n${a.billName || "-"} · ${a.mobile || "-"}\nOrder approx ${inr(a.total)} · token ${inr(a.due)}\nPlease call them.` });
       await d.ref.set({ reminded: Date.now() }, { merge: true });

@@ -39,6 +39,7 @@ Future<void> main() async {
   final prefs = await SharedPreferences.getInstance();
   try {
     await OrderService.wipeTestDataOnce(prefs); // test orders gone (owner 12-Oct)
+    await OrderService.seedTrialOnce(prefs); // ₹5 payment trial (owner 13-Oct)
     loadLanguage(prefs);
   } catch (e, st) {
     reportAppError('startup: $e', st);
