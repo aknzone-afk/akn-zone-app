@@ -5,6 +5,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
@@ -79,19 +80,24 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
   /// The QR as a picture: Save it (or share it to the UPI app), then in the
   /// UPI app "Scan QR" → gallery. Works even when a link is refused.
   Future<void> _shareQr() async {
+    // The QR is already on screen — take it from the image cache (the plain
+    // download failed on iPhone, owner 13-Oct); download only if missing.
+    final box = context.findRenderObject() as RenderBox?;
     try {
-      final r = await ref.read(dioProvider).get<List<int>>(_qr, options: Options(responseType: ResponseType.bytes));
+      final cached = await DefaultCacheManager().getSingleFile(_qr);
       final f = File('${(await getTemporaryDirectory()).path}/BB_SYNTHETICS_UPI_QR.jpg');
-      await f.writeAsBytes(r.data!, flush: true);
+      await f.writeAsBytes(await cached.readAsBytes(), flush: true);
       await Share.shareXFiles([XFile(f.path, mimeType: 'image/jpeg')],
-          text: 'B.B SYNTHETICS — UPI QR');
-    } catch (_) {
+          text: 'B.B SYNTHETICS — UPI QR',
+          sharePositionOrigin: box == null ? null : box.localToGlobal(Offset.zero) & box.size);
+    } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Could not get the QR — please check internet.')));
+            content: Text('Could not save the QR — take a screenshot of it instead, then Scan → Gallery in your UPI app.')));
       }
     }
   }
+
 
   Future<void> _upload() async {
     final x = await ImagePicker().pickImage(source: ImageSource.gallery, maxWidth: 1800, imageQuality: 85);
