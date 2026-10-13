@@ -1422,7 +1422,7 @@ exports.registerPush = onRequest(
   },
 );
 
-async function pushTo(db, mobile, body) {
+async function pushTo(db, mobile, body, route = "/chat") {
   try {
     const snap = await db.collection("bbapp_push").where("mobiles", "array-contains", mobile).get();
     if (snap.empty) return;
@@ -1432,7 +1432,7 @@ async function pushTo(db, mobile, body) {
     for (const d of iosDocs) {
       if (sentApns.has(d.get("apns"))) continue; // old duplicate record
       sentApns.add(d.get("apns"));
-      const st = await apnsSend(d.get("apns"), text);
+      const st = await apnsSend(d.get("apns"), text, "api.push.apple.com", route);
       if (st === 400 || st === 410) d.ref.set({ apns: null }, { merge: true }).catch(() => {});
     }
     const fcmDocs = snap.docs.filter((d) => !d.get("apns"));
@@ -1441,7 +1441,7 @@ async function pushTo(db, mobile, body) {
     const r = await admin.messaging().sendEachForMulticast({
       tokens,
       notification: { title: "AKN ZONE", body: String(body || "New message").slice(0, 180) },
-      data: { route: "/chat" },
+      data: { route },
       apns: { payload: { aps: { sound: "default", badge: 1 } } },
       android: { priority: "high", notification: { sound: "default", channelId: "chat" } }, // heads-up channel
     });
@@ -1469,7 +1469,7 @@ function apnsJwt() {
   _apnsJwt = { t: `${h}.${p}.${sig}`, at: Date.now() };
   return _apnsJwt.t;
 }
-function apnsSend(deviceToken, text, host = "api.push.apple.com") {
+function apnsSend(deviceToken, text, host = "api.push.apple.com", route = "/chat") {
   const http2 = require("http2");
   return new Promise((resolve) => {
     let done = false, c = null;
@@ -1492,7 +1492,7 @@ function apnsSend(deviceToken, text, host = "api.push.apple.com") {
         if (status !== 200) logger.warn("apns", { status, out: out.slice(0, 200), host });
         // a development (Xcode) build's token is only valid on the sandbox host
         if (status === 400 && /BadDeviceToken/.test(out) && host === "api.push.apple.com") {
-          return apnsSend(deviceToken, text, "api.sandbox.push.apple.com").then(finish);
+          return apnsSend(deviceToken, text, "api.sandbox.push.apple.com", route).then(finish);
         }
         finish(status);
       });
@@ -1501,7 +1501,7 @@ function apnsSend(deviceToken, text, host = "api.push.apple.com") {
       // "gcm.message_id": firebase_messaging reports a tap / a foreground
       // arrival to the app only when this key is present (tester 13-Oct).
       req.end(JSON.stringify({ aps: { alert: { title: "AKN ZONE", body: text }, sound: "default", badge: 1 },
-        route: "/chat", "gcm.message_id": `${Date.now()}-${Math.random().toString(36).slice(2, 10)}` }));
+        route, "gcm.message_id": `${Date.now()}-${Math.random().toString(36).slice(2, 10)}` }));
     } catch (e) {
       logger.warn("apns send", { error: e.message });
       finish(0);
@@ -2070,7 +2070,7 @@ function accText(key, a) {
   const lines = [];
   if (a.kind === "existing") lines.push(`📱 LOGIN — ${escH(a.party || "-")}`, `Mobile: ${key} (WhatsApp verified)`);
   else {
-    lines.push(a.kind === "foreign" ? "🌍 NEW CUSTOMER (outside India) — logged in" : "🆕 NEW CUSTOMER — wants the app",
+    lines.push(...(a.kind === "foreign" ? ["🌍 Outside India"] : []),
       `Name: ${escH(c.contact || "-")}`, `Bill name: ${escH(c.billName || "-")}`,
       ...(c.businessType ? [`Business: ${c.businessType === "new_startup" ? "🌱 NEW STARTUP" : "🏪 EXISTING SAREE BUSINESS"}`] : []),
       `Address: ${escH(c.address || "-")}`,
@@ -2079,7 +2079,7 @@ function accText(key, a) {
       ...(c.transport ? [`Transport: ${escH(c.transport)}`] : []),
       ...(c.taxId ? [`${(c.kycDoc || "ID").toUpperCase()}: ${escH(c.kycDoc === "aadhaar" ? "XXXX XXXX " + String(c.taxId).slice(-4) : c.taxId)}`] : []),
       `Mobile: ${key} (WhatsApp verified)`,
-      ...((a.kyc || []).length ? ["", ...a.kyc.map((x) => escH(x))] : []));
+      ...kycLines(a, c));
   }
   const st = { approved: "✅ APPROVED", pending: "⏳ waiting for approval", declined: "❌ DECLINED", blocked: "🚫 BLOCKED" }[a.status] || a.status;
   lines.push("", `<b>${st}</b>`);
@@ -2227,15 +2227,34 @@ exports.accountSignup = onRequest(
     const ps = (await db.collection("bbapp_settings").doc("pinsales").get()).data() || {};
     const pinSale = Number((ps.pins || {})[pin6] || 0);
     const auto = india && (!known || pinSale < 500000);
-    kyc.push(!known ? "📍 No customer on this pincode yet → auto-approved"
-      : `📍 Pincode ${pin6}: sales last 6 months ${inr(pinSale)}${pinSale < 500000 ? " (under ₹5 lakh) → auto-approved" : " — ₹5 lakh or more, please decide"}`);
+    const kycDocName = doc;
     const status = !india || auto ? "approved" : "pending";
-    await ref.set({ status, kind: india ? "new" : "foreign", cust, kyc, kycPath, verifiedAt: Date.now(), at: Date.now(),
+    await ref.set({ status, kind: india ? "new" : "foreign", cust, kyc, kycDoc: kycDocName, pinSale: india ? pinSale : null,
+      kycPath, verifiedAt: Date.now(), at: Date.now(),
       ...(auto ? { approvedAt: Date.now(), approvedBy: "bot (new pincode)" } : {}),
       log: admin.firestore.FieldValue.arrayUnion({ a: india ? "🆕 signed up" : "🌍 signed up", by: "app", at: Date.now() },
         ...(auto ? [{ a: known ? "✅ auto-approved — pincode sales under ₹5 lakh" : "✅ auto-approved — no customer on this pincode yet", by: "bot", at: Date.now() + 1 }] : [])) }, { merge: true });
     if (auto && kycPath) await admin.storage().bucket().file(kycPath).delete().catch(() => {});
     await accPost(db, key);
+    // Owner 14-Oct: an existing business without GST sends its shop card —
+    // shown under the sign-up message in the group.
+    const card = String(c.cardImage || "");
+    if (card.length > 1000) {
+      try {
+        const path = `cards/${key}.jpg`;
+        await admin.storage().bucket().file(path).save(Buffer.from(card, "base64"), { contentType: "image/jpeg" });
+        await ref.set({ cardPath: path }, { merge: true });
+        const m = ((await ref.get()).data() || {}).msg;
+        if (m && m.chat) {
+          const fd = new FormData();
+          fd.append("chat_id", String(m.chat));
+          fd.append("reply_to_message_id", String(m.id));
+          fd.append("caption", `🪪 Shop / visiting card — ${cust.billName}`);
+          fd.append("photo", new Blob([Buffer.from(card, "base64")], { type: "image/jpeg" }), "card.jpg");
+          await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/sendPhoto`, { method: "POST", body: fd });
+        }
+      } catch (e) { logger.warn("card photo", { key, error: e.message }); }
+    }
     return res.json({ ok: true, status });
   },
 );
@@ -2373,5 +2392,37 @@ exports.pinSalesUpload = onRequest(
     await admin.firestore().collection("bbapp_settings").doc("pinsales").set({ pins: clean,
       since: String((req.body && req.body.since) || ""), at: Date.now() });
     return res.json({ ok: true, pins: Object.keys(clean).length });
+  },
+);
+
+
+/** Owner 14-Oct: "✅ GST verified" when everything matches; else only the ⚠️
+ *  lines. Then "<DESTINATION> ₹<6-month sales of that pincode>". */
+function kycLines(a, c) {
+  const out = [""];
+  const warn = (a.kyc || []).filter((x) => String(x).startsWith("⚠️"));
+  const doc = String(a.kycDoc || c.kycDoc || "").toUpperCase();
+  if (a.kind !== "foreign") {
+    if (warn.length) out.push(...warn.map((x) => escH(x)));
+    else if (doc) out.push(`✅ ${doc === "AADHAAR" ? "Aadhaar" : doc} verified`);
+    if (a.pinSale != null) out.push(`${escH(String(c.bookingPlace || "").toUpperCase())} ${inr(a.pinSale)}`);
+  }
+  return out;
+}
+
+
+/** Owner 14-Oct: every day 9 PM — "New designs are in — check DAILY UPDATE",
+ *  ONLY to approved accounts (never pending / declined / blocked). */
+exports.dailyDesignPush = onSchedule(
+  { region: "asia-south1", schedule: "0 21 * * *", timeZone: "Asia/Kolkata", secrets: [APNS_KEY], timeoutSeconds: 300, memory: "256MiB" },
+  async () => {
+    const db = admin.firestore();
+    const snap = await db.collection("bbapp_accounts").where("status", "==", "approved").get();
+    let n = 0;
+    for (const d of snap.docs) {
+      await pushTo(db, d.id, "🆕 New designs are in — check DAILY UPDATE", "daily");
+      n++;
+    }
+    logger.info("daily design push", { accounts: n });
   },
 );

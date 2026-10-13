@@ -9,6 +9,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../config.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../providers/providers.dart';
 import '../services/access_api.dart';
 import '../services/account_service.dart';
 import '../services/device_binding.dart';
@@ -56,6 +58,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   bool _resolving = false;
   bool _checkedForceUpdate = false;
   bool _checkedMinBuild = false;
+  bool _preloaded = false;
 
   @override
   void initState() {
@@ -257,6 +260,17 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       // Navigator (dialogs, bottom sheets, autocomplete overlays need one).
       // Distinct keys → a fresh Navigator when the screen kind changes.
       case _Gate.onboarding:
+        // Owner 14-Oct: the catalogue downloads in the background while the
+        // customer signs up / waits; it is only SHOWN once approved.
+        if (!_preloaded) {
+          _preloaded = true;
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (!mounted) return;
+            try {
+              ProviderScope.containerOf(context, listen: false).read(catalogProvider.future).ignore();
+            } catch (_) {}
+          });
+        }
         return _OwnNavigator(
             key: const ValueKey('gate-onboarding'),
             child: OnboardingFlow(onDone: _resolve));

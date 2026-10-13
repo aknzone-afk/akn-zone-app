@@ -40,17 +40,20 @@ class PushService {
           storageBucket: 'akn-chat-a7dd8.firebasestorage.app',
         );
 
-  /// Call once at start. [onOpenChat] runs when a push is tapped.
-  static Future<void> init(void Function() onOpenChat) async {
+  /// Call once at start. [onOpen] runs when a push is tapped, with its
+  /// "route" ("daily" = the 9 PM new-designs push, else the chat).
+  static Future<void> init(void Function(String? route) onOpen) async {
     if (_ready) return;
     try {
       await Firebase.initializeApp(options: _options);
       final fm = FirebaseMessaging.instance;
       await fm.setForegroundNotificationPresentationOptions(alert: true, badge: true, sound: true);
-      FirebaseMessaging.onMessage.listen((_) => tick.value++);
-      FirebaseMessaging.onMessageOpenedApp.listen((_) => onOpenChat());
+      FirebaseMessaging.onMessage.listen((m) {
+        if (m.data['route'] != 'daily') tick.value++;
+      });
+      FirebaseMessaging.onMessageOpenedApp.listen((m) => onOpen(m.data['route'] as String?));
       final first = await fm.getInitialMessage();
-      if (first != null) onOpenChat();
+      if (first != null) onOpen(first.data['route'] as String?);
       fm.onTokenRefresh.listen((_) {
         _lastKey = null;
         _stale = true;

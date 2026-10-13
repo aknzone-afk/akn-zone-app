@@ -93,8 +93,9 @@ Future<void> main() async {
   // Real push (owner 11-Oct): the bill / a shop reply rings the phone; a tap
   // opens the chat. Non-fatal if Firebase is unavailable.
   // ignore: unawaited_futures
-  PushService.init(() => WidgetsBinding.instance
-      .addPostFrameCallback((_) => openChat()));
+  PushService.init((route) => WidgetsBinding.instance.addPostFrameCallback((_) =>
+      // Owner 14-Oct: the 9 PM push opens the DAILY UPDATE folder.
+      route == 'daily' ? _openDailyUpdate(kDailyUpdateFolder) : openChat()));
 
   // Cold-launched by tapping the notification → open the folder after frame 1.
   if (launchPayload != null && launchPayload.isNotEmpty) {

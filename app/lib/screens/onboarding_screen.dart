@@ -927,6 +927,10 @@ class _SignupFormState extends State<_SignupForm> {
   bool _noPan = false;
   _KycPhoto? _panPhoto;
   _KycPhoto? _aadhaarPhoto;
+  _KycPhoto? _cardPhoto; // shop / visiting card (existing business, no GST)
+
+  /// Owner 14-Oct: an existing saree business without GST shows its card.
+  bool get _needCard => _india && _noGst && _businessType == 'existing_business';
   bool _reading = false;
   String? _photoErr;
 
@@ -1079,7 +1083,7 @@ class _SignupFormState extends State<_SignupForm> {
 
   // ───────────────────────── ID photo ─────────────────────────
 
-  Future<void> _pickPhoto(bool aadhaar) async {
+  Future<void> _pickPhoto(bool aadhaar, {bool card = false}) async {
     FocusScope.of(context).unfocus();
     final src = await showModalBottomSheet<ImageSource>(
       context: context,
@@ -1123,7 +1127,9 @@ class _SignupFormState extends State<_SignupForm> {
       if (!mounted) return;
       setState(() {
         final ph = _KycPhoto(bytes, text);
-        if (aadhaar) {
+        if (card) {
+          _cardPhoto = ph;
+        } else if (aadhaar) {
           _aadhaarPhoto = ph;
         } else {
           _panPhoto = ph;
@@ -1188,11 +1194,40 @@ class _SignupFormState extends State<_SignupForm> {
     return null;
   }
 
+  Widget _cardBox() {
+    final ph = _cardPhoto;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        const Text('Your shop has a visiting card? Please add its photo.',
+            style: TextStyle(fontWeight: FontWeight.w700)),
+        if (ph != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: Container(color: kLinen, height: 150, child: Image.memory(ph.jpg, fit: BoxFit.contain)),
+            ),
+          ),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(50)),
+          onPressed: _reading ? null : () => _pickPhoto(false, card: true),
+          icon: Icon(ph == null ? Icons.add_a_photo_rounded : Icons.cameraswitch_rounded),
+          label: Text(ph == null ? 'Add photo of your shop / visiting card *' : 'Change photo',
+              textAlign: TextAlign.center),
+        ),
+      ]),
+    );
+  }
+
   Future<void> _submit() async {
     FocusScope.of(context).unfocus();
     final okFields = _formKey.currentState?.validate() ?? false;
     final idErr = _idError();
-    final bizErr = _businessType == null ? 'Please choose your business type.' : null;
+    final bizErr = _businessType == null
+        ? 'Please choose your business type.'
+        : (_needCard && _cardPhoto == null ? 'Please add a photo of your shop / visiting card.' : null);
     setState(() {
       _photoErr = idErr;
       _bizErr = bizErr;
@@ -1240,6 +1275,7 @@ class _SignupFormState extends State<_SignupForm> {
         ...cust,
         if (photo != null) 'kycImage': base64Encode(photo.jpg),
         if (photo != null) 'kycText': photo.text,
+        if (_needCard && _cardPhoto != null) 'cardImage': base64Encode(_cardPhoto!.jpg),
       });
       if (!mounted) return;
       if (d == null) {
@@ -1457,6 +1493,7 @@ class _SignupFormState extends State<_SignupForm> {
                     ),
                   ),
                 ),
+              if (_needCard) _cardBox(),
               if (_bizErr != null)
                 Padding(
                   padding: const EdgeInsets.only(left: 4, bottom: 6),
