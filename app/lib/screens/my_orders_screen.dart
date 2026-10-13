@@ -12,8 +12,10 @@ import '../l10n.dart';
 
 import '../models/order.dart';
 import '../providers/providers.dart';
+import '../services/account_service.dart';
 import '../services/order_service.dart';
 import '../widgets/helpline_icon.dart';
+import 'access_control.dart' show refreshAccessGate;
 import '../app.dart' show openChat;
 
 /// Every order placed from this phone, newest first, with its delivery state.
@@ -124,6 +126,27 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
     if (ok) _loadStatus();
   }
 
+  /// Owner 14-Oct: forget the verified account → the WhatsApp verify screen.
+  Future<void> _logout() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Log out?'),
+        content: const Text(
+            'You will need to verify your mobile number on WhatsApp again to open the catalog.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(c, true), child: const Text('Log out')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    await AccountService.clear(ref.read(sharedPreferencesProvider));
+    if (!mounted) return;
+    context.go('/');
+    refreshAccessGate();
+  }
+
   Future<void> _retry(String number) async {
     setState(() => _busy = number);
     final o = await OrderService.retryOne(
@@ -142,7 +165,17 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
     final orders = OrderService.history(ref.read(sharedPreferencesProvider));
     final scheme = Theme.of(context).colorScheme;
     return Scaffold(
-      appBar: AppBar(title: UText(t('My orders', 'मेरे ऑर्डर'))),
+      appBar: AppBar(title: UText(t('My orders', 'मेरे ऑर्डर')), actions: [
+        // Owner 14-Oct: unobtrusive "Log out / change number".
+        PopupMenuButton<String>(
+          onSelected: (v) {
+            if (v == 'logout') _logout();
+          },
+          itemBuilder: (_) => const [
+            PopupMenuItem(value: 'logout', child: Text('Log out / change number')),
+          ],
+        ),
+      ]),
       body: orders.isEmpty
           ? Center(child: UText(t('No orders yet.', 'अभी कोई ऑर्डर नहीं।')))
           : ListView.separated(

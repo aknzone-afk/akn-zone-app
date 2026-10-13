@@ -387,6 +387,21 @@ exports.tgWebhook = onRequest(
       // Owner 13-Oct: the "Akn zone - auto receipts bot" group gets every
       // verified token screenshot + ledger name (old HDFC group untouched).
       const gc = u.message && u.message.chat;
+      // Every group the bot is in is remembered by title (owner 14-Oct: a new
+      // "approvals" group is picked up the moment someone writes in it).
+      if (gc && gc.title) {
+        const seen = (await db.collection("bbapp_chats").doc(String(gc.id)).get()).data();
+        if (!seen || seen.title !== gc.title) {
+          await db.collection("bbapp_chats").doc(String(gc.id)).set({ title: gc.title, at: Date.now() });
+        }
+      }
+      if (gc && (/approv/i.test(String(gc.title || "")) || /^\s*akn\s*zone\s*app\s*$/i.test(String(gc.title || "")))) {
+        const cur = (await db.collection("bbapp_settings").doc("approvals").get()).data();
+        if (!cur || String(cur.chat) !== String(gc.id)) {
+          await db.collection("bbapp_settings").doc("approvals").set({ chat: gc.id, title: gc.title, at: Date.now() });
+          await tg("sendMessage", { chat_id: gc.id, text: "✅ Connected — new customer sign-ups (Approve / Decline), logins and /block will come here." });
+        }
+      }
       if (gc && /auto\s*receipt/i.test(String(gc.title || ""))) {
         const cur = (await db.collection("bbapp_settings").doc("receipts").get()).data();
         if (!cur || String(cur.chat) !== String(gc.id)) {
@@ -402,6 +417,10 @@ exports.tgWebhook = onRequest(
         }
         const [tag, k, ref] = String(q.data || "").split("|");
         const step = STEPS.find((x) => x.k === k);
+        if (tag === "a" && ref) {
+          await accountTap(db, q, k, ref);
+          return res.status(200).send("ok");
+        }
         if (tag === "m" && ref) {
           await moneyReceivedTap(db, q, ref);
           return res.status(200).send("ok");
@@ -497,6 +516,18 @@ exports.tgWebhook = onRequest(
           }
         }
         await tg("sendMessage", { chat_id: u.message.chat.id, reply_to_message_id: u.message.message_id, text: txt });
+      } else if (u.message && /^\/(un)?block(\s|$)/i.test(String(u.message.text || ""))) {
+        // Owner 14-Oct: "/block 98xxxxxxxx" — that number loses the app.
+        const un = /^\/unblock/i.test(u.message.text);
+        const key = accKey(String(u.message.text).replace(/^\/\w+/, ""));
+        const by = (u.message.from && u.message.from.first_name) || "staff";
+        let txt = `Send: /${un ? "unblock" : "block"} 98xxxxxxxx`;
+        if (key) {
+          await db.collection("bbapp_accounts").doc(key).set({ status: un ? "approved" : "blocked",
+            log: admin.firestore.FieldValue.arrayUnion({ a: un ? "unblock" : "block", by, at: Date.now() }) }, { merge: true });
+          txt = un ? `✅ ${key} unblocked — the app opens again.` : `🚫 ${key} blocked — the app is closed for this number.`;
+        }
+        await tg("sendMessage", { chat_id: u.message.chat.id, reply_to_message_id: u.message.message_id, text: txt });
       } else if (u.message && /^\/reset(\s|$)/i.test(String(u.message.text || ""))) {
         // "/reset 98xxxxxxxx" — free this number from every phone lock.
         let m = String(u.message.text).replace(/\D/g, "");
@@ -549,6 +580,12 @@ exports.registerOrder = onRequest(
     const addOnTo = String((req.body && req.body.addOnTo) || "").slice(0, 40) || null;
     if (!ref || !chat || !msg) return res.status(400).json({ ok: false });
     const db = admin.firestore();
+    if (await isBlocked(db, mobile)) return res.status(403).json({ ok: false, error: "blocked" });
+    // Owner 14-Oct: last order + order count on the account (Google Sheet).
+    if (accKey(mobile) && !(await db.collection("bbapp_orders").doc(ref).get()).get("msg")) {
+      await db.collection("bbapp_accounts").doc(accKey(mobile)).set({ lastOrderAt: Date.now(),
+        orders: admin.firestore.FieldValue.increment(1) }, { merge: true });
+    }
     await db.collection("bbapp_msgmap").doc(`${chat}_${msg}`).set({ ref });
     // Tester 13-Oct: staff also reply to a photo of the album, to "ORDER NO. N"
     // or to the dots — those replies must reach the customer too.
@@ -1151,6 +1188,7 @@ exports.chatSend = onRequest(
     const db = admin.firestore();
     const d = (await db.collection("bbapp_orders").doc(ref).get()).data();
     if (!d || !d.chat) return res.json({ ok: false, error: "order not found" });
+    if (await isBlocked(db, d.mobile)) return res.status(403).json({ ok: false, error: "blocked" });
     const head = `💬 ${d.billName || "Party"}${d.serial ? " · ORDER NO. " + d.serial : ""}`;
     const payShot = img && (d.status || "received") === "bill_sent";
     if (!payShot) {
@@ -1258,7 +1296,9 @@ exports.newParties = onRequest(
     if (req.method !== "POST" || !pcOk(req)) return res.status(403).json({ ok: false });
     const db = admin.firestore();
     for (const r of ((req.body && req.body.ack) || []).slice(0, 50)) {
-      await db.collection("bbapp_orders").doc(String(r).replace(/[^A-Z0-9-]/gi, "")).set(
+      const id = String(r).replace(/[^A-Z0-9-]/gi, "");
+      // Owner 14-Oct: an approved sign-up ("ACCT-<mobile>") is acked on the account.
+      await (id.startsWith("ACCT-") ? db.collection("bbapp_accounts").doc(id.slice(5)) : db.collection("bbapp_orders").doc(id)).set(
         { partyQueuedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
     }
     const snap = await db.collection("bbapp_orders")
@@ -1269,6 +1309,14 @@ exports.newParties = onRequest(
       .sort((a, b) => (a.serial || 0) - (b.serial || 0)) // oldest first
       .map((o) => ({ ref: o.ref, serial: o.serial || null, cust: o.cust,
         advance: o.advanceAmt ? { paid: o.advanceAmt, utr: o.advanceUtr || null } : null }));
+    // Owner 14-Oct: the ledger of an APPROVED new customer is made at approval.
+    const acc = await db.collection("bbapp_accounts").where("status", "==", "approved").get();
+    for (const x of acc.docs) {
+      const a = x.data();
+      if (a.kind === "new" && a.cust && !a.partyQueuedAt) {
+        out.unshift({ ref: "ACCT-" + x.id, serial: null, cust: a.cust, advance: null });
+      }
+    }
     return res.json({ ok: true, parties: out });
   },
 );
@@ -1667,6 +1715,7 @@ exports.advanceStart = onRequest(
     const ref = String(b.ref || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
     let due = Math.round(Number(b.due) || 0);
     if (!ref || due <= 0) return res.status(400).json({ ok: false });
+    if (await isBlocked(admin.firestore(), b.mobile)) return res.status(403).json({ ok: false, error: "blocked" });
     // Review 13-Oct: the phone does not decide a small token. 10% of the
     // order (rounded up to ₹10) unless the owner's LIVE TEST switch is on and
     // this is his trial / "TEST…" order.
@@ -1975,5 +2024,354 @@ exports.advanceImage = onRequest(
     if (!a || a.state !== "paid" || !a.path) return res.json({ ok: false });
     const [bytes] = await admin.storage().bucket().file(a.path).download();
     return res.json({ ok: true, paid: a.paid, utr: a.utr || null, data: bytes.toString("base64") });
+  },
+);
+
+
+/* ───────────── ACCOUNTS (owner, 14-Oct-2026) ─────────────
+ * First open: the customer's mobile is verified on WhatsApp ("AKN LOGIN
+ * <code>" to the Inquiries number → AKN Chat writes bbapp_verify/{code}).
+ *   • number in Tally (parties.json) → pick your party → approved at once
+ *     (notice in the "Akn zone app" group, 🚫 Block button)
+ *   • new Indian customer → full details (GST or PAN or Aadhaar) → pending →
+ *     ✅ Approve / ❌ Decline / 🚫 Block in the group; ✅ → NewPartyBot makes
+ *     the Tally ledger (newParties "ACCT-<mobile>")
+ *   • outside India → name, bill name, address, destination → approved
+ * bbapp_accounts/{key}: key = 10-digit Indian mobile or full foreign number.
+ * /block 98xxxxxxxx, /unblock 98xxxxxxxx in any group with the bot.
+ */
+function accKey(raw) {
+  let d = String(raw || "").replace(/\D/g, "");
+  if (d.length === 12 && d.startsWith("91")) d = d.slice(2);
+  if (d.length === 11 && d.startsWith("0")) d = d.slice(1);
+  return d.length >= 7 && d.length <= 15 ? d : null;
+}
+
+async function isBlocked(db, mobile) {
+  const k = accKey(mobile);
+  if (!k) return false;
+  const a = (await db.collection("bbapp_accounts").doc(k).get()).data();
+  return !!(a && a.status === "blocked");
+}
+
+async function approvalsChat(db) {
+  const s = (await db.collection("bbapp_settings").doc("approvals").get()).data();
+  return s && s.chat;
+}
+
+const accKeyboard = (key, status) => ({ inline_keyboard: status === "pending"
+  ? [[{ text: "✅ Approve", callback_data: `a|ok|${key}` }, { text: "❌ Decline", callback_data: `a|no|${key}` }],
+    [{ text: "🚫 Block", callback_data: `a|blk|${key}` }]]
+  : status === "blocked" ? [[{ text: "↩️ Unblock", callback_data: `a|unb|${key}` }]]
+    : [[{ text: "🚫 Block", callback_data: `a|blk|${key}` }]] });
+
+function accText(key, a) {
+  const c = a.cust || {};
+  const lines = [];
+  if (a.kind === "existing") lines.push(`📱 LOGIN — ${escH(a.party || "-")}`, `Mobile: ${key} (WhatsApp verified)`);
+  else {
+    lines.push(a.kind === "foreign" ? "🌍 NEW CUSTOMER (outside India) — logged in" : "🆕 NEW CUSTOMER — wants the app",
+      `Name: ${escH(c.contact || "-")}`, `Bill name: ${escH(c.billName || "-")}`,
+      ...(c.businessType ? [`Business: ${c.businessType === "new_startup" ? "🌱 NEW STARTUP" : "🏪 EXISTING SAREE BUSINESS"}`] : []),
+      `Address: ${escH(c.address || "-")}`,
+      ...(c.pincode ? [`Pincode: ${escH(c.pincode)}`] : []),
+      `Destination: ${escH(c.bookingPlace || "-")}${c.country && c.country !== "India" ? " · " + escH(c.country) : ""}`,
+      ...(c.transport ? [`Transport: ${escH(c.transport)}`] : []),
+      ...(c.taxId ? [`${(c.kycDoc || "ID").toUpperCase()}: ${escH(c.kycDoc === "aadhaar" ? "XXXX XXXX " + String(c.taxId).slice(-4) : c.taxId)}`] : []),
+      `Mobile: ${key} (WhatsApp verified)`,
+      ...((a.kyc || []).length ? ["", ...a.kyc.map((x) => escH(x))] : []));
+  }
+  const st = { approved: "✅ APPROVED", pending: "⏳ waiting for approval", declined: "❌ DECLINED", blocked: "🚫 BLOCKED" }[a.status] || a.status;
+  lines.push("", `<b>${st}</b>`);
+  for (const e of (a.log || []).slice(-4)) lines.push(`${e.a} — ${escH(e.by)} · ${hhmm(e.at)}`);
+  return lines.join("\n");
+}
+
+async function accPost(db, key) {
+  const chat = await approvalsChat(db);
+  if (!chat) return;
+  const a = (await db.collection("bbapp_accounts").doc(key).get()).data() || {};
+  const r = await tg("sendMessage", { chat_id: chat, text: accText(key, a), parse_mode: "HTML", reply_markup: accKeyboard(key, a.status) });
+  if (r.ok) await db.collection("bbapp_accounts").doc(key).set({ msg: { chat, id: r.result.message_id } }, { merge: true });
+}
+
+async function accountTap(db, q, act, key) {
+  key = accKey(key);
+  const docRef = db.collection("bbapp_accounts").doc(String(key));
+  const by = [q.from && q.from.first_name, q.from && q.from.last_name].filter(Boolean).join(" ") || "staff";
+  const to = { ok: "approved", no: "declined", blk: "blocked", unb: "approved" }[act];
+  const a = (await docRef.get()).data();
+  if (!a || !to) {
+    await tg("answerCallbackQuery", { callback_query_id: q.id, text: "Not found." });
+    return;
+  }
+  await docRef.set({ status: to, ...(act === "ok" ? { approvedAt: Date.now(), approvedBy: by } : {}),
+    log: admin.firestore.FieldValue.arrayUnion({ a: { ok: "✅ approved", no: "❌ declined", blk: "🚫 blocked", unb: "↩️ unblocked" }[act], by, at: Date.now() }) },
+  { merge: true });
+  await tg("answerCallbackQuery", { callback_query_id: q.id, text: `${to} — ${key}` });
+  const fresh = (await docRef.get()).data() || {};
+  if (q.message) {
+    await tg("editMessageText", { chat_id: q.message.chat.id, message_id: q.message.message_id,
+      text: accText(key, fresh), parse_mode: "HTML", reply_markup: accKeyboard(key, fresh.status) });
+  }
+  if (act === "ok") await pushTo(db, key, "✅ Your AKN Zone account is approved — open the app and start ordering.");
+  // Owner 14-Oct: the PAN / Aadhaar photo is only kept until the decision.
+  if ((act === "ok" || act === "no") && fresh.kycPath) {
+    await admin.storage().bucket().file(fresh.kycPath).delete().catch(() => {});
+    await docRef.set({ kycPath: null }, { merge: true });
+  }
+}
+
+/** Read a WhatsApp verification (≤ 20 min old) → the verified key. */
+async function verifiedKey(db, code) {
+  const c = String(code || "").replace(/\D/g, "");
+  if (c.length !== 6) return null;
+  const v = (await db.collection("bbapp_verify").doc(c).get()).data();
+  if (!v || !v.from || Date.now() - Number(v.at || 0) > 20 * 60e3) return null;
+  return accKey(v.from);
+}
+
+function partiesFor(key) {
+  try {
+    if (!PARTIES) PARTIES = require("./parties.json");
+  } catch (e) {
+    return [];
+  }
+  return (PARTIES[key] || []).map((x) => ({ name: x.name, address: x.address || "", dest: x.dest || "",
+    pincode: x.pincode || "", gstin: x.gstin || "", transport: x.transport || "" })).filter((x) => x.name);
+}
+
+/** App: poll after "Verify on WhatsApp" — who is this number? */
+exports.accountVerify = onRequest(
+  { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
+  async (req, res) => {
+    if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
+    const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
+    if (limited("v:" + ip)) return res.status(429).json({ ok: false });
+    const db = admin.firestore();
+    const key = await verifiedKey(db, req.body && req.body.code);
+    if (!key) return res.json({ ok: true, verified: false });
+    const a = (await db.collection("bbapp_accounts").doc(key).get()).data();
+    const india = key.length === 10;
+    return res.json({ ok: true, verified: true, mobile: key, india, status: (a && a.status) || "none",
+      kind: (a && a.kind) || null, party: (a && a.party) || null, cust: (a && a.cust) || null,
+      parties: india ? partiesFor(key) : [] });
+  },
+);
+
+/** App: an existing Tally customer picks their party → approved at once. */
+exports.accountClaim = onRequest(
+  { region: "asia-south1", secrets: [TG_TOKEN], timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
+  async (req, res) => {
+    if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
+    const db = admin.firestore();
+    const key = await verifiedKey(db, req.body && req.body.code);
+    if (!key) return res.json({ ok: false, error: "Please verify your number on WhatsApp again." });
+    const name = String((req.body && req.body.party) || "");
+    const hit = partiesFor(key).find((x) => x.name === name);
+    if (!hit) return res.json({ ok: false, error: "This party is not on this number." });
+    const ref = db.collection("bbapp_accounts").doc(key);
+    const cur = (await ref.get()).data();
+    if (cur && cur.status === "blocked") return res.json({ ok: true, status: "blocked" });
+    await ref.set({ status: "approved", kind: "existing", party: hit.name, cust: { billName: hit.name, address: hit.address,
+      pincode: hit.pincode, bookingPlace: hit.dest, transport: hit.transport, taxId: hit.gstin, mobile: key, country: "India", kind: "old" },
+    verifiedAt: Date.now(), log: admin.firestore.FieldValue.arrayUnion({ a: "📱 logged in", by: "app", at: Date.now() }) }, { merge: true });
+    await accPost(db, key);
+    return res.json({ ok: true, status: "approved" });
+  },
+);
+
+/** App: a new customer's details → pending (India) / approved (abroad). */
+exports.accountSignup = onRequest(
+  { region: "asia-south1", secrets: [TG_TOKEN], timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
+  async (req, res) => {
+    if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
+    const db = admin.firestore();
+    const key = await verifiedKey(db, req.body && req.body.code);
+    if (!key) return res.json({ ok: false, error: "Please verify your number on WhatsApp again." });
+    const c = (req.body && req.body.cust) || {};
+    const cust = Object.fromEntries(["contact", "billName", "address", "pincode", "bookingPlace", "transport", "taxId", "country", "kycDoc", "businessType"]
+      .map((k) => [k, String(c[k] || "").trim().slice(0, 300)]));
+    cust.country = cust.country || "India";
+    cust.mobile = key;
+    cust.kind = "new";
+    const india = cust.country === "India";
+    if (!cust.billName || !cust.address || !cust.bookingPlace) return res.json({ ok: false, error: "Please fill bill name, address and destination." });
+    if (india && (!cust.pincode || !cust.transport || !cust.taxId)) {
+      return res.json({ ok: false, error: "Please fill pincode, transport and GST / PAN / Aadhaar." });
+    }
+    const ref = db.collection("bbapp_accounts").doc(key);
+    const cur = (await ref.get()).data();
+    if (cur && cur.status === "blocked") return res.json({ ok: true, status: "blocked" });
+    if (cur && cur.status === "approved") return res.json({ ok: true, status: "approved" });
+    // Owner 14-Oct: PAN / Aadhaar need their photo; GST only the number.
+    const doc = (cust.kycDoc || (/^\d{2}[A-Z]{5}\d{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/i.test(cust.taxId) ? "gst"
+      : /^[A-Z]{5}\d{4}[A-Z]$/i.test(cust.taxId) ? "pan" : "aadhaar")).toLowerCase();
+    const img = String((c.kycImage) || "");
+    if (india && doc !== "gst" && img.length < 1000) {
+      return res.json({ ok: false, error: `Please add a photo of your ${doc === "pan" ? "PAN card" : "Aadhaar card"}.` });
+    }
+    const kyc = india ? await kycCheck(db, cust, doc, String(c.kycText || "")) : [];
+    let kycPath = null;
+    if (india && doc !== "gst") {
+      kycPath = `kyc/${key}.jpg`;
+      try {
+        await admin.storage().bucket().file(kycPath).save(Buffer.from(img, "base64"), { contentType: "image/jpeg" });
+      } catch (e) { logger.warn("kyc save", { key, error: e.message }); kycPath = null; }
+    }
+    // Owner 14-Oct: approved by the bot when no Tally customer has this
+    // pincode yet, or the pincode's sales in the last 6 months are under
+    // ₹5 lakh (weekly figure from the shop PC); otherwise the owner decides.
+    const pin6 = String(cust.pincode).replace(/\D/g, "");
+    const known = tallyPincodes().has(pin6);
+    const ps = (await db.collection("bbapp_settings").doc("pinsales").get()).data() || {};
+    const pinSale = Number((ps.pins || {})[pin6] || 0);
+    const auto = india && (!known || pinSale < 500000);
+    kyc.push(!known ? "📍 No customer on this pincode yet → auto-approved"
+      : `📍 Pincode ${pin6}: sales last 6 months ${inr(pinSale)}${pinSale < 500000 ? " (under ₹5 lakh) → auto-approved" : " — ₹5 lakh or more, please decide"}`);
+    const status = !india || auto ? "approved" : "pending";
+    await ref.set({ status, kind: india ? "new" : "foreign", cust, kyc, kycPath, verifiedAt: Date.now(), at: Date.now(),
+      ...(auto ? { approvedAt: Date.now(), approvedBy: "bot (new pincode)" } : {}),
+      log: admin.firestore.FieldValue.arrayUnion({ a: india ? "🆕 signed up" : "🌍 signed up", by: "app", at: Date.now() },
+        ...(auto ? [{ a: known ? "✅ auto-approved — pincode sales under ₹5 lakh" : "✅ auto-approved — no customer on this pincode yet", by: "bot", at: Date.now() + 1 }] : [])) }, { merge: true });
+    if (auto && kycPath) await admin.storage().bucket().file(kycPath).delete().catch(() => {});
+    await accPost(db, key);
+    return res.json({ ok: true, status });
+  },
+);
+
+/** App: on every open — still allowed? */
+exports.accountStatus = onRequest(
+  { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
+  async (req, res) => {
+    if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
+    const key = accKey(req.body && req.body.mobile);
+    if (!key) return res.status(400).json({ ok: false });
+    const ref = admin.firestore().collection("bbapp_accounts").doc(key);
+    const a = (await ref.get()).data();
+    // Owner 14-Oct: every app open is counted (Google Sheet: who looks, who orders).
+    if (a) {
+      await ref.set({ opens: admin.firestore.FieldValue.increment(1), lastOpen: Date.now(),
+        ...(String(a.lastOpenDay || "") !== new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10)
+          ? { openDays: admin.firestore.FieldValue.increment(1), lastOpenDay: new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10) } : {}) },
+      { merge: true });
+    }
+    return res.json({ ok: true, status: (a && a.status) || "none", kind: (a && a.kind) || null,
+      party: (a && a.party) || null, cust: (a && a.cust) || null });
+  },
+);
+
+
+/** Pincodes of existing Tally customers (parties.json, Sundry Debtors). */
+let PINSET = null;
+function tallyPincodes() {
+  if (PINSET) return PINSET;
+  PINSET = new Set();
+  try {
+    if (!PARTIES) PARTIES = require("./parties.json");
+    for (const list of Object.values(PARTIES)) {
+      for (const x of list || []) {
+        const pin = String((x && x.pincode) || "").replace(/\D/g, "");
+        if (pin.length === 6) PINSET.add(pin);
+      }
+    }
+  } catch (e) { logger.warn("pincodes", { error: e.message }); }
+  return PINSET;
+}
+
+/** Owner 14-Oct: cross-check the ID against what the customer typed.
+ *  Returns short lines for the approvals group ("✅ …" / "⚠️ …"). */
+async function kycCheck(db, cust, doc, text) {
+  const out = [];
+  const T = String(text || "").toUpperCase();
+  const flat = T.replace(/[^A-Z0-9]/g, "");
+  const words = (x) => String(x || "").toUpperCase().split(/[^A-Z]+/).filter((w) => w.length >= 3);
+  const nameHit = (name) => {
+    const w = words(name);
+    if (!w.length) return null;
+    const hit = w.filter((x) => T.includes(x)).length;
+    return hit / w.length;
+  };
+  const pin = String(cust.pincode || "").replace(/\D/g, "");
+  const city = String(cust.bookingPlace || "").toUpperCase().trim();
+  if (doc === "gst") {
+    const g = String(cust.taxId || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const c = (await db.collection("bbapp_gst").doc(g).get()).data();
+    const info = c && c.info;
+    if (!info) return ["⚠️ GST could not be verified on the GST portal"];
+    out.push(`✅ GST verified: ${info.tradeName || info.legalName || "-"}${info.status ? " (" + info.status + ")" : ""}`);
+    const n = Math.max(nameHit(info.tradeName) || 0, nameHit(info.legalName) || 0);
+    const bill = words(cust.billName);
+    const billHit = bill.filter((x) => `${info.tradeName || ""} ${info.legalName || ""}`.toUpperCase().includes(x)).length;
+    out.push(billHit >= Math.max(1, Math.ceil(bill.length / 2)) || n >= 0.5 ? "✅ Bill name matches the GST name" : `⚠️ Bill name "${cust.billName}" ≠ GST name`);
+    if (info.pin) out.push(String(info.pin) === pin ? "✅ Pincode matches the GST address" : `⚠️ Pincode ${pin} ≠ GST address ${info.pin}`);
+    return out;
+  }
+  if (!T || T.length < 20) return [`⚠️ The ${doc === "pan" ? "PAN" : "Aadhaar"} photo could not be read — please look at it`];
+  if (doc === "pan") {
+    const pan = String(cust.taxId || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    out.push(flat.includes(pan) ? "✅ PAN number matches the photo" : "⚠️ PAN number NOT found on the photo");
+  } else {
+    const last4 = String(cust.taxId || "").replace(/\D/g, "").slice(-4);
+    out.push(last4 && T.replace(/\D/g, "").includes(String(cust.taxId || "").replace(/\D/g, ""))
+      ? "✅ Aadhaar number matches the photo"
+      : (last4 && T.includes(last4) ? "✅ Aadhaar last 4 digits match the photo" : "⚠️ Aadhaar number NOT found on the photo"));
+    if (pin) out.push(T.replace(/\D/g, " ").split(/\s+/).includes(pin) ? "✅ Pincode matches the Aadhaar address" : `⚠️ Pincode ${pin} not on the Aadhaar`);
+    if (city) out.push(T.includes(city) ? `✅ City ${city} is on the Aadhaar` : `⚠️ City ${city} not on the Aadhaar`);
+  }
+  const n = Math.max(nameHit(cust.contact) || 0, nameHit(cust.billName) || 0);
+  out.push(n >= 0.5 ? "✅ Name matches the card" : "⚠️ Name on the card does not match the name typed");
+  return out;
+}
+
+
+/** Owner 14-Oct: the Google Sheet (Apps Script, PC key) — every account with
+ *  its usage; and bulk block / unblock from the sheet. */
+exports.accountsList = onRequest(
+  { region: "asia-south1", secrets: [PC_KEY], timeoutSeconds: 60, memory: "256MiB", maxInstances: 1, invoker: "public" },
+  async (req, res) => {
+    if (req.method !== "POST" || !pcOk(req)) return res.status(403).json({ ok: false });
+    const db = admin.firestore();
+    const b = req.body || {};
+    if (Array.isArray(b.block) || Array.isArray(b.unblock)) {
+      const by = String(b.by || "Google Sheet").slice(0, 40);
+      const done = [];
+      for (const [list, st] of [[b.block || [], "blocked"], [b.unblock || [], "approved"]]) {
+        for (const raw of list.slice(0, 500)) {
+          const k = accKey(raw);
+          if (!k) continue;
+          await db.collection("bbapp_accounts").doc(k).set({ status: st,
+            log: admin.firestore.FieldValue.arrayUnion({ a: st === "blocked" ? "🚫 blocked (sheet)" : "↩️ unblocked (sheet)", by, at: Date.now() }) },
+          { merge: true });
+          done.push(k);
+        }
+      }
+      return res.json({ ok: true, changed: done.length });
+    }
+    const snap = await db.collection("bbapp_accounts").get();
+    const rows = snap.docs.map((x) => {
+      const a = x.data();
+      const c = a.cust || {};
+      return { mobile: x.id, party: a.party || c.billName || "", city: c.bookingPlace || "", pincode: c.pincode || "",
+        country: c.country || "India", kind: a.kind || "", status: a.status || "", signedUp: a.at || a.verifiedAt || null,
+        approvedBy: a.approvedBy || "", opens: a.opens || 0, openDays: a.openDays || 0, lastOpen: a.lastOpen || null,
+        orders: a.orders || 0, lastOrderAt: a.lastOrderAt || null };
+    });
+    return res.json({ ok: true, rows });
+  },
+);
+
+
+/** Shop PC (pincode_sales.py, weekly): sales per pincode, last 6 months. */
+exports.pinSalesUpload = onRequest(
+  { region: "asia-south1", secrets: [PC_KEY], timeoutSeconds: 60, memory: "256MiB", maxInstances: 1, invoker: "public" },
+  async (req, res) => {
+    if (req.method !== "POST" || !pcOk(req)) return res.status(403).json({ ok: false });
+    const pins = (req.body && req.body.pins) || {};
+    const clean = {};
+    for (const [k, v] of Object.entries(pins)) if (/^\d{6}$/.test(k)) clean[k] = Math.round(Number(v) || 0);
+    await admin.firestore().collection("bbapp_settings").doc("pinsales").set({ pins: clean,
+      since: String((req.body && req.body.since) || ""), at: Date.now() });
+    return res.json({ ok: true, pins: Object.keys(clean).length });
   },
 );

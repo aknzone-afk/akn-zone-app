@@ -73,7 +73,7 @@
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Choose your payment screenshot to send to the shop.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>Take a photo of your payment to send to the shop.</string>
+	<string>Take a photo of your payment, or of your PAN / Aadhaar card to verify your account, to send to the shop.</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>

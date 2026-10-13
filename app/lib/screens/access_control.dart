@@ -10,7 +10,10 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../config.dart';
 import '../services/access_api.dart';
+import '../services/account_service.dart';
 import '../services/device_binding.dart';
+import '../services/push_service.dart';
+import 'onboarding_screen.dart';
 import '../theme.dart';
 
 const String _kPhone = 'access_phone';
@@ -32,6 +35,9 @@ class AuthGate extends StatefulWidget {
 enum _Gate {
   loading,
   forceUpdate,
+  onboarding, // owner 14-Oct: WhatsApp verify → claim / sign up → approval
+  accountRemoved, // account blocked by the shop
+  accountDeclined, // sign-up not approved
   login,
   register,
   pending,
@@ -99,6 +105,71 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
     }
   }
 
+  /// Owner 14-Oct: customer onboarding. Null = an approved account (go on to
+  /// the catalog); otherwise the gate screen to show. An approved account is
+  /// re-checked in the background (offline = let in); a blocked / declined
+  /// one is asked again before the removed screen, in case the shop undid it.
+  Future<_Gate?> _accountGate() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final a = AccountService.saved(prefs);
+      final status = '${a?['status'] ?? ''}';
+      if (a == null || status.isEmpty) return _Gate.onboarding;
+      if (status == 'approved') {
+        // ignore: discarded_futures
+        _recheckAccount(prefs, a);
+        return null;
+      }
+      if (status == 'blocked' || status == 'declined') {
+        final d = await AccountService.checkStatus('${a['mobile'] ?? ''}');
+        final now = '${d?['status'] ?? ''}';
+        if (now == 'approved') {
+          await AccountService.approve(prefs, {
+            ...a,
+            if (d?['kind'] != null) 'kind': d!['kind'],
+            if (d?['party'] != null) 'party': d!['party'],
+            if (d?['cust'] is Map) 'cust': d!['cust'],
+          });
+          return null;
+        }
+        if (now == 'pending') {
+          await AccountService.save(prefs, {...a, 'status': 'pending'});
+          return _Gate.onboarding;
+        }
+        if (now == 'blocked' || now == 'declined') {
+          await AccountService.save(prefs, {...a, 'status': now});
+          return now == 'blocked' ? _Gate.accountRemoved : _Gate.accountDeclined;
+        }
+        return status == 'blocked' ? _Gate.accountRemoved : _Gate.accountDeclined;
+      }
+      return _Gate.onboarding; // pending → the flow shows "waiting for approval"
+    } catch (_) {
+      return null; // never lock a customer out because of an app error
+    }
+  }
+
+  bool _rechecking = false;
+
+  /// Background check of an approved account (every cold start / resume).
+  Future<void> _recheckAccount(SharedPreferences prefs, Map<String, dynamic> a) async {
+    if (_rechecking) return;
+    _rechecking = true;
+    try {
+      // ignore: discarded_futures
+      PushService.register(prefs, AccountService.dio);
+      final d = await AccountService.checkStatus('${a['mobile'] ?? ''}');
+      final now = '${d?['status'] ?? ''}';
+      if (now != 'blocked' && now != 'declined') return; // offline / fine → stay in
+      await AccountService.save(prefs, {...a, 'status': now});
+      if (mounted) {
+        setState(() => _state = now == 'blocked' ? _Gate.accountRemoved : _Gate.accountDeclined);
+      }
+    } catch (_) {
+    } finally {
+      _rechecking = false;
+    }
+  }
+
   Future<void> _resolve({bool silent = false}) async {
     if (!_checkedMinBuild) {
       _checkedMinBuild = true;
@@ -106,6 +177,12 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
         if (mounted) setState(() => _state = _Gate.forceUpdate);
         return;
       }
+    }
+    if (_state == _Gate.forceUpdate) return;
+    final acct = await _accountGate();
+    if (acct != null) {
+      if (mounted) setState(() => _state = acct);
+      return;
     }
     if (!kAccessControlEnabled || !AccessApi.isConfigured) {
       if (mounted) setState(() => _state = _Gate.allowed);
@@ -176,6 +253,19 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
         return const Scaffold(body: Center(child: CircularProgressIndicator()));
       case _Gate.forceUpdate:
         return const ForceUpdateScreen();
+      // The gate sits above the app's router, so these screens get their own
+      // Navigator (dialogs, bottom sheets, autocomplete overlays need one).
+      // Distinct keys → a fresh Navigator when the screen kind changes.
+      case _Gate.onboarding:
+        return _OwnNavigator(
+            key: const ValueKey('gate-onboarding'),
+            child: OnboardingFlow(onDone: _resolve));
+      case _Gate.accountRemoved:
+      case _Gate.accountDeclined:
+        final declined = _state == _Gate.accountDeclined;
+        return _OwnNavigator(
+            key: ValueKey('gate-removed-$declined'),
+            child: AccountRemovedScreen(declined: declined, onRetry: _resolve));
       case _Gate.login:
         return PhoneLoginScreen(onDone: _resolve);
       case _Gate.register:
@@ -190,6 +280,19 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
         return widget.child;
     }
   }
+}
+
+/// Owner 14-Oct: makes the gate look again (after "Log out / change number").
+void refreshAccessGate() => _gateRefresh?.call();
+
+/// A one-page Navigator for gate screens shown above the app's router.
+class _OwnNavigator extends StatelessWidget {
+  final Widget child;
+  const _OwnNavigator({super.key, required this.child});
+  @override
+  Widget build(BuildContext context) => Navigator(
+        onGenerateRoute: (_) => MaterialPageRoute<void>(builder: (_) => child),
+      );
 }
 
 /// Serif wordmark shared by the gate screens.

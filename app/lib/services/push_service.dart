@@ -6,6 +6,7 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'account_service.dart';
 import 'chat_service.dart';
 
 /// Real push (owner 11-Oct-2026): when the shop sends the bill or replies,
@@ -67,7 +68,11 @@ class PushService {
   /// often: only posts when the token or the mobiles changed.
   static Future<void> register(SharedPreferences prefs, Dio dio) async {
     if (!_ready) return;
-    final mobiles = ChatService.mobiles(prefs);
+    final mobiles = [...ChatService.mobiles(prefs)];
+    // Owner 14-Oct: the signed-up account's number too, so the "approved"
+    // push reaches a customer still waiting for approval (no order yet).
+    final acct = AccountService.mobileKey(prefs);
+    if (acct != null && !mobiles.contains(acct)) mobiles.add(acct);
     if (mobiles.isEmpty) return;
     // Same numbers as the last successful post and no new token → nothing to
     // do (this runs with every 30-s chat poll).
