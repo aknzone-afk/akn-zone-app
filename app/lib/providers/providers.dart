@@ -1199,8 +1199,11 @@ final topLevelFoldersProvider = Provider<List<CatalogFolder>>((ref) {
       previewThumbPaths: stack.length > 1 ? stack.sublist(1) : const <String>[],
     );
   }).toList()
-    ..sort((a, b) =>
-        a.displayName.toLowerCase().compareTo(b.displayName.toLowerCase()));
+    // Owner 13-Oct: a fresh random order of the home folders every time the
+    // app is opened (not A-B-C). Same order while the app stays open, so the
+    // grid never jumps under the customer's finger.
+    ..sort((a, b) => a.path.compareTo(b.path))
+    ..shuffle(Random(_launchShuffleSeed));
   out.sort((a, b) {
     if (a.path.isEmpty && b.path.isNotEmpty) return 1;
     if (b.path.isEmpty && a.path.isNotEmpty) return -1;
@@ -1208,6 +1211,9 @@ final topLevelFoldersProvider = Provider<List<CatalogFolder>>((ref) {
   });
   return out;
 });
+
+/// One random number per app launch — the home folder order.
+final int _launchShuffleSeed = DateTime.now().microsecondsSinceEpoch & 0x7fffffff;
 
 /// Direct children of [parentPath] only — non-recursive.
 /// `parentPath = ""` for the catalog root.
