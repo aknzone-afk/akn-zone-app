@@ -11,6 +11,7 @@ import 'package:go_router/go_router.dart';
 import '../models/order.dart';
 import '../models/photo.dart';
 import '../providers/providers.dart';
+import '../services/account_service.dart';
 import '../services/order_service.dart';
 import '../services/transport_info.dart';
 import '../services/phone_lock.dart';
@@ -81,6 +82,9 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
 
   bool get _india => _country == 'India';
 
+  /// Owner 14-Oct: the WhatsApp-verified account number — no FIND box.
+  String? _accMobile;
+
   @override
   void initState() {
     super.initState();
@@ -95,6 +99,13 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         _newForm = true;
         _newFormForeign = !saved.isIndia;
       }
+    }
+    final acc = AccountService.saved(ref.read(sharedPreferencesProvider));
+    final accMobile = OrderService.normalizeIndianMobile('${acc?['mobile'] ?? ''}');
+    if (acc != null && acc['india'] != false && accMobile != null) {
+      _accMobile = accMobile;
+      _oldMobile.text = accMobile;
+      if (saved == null) WidgetsBinding.instance.addPostFrameCallback((_) => _onMobileTyped());
     }
     _oldMobile.addListener(_onMobileTyped);
     _taxId.addListener(_onTaxTyped);
@@ -251,7 +262,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     });
     // Only LOOKING a number up — don't link it to this phone yet.
     final lock = await PhoneLock.check(ref.read(dioProvider), m, peek: true);
-    if (!lock.allowed) {
+    if (!lock.allowed && _accMobile == null) {
       if (mounted) {
         setState(() {
           _looking = false;
@@ -1004,10 +1015,6 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                   const SizedBox(height: 22),
                   Row(children: [
                     Expanded(child: _SectionTitle(t('2 · Your details', '2 · आपकी जानकारी'))),
-                    if (_usingSaved && !_old)
-                      TextButton(
-                          onPressed: _clearSaved,
-                          child: Text(t('Clear form', 'फ़ॉर्म खाली करें'))),
                   ]),
                   if (_usingSaved && !_old)
                     Padding(
@@ -1019,7 +1026,26 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                   const SizedBox(height: 6),
                   // Outside India the form's own "Mobile No. (with country
                   // code)" is the only number box — no +91 search box on top.
-                  if (_india || !_newForm) ...[
+                  if (_accMobile != null)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: Row(children: [
+                        const Icon(Icons.verified_rounded, color: Color(0xFF2E7D32), size: 20),
+                        const SizedBox(width: 8),
+                        Text('Mobile: +91 $_accMobile',
+                            style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+                        if (_looking) ...[
+                          const SizedBox(width: 10),
+                          const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2)),
+                        ],
+                      ]),
+                    ),
+                  if (_accMobile != null && _lookErr != null)
+                    Text(_lookErr!, style: TextStyle(color: scheme.error, fontWeight: FontWeight.w600)),
+                  if (_accMobile != null) ...[
+                    for (final pt in _matches) _partyCard(pt, selectable: _matches.length > 1),
+                  ],
+                  if (_accMobile == null && (_india || !_newForm)) ...[
                     Text('Type your mobile number — we find your account by ourselves.',
                         style: Theme.of(context).textTheme.bodySmall),
                     const SizedBox(height: 8),
@@ -1108,14 +1134,15 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                   TextFormField(
                     controller: _taxId,
                     textCapitalization: TextCapitalization.characters,
-                    decoration: _dec(t('GST / PAN / Aadhaar (optional)', 'GST / PAN / आधार (ज़रूरी नहीं)'),
+                    decoration: _dec(t('GST / PAN / Aadhaar *', 'GST / PAN / आधार *'),
                         helper: (kind != null && !kind.startsWith('!'))
                             ? '✓ $kind number'
                             : null,
                         helperColor: const Color(0xFF2E7D32)),
                     validator: (v) {
+                      if ((v ?? '').trim().isEmpty) return 'Enter your GST, PAN or Aadhaar number';
                       if (_gstNote != null && !_gstOk) {
-                        return 'GST not verified — correct it or remove it (you can order without GST)';
+                        return 'GST not verified — please correct it';
                       }
                       final k = OrderService.taxIdKind(v ?? '');
                       return (k != null && k.startsWith('!'))

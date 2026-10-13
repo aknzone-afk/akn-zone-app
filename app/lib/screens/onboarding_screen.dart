@@ -851,13 +851,6 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
                           busy: _pendChecking,
                           onPressed: () => _checkPending(manual: true),
                         ),
-                        const SizedBox(height: 10),
-                        OutlinedButton.icon(
-                          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(50)),
-                          onPressed: _openShopChat,
-                          icon: const Icon(Icons.chat_rounded, color: _green),
-                          label: const UText('Chat on WhatsApp'),
-                        ),
                         const SizedBox(height: 6),
                         TextButton(onPressed: _changeNumber, child: const UText('Change number')),
                       ],

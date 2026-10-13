@@ -475,6 +475,8 @@ class OrderService {
     try {
       final raw = await rootBundle.loadString('assets/data/transports.json');
       _transports = (jsonDecode(raw) as List).map((e) => '$e').toList();
+      // Owner 14-Oct: plain COURIER is a real choice (Tally has it).
+      if (!_transports!.contains('COURIER')) _transports = ['COURIER', ..._transports!];
     } catch (_) {
       _transports = const [];
     }
