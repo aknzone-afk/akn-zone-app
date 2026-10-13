@@ -302,6 +302,105 @@ Widget _cartIconWithBadge(BuildContext context, int count) {
   );
 }
 
+/// Shop contact + address card surfaced when the customer taps the brand
+/// title on the home AppBar. Phone number and map link are tap-through.
+void _showShopInfo(BuildContext context) {
+  const address =
+      '4001-22, 3rd Floor,\nSai Krupa Market,\nRing Road, Surat — 395002';
+  const mapsUrl = 'https://maps.app.goo.gl/ZDC7mJpa3jKkJxaU8';
+  const phone = '7016638059';
+
+  // Tester 13-Oct: launch directly (like advance_screen) instead of gating on
+  // canLaunchUrl, which is false on Android 11+ when the browser/dialer isn't
+  // declared in <queries> — the tap silently did nothing.
+  Future<void> openUrl(String url) async {
+    try {
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    } catch (_) {/* no app can open it — nothing to do */}
+  }
+
+  showDialog<void>(
+    context: context,
+    builder: (_) {
+      final scheme = Theme.of(context).colorScheme;
+      return AlertDialog(
+        title: const UText('AKN Zone',
+            style: TextStyle(fontWeight: FontWeight.w800)),
+        contentPadding: const EdgeInsets.fromLTRB(24, 14, 24, 8),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.place_rounded, color: scheme.primary, size: 22),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: UText(
+                    address,
+                    style: TextStyle(fontSize: 14, height: 1.4),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            InkWell(
+              onTap: () => openUrl(mapsUrl),
+              child: Row(
+                children: [
+                  Icon(Icons.map_rounded, color: scheme.primary, size: 22),
+                  const SizedBox(width: 10),
+                  UText(
+                    'Open in Google Maps',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w600,
+                      color: scheme.primary,
+                      decoration: TextDecoration.underline,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            InkWell(
+              onTap: () => openUrl('tel:$phone'),
+              child: Row(
+                children: [
+                  Icon(Icons.call_rounded, color: scheme.primary, size: 22),
+                  const SizedBox(width: 10),
+                  UText(
+                    phone,
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: scheme.primary,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          // Account controls only exist once the OTP login gate is active.
+          // "Delete Account" is an App Store requirement for apps with login.
+          if (kAccessControlEnabled) ...[
+            TextButton(
+              onPressed: () async {
+                Navigator.pop(context);
+                await deleteMyAccount(context);
+              },
+              child: const UText('Delete Account',
+                  style: TextStyle(color: Color(0xFFB3261E))),
+            ),
+          ],
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const UText('Close')),
+        ],
+      );
     },
   );
 }
@@ -319,16 +418,16 @@ class _BrandTitle extends ConsumerWidget {
         // BB script monogram (transparent PNG). Box constrains so it never
         // gets clipped by the AppBar bounds.
         SizedBox(
-            width: 44,
-            height: 44,
-            child: Padding(
-              padding: const EdgeInsets.all(2),
-              child: Image.asset(
-                'assets/icon/bb_logo.png',
-                fit: BoxFit.contain,
-                filterQuality: FilterQuality.medium,
-              ),
+          width: 44,
+          height: 44,
+          child: Padding(
+            padding: const EdgeInsets.all(2),
+            child: Image.asset(
+              'assets/icon/bb_logo.png',
+              fit: BoxFit.contain,
+              filterQuality: FilterQuality.medium,
             ),
+          ),
         ),
         const SizedBox(width: 8),
         GestureDetector(
