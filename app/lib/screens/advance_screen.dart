@@ -13,6 +13,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:gal/gal.dart';
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'dart:ui' as ui;
 import 'package:flutter/rendering.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -198,8 +199,16 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
     String? last;
     try {
       for (var i = 0; i < xs.length; i++) {
+        // Read on the phone first (free, 1-2 s) — the cloud only falls back to
+        // its AI when this text is unclear (owner 13-Oct: checking was slow).
+        var ocr = '';
+        try {
+          final rec = TextRecognizer(script: TextRecognitionScript.latin);
+          ocr = (await rec.processImage(InputImage.fromFilePath(xs[i].path))).text;
+          await rec.close();
+        } catch (_) {}
         final r = await ref.read(dioProvider).post<dynamic>('$_cloud/advanceProof',
-            data: {'ref': widget.number, 'image': base64Encode(await xs[i].readAsBytes())},
+            data: {'ref': widget.number, 'image': base64Encode(await xs[i].readAsBytes()), 'ocr': ocr},
             options: Options(
                 headers: _hdr,
                 contentType: Headers.jsonContentType,

@@ -1620,6 +1620,39 @@ const ADV_SCHEMA = { type: "object", properties: {
   success: { type: ["boolean", "null"] }, payee: { type: ["string", "null"] },
   payeeAccount: { type: ["string", "null"] } }, required: ["amount"] };
 
+/** A payment screenshot's TEXT (read on the phone by ML Kit) → the same
+ *  fields Gemini returns, or null when anything is unclear (then the AI reads
+ *  the picture). Only a clear success to B B SYNTHETICS with an amount and a
+ *  12-digit bank reference passes here. */
+function parseUpiText(t) {
+  if (!t || t.length < 20) return null;
+  const U = t.toUpperCase();
+  if (/FAIL|DECLIN|UNSUCCESS|PENDING|REVERS|CANCEL|REFUND|PROCESSING/.test(U)) return null;
+  if (!/SUCCESS|PAID|COMPLETED|DEBITED|SENT/.test(U)) return null;
+  const flat = U.replace(/[^A-Z0-9]/g, "");
+  if (!(flat.includes("BBSYNTHETIC") || flat.includes("173947529358"))) return null;
+  const amts = [...t.matchAll(/(?:₹|RS\.?|INR)\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)/gi)]
+    .map((m) => Number(m[1].replace(/,/g, ""))).filter((n) => n > 0 && n < 10000000);
+  if (!amts.length || new Set(amts).size > 2) return null; // no / conflicting amounts
+  const amount = amts[0];
+  // our own UPI id digits (vyapar.173947529358) are 12 digits too — never a UTR
+  const refs = [...new Set((U.match(/\b\d{12}\b/g) || []))].filter((x) => x !== "173947529358");
+  if (!refs.length) return null;
+  const MON = { JAN: 1, FEB: 2, MAR: 3, APR: 4, MAY: 5, JUN: 6, JUL: 7, AUG: 8, SEP: 9, OCT: 10, NOV: 11, DEC: 12 };
+  let date = null, time = null;
+  const dm = /(\d{1,2})[\s-]*(JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*[\s,-]*(\d{4})/.exec(U);
+  if (dm) date = `${dm[3]}-${String(MON[dm[2]]).padStart(2, "0")}-${dm[1].padStart(2, "0")}`;
+  const tm = /(\d{1,2})[:.](\d{2})\s*(AM|PM)?/.exec(U.slice(dm ? Math.max(0, dm.index - 40) : 0));
+  if (tm) {
+    let h = Number(tm[1]);
+    if (tm[3] === "PM" && h < 12) h += 12;
+    if (tm[3] === "AM" && h === 12) h = 0;
+    if (h < 24) time = `${String(h).padStart(2, "0")}:${tm[2]}`;
+  }
+  return { amount, date, time, txnId: refs[0], refs, success: true, payee: "B B SYNTHETICS",
+    payeeAccount: flat.includes("173947529358") ? "vyapar.173947529358@hdfcbank" : null, via: "phone-ocr" };
+}
+
 exports.advanceStart = onRequest(
   { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
@@ -1675,7 +1708,9 @@ exports.advanceProof = onRequest(
     }
     const usedImg = await db.collection("bbapp_advances").where("hashes", "array-contains", hash).get();
     if (usedImg.docs.some((x) => x.id !== ref)) return fail("This payment screenshot was already used for another order.");
-    const p = await geminiJson(img, "image/jpeg", ADV_PROMPT, ADV_SCHEMA);
+    // Owner 13-Oct: the phone's own text reading first (fast, no AI quota);
+    // the AI only when that text is unclear.
+    const p = parseUpiText(String((req.body && req.body.ocr) || "")) || await geminiJson(img, "image/jpeg", ADV_PROMPT, ADV_SCHEMA);
     if (!p) return fail("Could not read the screenshot right now — please try again in a minute.");
     if (!p.amount || p.amount <= 0) return fail("This does not look like a payment screenshot. Please send the screenshot of your payment.");
     if (p.success === false) return fail("This payment does not show as successful. Please send the screenshot of a successful payment.");
