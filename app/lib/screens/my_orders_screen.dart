@@ -198,8 +198,9 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                             ),
                           )
                         else if (OrderService.isTrial(o.number) && o.advancePaid != null)
-                          Text('Screenshot checked and accepted${o.advanceUtr != null ? ' · UTR ${o.advanceUtr}' : ''}',
-                              style: const TextStyle(color: Color(0xFF2E7D32), fontWeight: FontWeight.w700))
+                          // Owner 13-Oct: the trial shows the same step series.
+                          _Steps(status: null, adv: o.advancePaid,
+                              tokenDue: DateTime(o.createdAt.year, o.createdAt.month, o.createdAt.day + 1, 12).millisecondsSinceEpoch)
                         else
                           Text(o.lastError ?? t('Waiting to send', 'भेजना बाकी')),
                         if (sent && (_st[o.number]?.bill ?? false))
@@ -316,7 +317,7 @@ class _Steps extends StatelessWidget {
 
     final steps = <(String, bool)>[
       if (adv != null) ...[
-        ('Order processing started', true),
+        ('Order sent for processing', true),
         ('Token ${OrderService.formatRupees(adv!)} screenshot received', true),
         (tokenRecv ? 'Money received' : (tokenMiss ? '✗ Money not received — please contact us' : due()), tokenRecv),
       ] else

@@ -697,27 +697,36 @@ const BILL_SCHEMA = { type: "object", properties: {
   billNo: { type: ["string", "null"] }, billDate: { type: ["string", "null"] }, grandTotal: { type: ["number", "null"] } },
   required: ["buyerName"] };
 
+let GEM_GOOD = null; // the model that answered last (per instance)
 async function geminiJson(bytes, mime, prompt, schema) {
   const { MODELS } = require("./orderVision");
-  for (const model of MODELS) {
+  const order = GEM_GOOD ? [GEM_GOOD, ...MODELS.filter((m) => m !== GEM_GOOD)] : MODELS;
+  const deadline = Date.now() + 80000;
+  for (const model of order) {
+    const left = deadline - Date.now();
+    if (left < 4000) break;
     const t0 = Date.now();
     try {
-      // Owner 13-Oct trial: one hung call kept the customer's "CHECKING
-      // PAYMENT…" spinning until the 120-s cut-off — 35 s per model, then the next.
+      // Owner 13-Oct: free models answer 429/503 fast but one can hang a minute
+      // — 20 s per model, then the next; the working one is tried first.
       const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
         method: "POST", headers: { "x-goog-api-key": GEMINI_API_KEY.value(), "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(35000),
+        signal: AbortSignal.timeout(Math.min(20000, left)),
         body: JSON.stringify({ contents: [{ role: "user", parts: [{ inlineData: { mimeType: mime, data: bytes.toString("base64") } }, { text: prompt }] }],
           generationConfig: { responseMimeType: "application/json", responseJsonSchema: schema, temperature: 0 } }),
       });
       if (!r.ok) {
         logger.warn("gemini", { model, status: r.status, ms: Date.now() - t0 });
+        if (GEM_GOOD === model) GEM_GOOD = null;
         continue;
       }
       const j = await r.json();
-      return JSON.parse(j.candidates[0].content.parts.map((p) => p.text || "").join(""));
+      const out = JSON.parse(j.candidates[0].content.parts.map((p) => p.text || "").join(""));
+      GEM_GOOD = model;
+      return out;
     } catch (e) {
       logger.warn("gemini", { model, error: e.message, ms: Date.now() - t0 });
+      if (GEM_GOOD === model) GEM_GOOD = null;
     }
   }
   return null;
@@ -805,7 +814,9 @@ const inr = (n) => "₹" + Math.round(Number(n) || 0).toLocaleString("en-IN");
 
 const PAY_PROMPT = "This should be a payment screenshot (UPI app like GPay/PhonePe/Paytm/BHIM, or a bank app NEFT/RTGS/IMPS). " +
   "Return JSON: amount (number, rupees paid), date (YYYY-MM-DD of the payment as shown), time (HH:MM 24-hour as shown), " +
-  "txnId (UPI ref no. / UTR / transaction id, digits and letters only), success (true only if it clearly says successful/completed/paid), " +
+  "txnId (the bank's UPI Ref No. / UTR / RRN — usually 12 digits; NOT the app's own id that starts with letters like T2610… or the PhonePe/GPay transaction id when a UTR is also shown), " +
+  "refs (EVERY reference / transaction / UTR / RRN number shown on the screenshot, as strings), " +
+  "success (true only if it clearly says successful/completed/paid), " +
   "payee (receiver name). Use null when not shown. If it is not a payment screenshot, amount = null.";
 const PAY_SCHEMA = { type: "object", properties: {
   amount: { type: ["number", "null"] }, date: { type: ["string", "null"] }, time: { type: ["string", "null"] },
@@ -1591,12 +1602,15 @@ exports.pruneLiveParties = onRequest(
 const ORDER_GROUP = -5370195204;
 const ADV_PROMPT = "This should be a payment screenshot (UPI app like GPay/PhonePe/Paytm/BHIM, or a bank app NEFT/RTGS/IMPS). " +
   "Return JSON: amount (number, rupees paid), date (YYYY-MM-DD of the payment as shown), time (HH:MM 24-hour as shown), " +
-  "txnId (UPI ref no. / UTR / transaction id, digits and letters only), success (true only if it clearly says successful/completed/paid), " +
+  "txnId (the bank's UPI Ref No. / UTR / RRN — usually 12 digits; NOT the app's own id that starts with letters like T2610… or the PhonePe/GPay transaction id when a UTR is also shown), " +
+  "refs (EVERY reference / transaction / UTR / RRN number shown on the screenshot, as strings), " +
+  "success (true only if it clearly says successful/completed/paid), " +
   "payee (the RECEIVER's name exactly as shown), payeeAccount (receiver's UPI id or account number, as shown). Use null when not shown. " +
   "If it is not a payment screenshot, amount = null.";
 const ADV_SCHEMA = { type: "object", properties: {
   amount: { type: ["number", "null"] }, date: { type: ["string", "null"] }, time: { type: ["string", "null"] },
-  txnId: { type: ["string", "null"] }, success: { type: ["boolean", "null"] }, payee: { type: ["string", "null"] },
+  txnId: { type: ["string", "null"] }, refs: { type: ["array", "null"], items: { type: "string" } },
+  success: { type: ["boolean", "null"] }, payee: { type: ["string", "null"] },
   payeeAccount: { type: ["string", "null"] } }, required: ["amount"] };
 
 exports.advanceStart = onRequest(
@@ -1663,7 +1677,10 @@ exports.advanceProof = onRequest(
     if (!isNaN(paidAt) && paidAt < Math.floor((a.orderAt || 0) / 60000) * 60000 - 10 * 60e3) {
       return fail("This screenshot is from before your order. Please send the screenshot of the payment you made now.");
     }
-    const utr = String(p.txnId || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    // The bank UTR = a 12-digit number (UPI RRN); prefer it over an app's own id.
+    const allRefs = [p.txnId, ...(Array.isArray(p.refs) ? p.refs : [])]
+      .map((x) => String(x || "").toUpperCase().replace(/[^A-Z0-9]/g, "")).filter((x) => x.length >= 8);
+    const utr = allRefs.find((x) => /^\d{12}$/.test(x)) || allRefs[0] || "";
     if (utr) {
       const used = await db.collection("bbapp_advances").where("utrs", "array-contains", utr).get();
       const used2 = await db.collection("bbapp_advances").where("utr", "==", utr).get();
@@ -1674,11 +1691,11 @@ exports.advanceProof = onRequest(
     const amt = Math.round(p.amount);
     const at = isNaN(paidAt) ? null : paidAt;
     const parts = (a.parts || []).filter((x) => !(utr ? x.utr === utr : (!x.utr && x.amt === amt && at && x.paidAt === at)));
-    parts.push({ amt, utr: utr || null, paidAt: at, hash });
+    parts.push({ amt, utr: utr || null, refs: [...new Set(allRefs)].slice(0, 6), paidAt: at, hash });
     const sum = parts.reduce((t, x) => t + x.amt, 0);
     const path = `advances/${ref}${parts.length > 1 ? "-" + parts.length : ""}.jpg`;
     await admin.storage().bucket().file(path).save(img, { contentType: "image/jpeg" });
-    const utrs = parts.map((x) => x.utr).filter(Boolean);
+    const utrs = [...new Set(parts.flatMap((x) => [x.utr, ...(x.refs || [])]).filter(Boolean))];
     const hashes = admin.firestore.FieldValue.arrayUnion(hash);
     if (sum + 1 < a.due) {
       await docRef.set({ parts, utrs, hashes, utr: utrs[0] || null, path }, { merge: true });
