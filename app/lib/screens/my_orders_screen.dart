@@ -236,7 +236,8 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                     isThreeLine: true,
                     // Owner: tap an order → all its designs, selections, pcs.
                     onTap: () => context.push('/order-detail/${Uri.encodeComponent(o.number)}'),
-                    trailing: sent
+                    // Owner 13-Oct: the paid trial shows SEE ORDER + chat like a real order.
+                    trailing: (sent || (OrderService.isTrial(o.number) && o.advancePaid != null))
                         ? Column(mainAxisSize: MainAxisSize.min, children: [
                             TextButton(
                               // Owner: "SEE ORDER" (not Order again) → the full order.
@@ -248,8 +249,11 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                             ),
                             // Owner 12-Oct: under SEE ORDER, and only once the bill
                             // is sent — the chat where the payment screenshot goes.
+                            // Owner 13-Oct: a new customer's chat opens as soon as
+                            // the token is paid (its screenshot is the first message).
                             if (const ['bill_sent', 'payment_received', 'dispatched', 'bilty']
-                                .contains(_st[o.number]?.status))
+                                    .contains(_st[o.number]?.status) ||
+                                o.advancePaid != null)
                             InkWell(
                               borderRadius: BorderRadius.circular(10),
                               onTap: openChat,
@@ -257,10 +261,14 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                                 decoration: BoxDecoration(
                                     color: const Color(0xFF1B8E3A), borderRadius: BorderRadius.circular(10)),
-                                child: const Row(mainAxisSize: MainAxisSize.min, children: [
-                                  HelplineIcon(size: 18),
-                                  SizedBox(width: 4),
-                                  Text('SEND PAYMENT\nDETAILS',
+                                child: Row(mainAxisSize: MainAxisSize.min, children: [
+                                  const HelplineIcon(size: 18),
+                                  const SizedBox(width: 4),
+                                  Text(
+                                      const ['bill_sent', 'payment_received', 'dispatched', 'bilty']
+                                              .contains(_st[o.number]?.status)
+                                          ? 'SEND PAYMENT\nDETAILS'
+                                          : 'CHAT\nWITH US',
                                       textAlign: TextAlign.center,
                                       style: TextStyle(color: Colors.white, fontWeight: FontWeight.w900, fontSize: 10, height: 1.15)),
                                 ]),
