@@ -10,7 +10,6 @@ import 'package:go_router/go_router.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../models/order.dart';
 import '../providers/providers.dart';
@@ -29,9 +28,6 @@ class AdvanceScreen extends ConsumerStatefulWidget {
 
 class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
   static const _upi = 'vyapar.173947529358@hdfcbank'; // QR + shown UPI id
-  // Owner 13-Oct: the HDFC Vyapar merchant id refuses link payments ("not
-  // accepting payments on this UPI ID") — the PAY button pays this one.
-  static const _upiLink = '88665369922@kotak';
   static const _qr =
       'https://firebasestorage.googleapis.com/v0/b/akn-chat-a7dd8.firebasestorage.app/o/public%2Fupi-qr.jpg?alt=media&token=b37ef652-5ac6-4242-b241-2f4d90b3b468';
   static const _cloud = 'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net';
@@ -79,21 +75,6 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
     }
   }
 
-  /// Owner 13-Oct: every UPI app on the phone, each opening straight on the
-  /// payment screen with B.B SYNTHETICS + the amount filled — the customer
-  /// only presses Pay. (iPhone has no "choose app" for upi:// — it opened
-  /// whichever app registered first — so each app has its own button.)
-  static const _apps = [
-    (name: 'PhonePe', scheme: 'phonepe://pay', color: Color(0xFF5F259F)),
-    (name: 'Google Pay', scheme: 'tez://upi/pay', color: Color(0xFF1A73E8)),
-    (name: 'Paytm', scheme: 'paytmmp://pay', color: Color(0xFF00B9F1)),
-    (name: 'BHIM', scheme: 'bhim://upi/pay', color: Color(0xFFF47C20)),
-  ];
-
-
-  String _query(int due) => 'pa=$_upiLink&pn=${Uri.encodeComponent('B B SYNTHETICS')}'
-      '&am=$due&cu=INR&tn=${Uri.encodeComponent('Token ${widget.number}')}';
-
   /// The QR as a picture: Save it (or share it to the UPI app), then in the
   /// UPI app "Scan QR" → gallery. Works even when a link is refused.
   Future<void> _shareQr() async {
@@ -108,61 +89,6 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
         ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
             content: Text('Could not get the QR — please check internet.')));
       }
-    }
-  }
-
-  Future<bool> _open(String url) =>
-      launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication).catchError((_) => false);
-
-  Future<void> _payUpi(int due) async {
-    final q = _query(due);
-    // Installed apps first (needs the schemes in Info.plist / <queries>).
-    final have = <String>{};
-    for (final a in _apps) {
-      if (await canLaunchUrl(Uri.parse('${a.scheme}?$q')).catchError((_) => false)) have.add(a.name);
-    }
-    if (!mounted) return;
-    final apps = [..._apps.where((a) => have.contains(a.name)), ..._apps.where((a) => !have.contains(a.name))];
-    final pick = await showModalBottomSheet<String>(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) => SafeArea(
-        child: Column(mainAxisSize: MainAxisSize.min, children: [
-          Text('Pay ${OrderService.formatRupees(due)} with', style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800)),
-          const SizedBox(height: 4),
-          const Text('B.B SYNTHETICS and the amount are filled in — just press Pay.',
-              textAlign: TextAlign.center, style: TextStyle(color: Colors.black54)),
-          const SizedBox(height: 8),
-          for (final a in apps)
-            ListTile(
-              leading: CircleAvatar(
-                  backgroundColor: a.color,
-                  child: Text(a.name[0], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w900))),
-              title: Text(a.name, style: const TextStyle(fontWeight: FontWeight.w800)),
-              subtitle: have.isEmpty || have.contains(a.name) ? null : const Text('Not found on this phone'),
-              trailing: const Icon(Icons.chevron_right_rounded),
-              onTap: () => Navigator.pop(ctx, a.scheme),
-            ),
-          ListTile(
-            leading: const CircleAvatar(backgroundColor: Color(0xFF1B8E3A),
-                child: Icon(Icons.account_balance_wallet_rounded, color: Colors.white)),
-            title: const Text('Any other UPI app', style: TextStyle(fontWeight: FontWeight.w800)),
-            subtitle: const Text('Cred, Amazon Pay, bank apps…'),
-            trailing: const Icon(Icons.chevron_right_rounded),
-            onTap: () => Navigator.pop(ctx, 'upi://pay'),
-          ),
-          const SizedBox(height: 8),
-        ]),
-      ),
-    );
-    if (pick == null || !mounted) return;
-    var ok = await _open('$pick?$q');
-    // Google Pay on iPhone also answers to gpay://
-    if (!ok && pick.startsWith('tez://')) ok = await _open('gpay://upi/pay?$q');
-    if (!ok && pick != 'upi://pay') ok = await _open('upi://pay?$q');
-    if (!ok && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-          content: Text('That app is not on this phone — choose another, scan the QR code or use bank transfer.')));
     }
   }
 
@@ -281,32 +207,34 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
                 style: const TextStyle(color: Colors.black54)),
           ]),
         ),
-        const SizedBox(height: 14),
-        SizedBox(
-          height: 52,
-          child: FilledButton.icon(
-            style: FilledButton.styleFrom(backgroundColor: green),
-            onPressed: () => _payUpi(due),
-            icon: const Icon(Icons.account_balance_wallet_rounded),
-            label: Text('PAY ${OrderService.formatRupees(due)} WITH UPI APP',
-                style: const TextStyle(fontWeight: FontWeight.w900)),
+        const SizedBox(height: 18),
+        // Owner 13-Oct: no "pay with UPI app" link (the bank refused it) —
+        // only the QR, big and clear; any UPI app can pay it.
+        Text('SCAN THIS QR & PAY ${OrderService.formatRupees(due)}',
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w900)),
+        const SizedBox(height: 4),
+        const Text('Google Pay · PhonePe · Paytm · BHIM · any UPI app',
+            textAlign: TextAlign.center, style: TextStyle(color: Colors.black54)),
+        const SizedBox(height: 10),
+        LayoutBuilder(
+          builder: (_, c) => Center(
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(14),
+              child: CachedNetworkImage(
+                  imageUrl: _qr, width: c.maxWidth.clamp(240.0, 420.0), fit: BoxFit.contain),
+            ),
           ),
         ),
-        const SizedBox(height: 16),
-        const Text('OR SCAN THIS QR', textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w800)),
-        const SizedBox(height: 8),
-        Center(
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(12),
-            child: CachedNetworkImage(imageUrl: _qr, width: 240, fit: BoxFit.contain),
-          ),
-        ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 10),
+        const Text('Paying from this same phone? Save the QR, then in your UPI app tap Scan → Gallery.',
+            textAlign: TextAlign.center, style: TextStyle(color: Colors.black54)),
+        const SizedBox(height: 6),
         Center(
           child: OutlinedButton.icon(
             onPressed: _shareQr,
             icon: const Icon(Icons.download_rounded),
-            label: const Text('SAVE QR → SCAN IT FROM GALLERY IN YOUR UPI APP'),
+            label: const Text('SAVE QR'),
           ),
         ),
         const SizedBox(height: 16),
