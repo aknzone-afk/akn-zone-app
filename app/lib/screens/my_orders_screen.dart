@@ -28,7 +28,7 @@ class MyOrdersScreen extends ConsumerStatefulWidget {
 
 class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
   String? _busy;
-  Map<String, ({String? status, String? lr, bool bill})> _st = {};
+  Map<String, ({String? status, String? lr, bool bill, int? adv, bool tokenRecv, bool tokenMiss, int? tokenDue})> _st = {};
 
   @override
   void initState() {
@@ -167,7 +167,9 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                                 '${o.addOnTo != null ? '  (ADD IN NO. ${orders.where((x) => x.number == o.addOnTo).firstOrNull?.serial ?? '-'})' : ''}'
                             : (o.addOnTo != null
                                 ? 'ADD IN ORDER NO. ${orders.where((x) => x.number == o.addOnTo).firstOrNull?.serial ?? '-'}'
-                                : (o.awaitingAdvance ? 'WAITING FOR 10% TOKEN' : 'ORDER (sending…)')),
+                                : (OrderService.isTrial(o.number) && o.advancePaid != null
+                                    ? '✅ TRIAL — ${OrderService.formatRupees(o.advancePaid!)} TOKEN VERIFIED'
+                                    : (o.awaitingAdvance ? 'WAITING FOR 10% TOKEN' : 'ORDER (sending…)'))),
                         style: const TextStyle(fontWeight: FontWeight.w700)),
                     subtitle: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -179,7 +181,12 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                         ),
                         const SizedBox(height: 6),
                         if (sent)
-                          _Steps(status: _st[o.number]?.status)
+                          _Steps(
+                              status: _st[o.number]?.status,
+                              adv: _st[o.number]?.adv ?? o.advancePaid,
+                              tokenRecv: _st[o.number]?.tokenRecv ?? false,
+                              tokenMiss: _st[o.number]?.tokenMiss ?? false,
+                              tokenDue: _st[o.number]?.tokenDue)
                         else if (o.awaitingAdvance)
                           Padding(
                             padding: const EdgeInsets.only(top: 4),
@@ -190,6 +197,9 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                               label: const Text('PAY 10% TOKEN TO PROCESS ORDER'),
                             ),
                           )
+                        else if (OrderService.isTrial(o.number) && o.advancePaid != null)
+                          Text('Screenshot checked and accepted${o.advanceUtr != null ? ' · UTR ${o.advanceUtr}' : ''}',
+                              style: const TextStyle(color: Color(0xFF2E7D32), fontWeight: FontWeight.w700))
                         else
                           Text(o.lastError ?? t('Waiting to send', 'भेजना बाकी')),
                         if (sent && (_st[o.number]?.bill ?? false))
@@ -281,28 +291,56 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
 /// Order steps; a big GREEN tick on each one that has happened (owner).
 class _Steps extends StatelessWidget {
   final String? status;
-  const _Steps({required this.status});
+  final int? adv; // new customer's verified token
+  final bool tokenRecv; // bank check (or the shop) confirmed the money
+  final bool tokenMiss; // not in the bank by the deadline
+  final int? tokenDue; // ms — 12:00 the day after payment
+  const _Steps({required this.status, this.adv, this.tokenRecv = false, this.tokenMiss = false, this.tokenDue});
 
   static const _keys = ['received', 'getting_ready', 'bill_sent', 'payment_received', 'dispatched', 'bilty'];
   static const _names = ['Sent to shop', 'Getting order ready', 'Bill sent for payment', 'Payment received', 'Dispatched', 'Bilty'];
 
   @override
   Widget build(BuildContext context) {
-    final done = status == null ? 0 : _keys.indexOf(status!);
+    final at = status == null ? 0 : _keys.indexOf(status!);
+    // Owner 13-Oct: a token order starts "Order processing started ✓ →
+    // Token screenshot received ✓ → Money received (checked in the bank by
+    // 12:00 next day)", then the usual steps. Steps appear ONE BY ONE:
+    // every done step + only the next one.
+    String due() {
+      if (tokenDue == null) return 'Money confirmation by 12:00 tomorrow';
+      final d = DateTime.fromMillisecondsSinceEpoch(tokenDue!);
+      const m = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      return 'Money confirmation by 12:00, ${d.day} ${m[d.month - 1]}';
+    }
+
+    final steps = <(String, bool)>[
+      if (adv != null) ...[
+        ('Order processing started', true),
+        ('Token ${OrderService.formatRupees(adv!)} screenshot received', true),
+        (tokenRecv ? 'Money received' : (tokenMiss ? '✗ Money not received — please contact us' : due()), tokenRecv),
+      ] else
+        (_names[0], true),
+      for (var i = 1; i < _keys.length; i++) (_names[i], i <= at),
+    ];
+    final lastDone = steps.lastIndexWhere((s) => s.$2);
+    final shown = steps.take((lastDone + 2).clamp(1, steps.length)).toList();
     return Wrap(
       spacing: 10,
       runSpacing: 6,
       children: [
-        for (var i = 0; i < _keys.length; i++)
+        for (final (name, done) in shown)
           Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(i <= done ? Icons.check_circle_rounded : Icons.radio_button_unchecked,
+            Icon(done ? Icons.check_circle_rounded : Icons.radio_button_unchecked,
                 size: 22,
-                color: i <= done ? const Color(0xFF1B8E3A) : Colors.black26),
+                color: done ? const Color(0xFF1B8E3A) : Colors.black26),
             const SizedBox(width: 4),
-            Text(_names[i],
+            Text(name,
                 style: TextStyle(
-                    fontWeight: i <= done ? FontWeight.w700 : FontWeight.w400,
-                    color: i <= done ? const Color(0xFF1B8E3A) : Colors.black45)),
+                    fontWeight: done || name.startsWith('✗') ? FontWeight.w700 : FontWeight.w400,
+                    color: done
+                        ? const Color(0xFF1B8E3A)
+                        : (name.startsWith('✗') ? const Color(0xFFC62828) : Colors.black45))),
           ]),
       ],
     );

@@ -386,6 +386,10 @@ exports.tgWebhook = onRequest(
         }
         const [tag, k, ref] = String(q.data || "").split("|");
         const step = STEPS.find((x) => x.k === k);
+        if (tag === "m" && ref) {
+          await moneyReceivedTap(db, q, ref);
+          return res.status(200).send("ok");
+        }
         // Tester 13-Oct: "s" = DO, "u" = UNDO. Buttons already in the group
         // carry "s" on the done step too — that tap is now "Already done" (no
         // write) and the buttons are redrawn, so the next tap is a real undo.
@@ -558,7 +562,8 @@ exports.registerOrder = onRequest(
         : [{ amt: Number(adv.paid), utr: adv.utr || null, paidAt: adv.paidAt || null }];
       const payments = parts.map((x) => ({ amt: Number(x.amt) || 0, txn: x.utr || "", paidAt: x.paidAt || null, at: Date.now(), kind: "advance" }));
       await docRef.set({ advanceAmt: adv.paid, advanceUtr: adv.utr || null, payments,
-        paidTotal: payments.reduce((t, x) => t + x.amt, 0) }, { merge: true });
+        paidTotal: payments.reduce((t, x) => t + x.amt, 0), tokenDue: tokenDeadline(adv.paidAt || adv.verifiedAt || Date.now()),
+        tokenMethod: adv.method || "upi" }, { merge: true });
       // Owner 12-Oct: the advance screenshot is the FIRST message of the
       // customer's chat (and goes to the new-party group with the ledger).
       try {
@@ -598,7 +603,9 @@ exports.orderStatus = onRequest(
     const out = {};
     for (const s of snaps) {
       if (s.exists) out[s.id] = { status: s.get("status") || null, lr: s.get("lr") || null,
-        bill: !!s.get("billFileId"), billNo: s.get("billNo") || null, billTotal: s.get("billTotal") || null };
+        bill: !!s.get("billFileId"), billNo: s.get("billNo") || null, billTotal: s.get("billTotal") || null,
+        adv: s.get("advanceAmt") || null, tokenRecv: !!s.get("tokenRecvAt"),
+        tokenMiss: !s.get("tokenRecvAt") && !!s.get("tokenMissAt"), tokenDue: s.get("tokenDue") || null };
     }
     return res.json({ ok: true, orders: out });
   },
@@ -683,16 +690,25 @@ const BILL_SCHEMA = { type: "object", properties: {
 async function geminiJson(bytes, mime, prompt, schema) {
   const { MODELS } = require("./orderVision");
   for (const model of MODELS) {
+    const t0 = Date.now();
     try {
+      // Owner 13-Oct trial: one hung call kept the customer's "CHECKING
+      // PAYMENT…" spinning until the 120-s cut-off — 35 s per model, then the next.
       const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
         method: "POST", headers: { "x-goog-api-key": GEMINI_API_KEY.value(), "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(35000),
         body: JSON.stringify({ contents: [{ role: "user", parts: [{ inlineData: { mimeType: mime, data: bytes.toString("base64") } }, { text: prompt }] }],
           generationConfig: { responseMimeType: "application/json", responseJsonSchema: schema, temperature: 0 } }),
       });
-      if (!r.ok) continue;
+      if (!r.ok) {
+        logger.warn("gemini", { model, status: r.status, ms: Date.now() - t0 });
+        continue;
+      }
       const j = await r.json();
       return JSON.parse(j.candidates[0].content.parts.map((p) => p.text || "").join(""));
-    } catch (e) { /* next model */ }
+    } catch (e) {
+      logger.warn("gemini", { model, error: e.message, ms: Date.now() - t0 });
+    }
   }
   return null;
 }
@@ -1658,7 +1674,8 @@ exports.advanceProof = onRequest(
       await docRef.set({ parts, utrs, hashes, utr: utrs[0] || null, path }, { merge: true });
       return fail(`Received ${inr(sum)} of the ${inr(a.due)} token. Please pay ${inr(a.due - sum)} more and send that screenshot too.`);
     }
-    await docRef.set({ state: "paid", parts, utrs, hashes, paid: sum, utr: utrs.join(", ") || null, payee: p.payee || null,
+    const method = who.includes("270320110001776") ? "bank" : "upi"; // BOI transfer = owner checks
+    await docRef.set({ state: "paid", method, parts, utrs, hashes, paid: sum, utr: utrs.join(", ") || null, payee: p.payee || null,
       paidAt: isNaN(paidAt) ? null : paidAt, path, verifiedAt: Date.now() }, { merge: true });
     return res.json({ ok: true, paid: sum, utr: utrs.join(", ") || null });
   },
@@ -1677,6 +1694,147 @@ exports.advanceReminder = onSchedule(
         text: `⏳ NEW CUSTOMER has not paid the 10% token yet\n${a.billName || "-"} · ${a.mobile || "-"}\nOrder approx ${inr(a.total)} · token ${inr(a.due)}\nPlease call them.` });
       await d.ref.set({ reminded: Date.now() }, { merge: true });
     }
+  },
+);
+
+/* ───────────── "💰 Money received" (owner, 13-Oct-2026) ─────────────
+ * NewPartyBot posts the new party's verified token screenshot in the "Akn zone
+ * - New party creation" group, then asks here for a button under it. When the
+ * money is really in the bank the owner taps it → the customer's app shows
+ * "Token received". Tap again (same person) = undo.
+ */
+// Owner 13-Oct: no button — the HDFC bank check (token_confirm.py) ticks it.
+const moneyKeyboard = () => ({ inline_keyboard: [] });
+
+function moneyText(d) {
+  const head = `💰 TOKEN ${inr(d.advanceAmt || 0)} — ${escH(d.billName || "Party")}${d.serial ? " · ORDER NO. " + d.serial : ""}`;
+  const log = (d.tokenLog || []).map((e) => e.a === "undo"
+    ? `↩️ Undone — by ${escH(e.by)} · ${hhmm(e.at)}`
+    : e.a === "miss" ? `❌ Money NOT received by 12:00 — ${escH(e.by)} · ${hhmm(e.at)}`
+      : `✔ Money received — by ${escH(e.by)} · ${hhmm(e.at)}`);
+  const due = d.tokenDue ? new Date(Number(d.tokenDue) + 5.5 * 3600e3).toISOString().slice(0, 10).split("-").reverse().join("-") : "tomorrow";
+  return `${head}\n🏦 Bank check: automatic, by 12:00 on ${due}.${log.length ? "\n\n" + log.join("\n") : ""}`;
+}
+
+async function moneyReceivedTap(db, q, ref) {
+  const docRef = db.collection("bbapp_orders").doc(String(ref).replace(/[^A-Z0-9-]/gi, "").slice(0, 40));
+  const name = [q.from && q.from.first_name, q.from && q.from.last_name].filter(Boolean).join(" ")
+    || (q.from && q.from.username) || "staff";
+  const uid = (q.from && q.from.id) || 0;
+  const verdict = await db.runTransaction(async (tx) => {
+    const d = (await tx.get(docRef)).data();
+    if (!d) return { ok: false, msg: "Order not found." };
+    if (d.tokenRecvAt) {
+      if (d.tokenRecvUid && d.tokenRecvUid !== uid) return { ok: false, msg: `Only ${d.tokenRecvBy} can undo this.` };
+      tx.set(docRef, { tokenRecvAt: admin.firestore.FieldValue.delete(), tokenRecvBy: admin.firestore.FieldValue.delete(),
+        tokenRecvUid: admin.firestore.FieldValue.delete(),
+        tokenLog: admin.firestore.FieldValue.arrayUnion({ a: "undo", by: name, at: Date.now() }) }, { merge: true });
+      return { ok: true, msg: "Undone." };
+    }
+    tx.set(docRef, { tokenRecvAt: admin.firestore.FieldValue.serverTimestamp(), tokenRecvBy: name, tokenRecvUid: uid,
+      tokenMissAt: admin.firestore.FieldValue.delete(),
+      tokenLog: admin.firestore.FieldValue.arrayUnion({ a: "do", by: name, at: Date.now() }) }, { merge: true });
+    return { ok: true, msg: `Money received — by ${name}` };
+  });
+  await tg("answerCallbackQuery", { callback_query_id: q.id, text: verdict.msg, show_alert: !verdict.ok });
+  if (verdict.ok && q.message) {
+    const fresh = (await docRef.get()).data() || {};
+    await tg("editMessageText", { chat_id: q.message.chat.id, message_id: q.message.message_id,
+      text: moneyText(fresh), parse_mode: "HTML", reply_markup: moneyKeyboard(docRef.id, fresh) });
+  }
+}
+
+/** Shop PC (NewPartyBot): post the "💰 Money received" button in its group. */
+exports.tokenButton = onRequest(
+  { region: "asia-south1", secrets: [PC_KEY, TG_TOKEN], timeoutSeconds: 30, memory: "256MiB", maxInstances: 2, invoker: "public" },
+  async (req, res) => {
+    if (req.method !== "POST" || !pcOk(req)) return res.status(403).json({ ok: false });
+    const ref = String((req.body && req.body.ref) || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
+    const chat = String((req.body && req.body.chat) || "").replace(/[^0-9-]/g, "");
+    if (!ref || !chat) return res.status(400).json({ ok: false });
+    const docRef = admin.firestore().collection("bbapp_orders").doc(ref);
+    const d = (await docRef.get()).data();
+    if (!d || !d.advanceAmt) return res.json({ ok: false, error: "no token on this order" });
+    const r = await tg("sendMessage", { chat_id: chat, text: moneyText(d), parse_mode: "HTML", reply_markup: moneyKeyboard(ref, d) });
+    if (!r.ok) return res.json({ ok: false, error: r.description || "telegram refused" });
+    const ledger = String((req.body && req.body.ledger) || "").slice(0, 120);
+    await docRef.set({ tokenMsg: { chat, msg: r.result.message_id }, ...(ledger ? { ledgerName: ledger } : {}) }, { merge: true });
+    return res.json({ ok: true });
+  },
+);
+
+/** 12:00 IST on the day after [ms] (IST) — the bank check deadline. */
+function tokenDeadline(ms) {
+  const ist = new Date(Number(ms) + 5.5 * 3600e3);
+  return Date.UTC(ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate() + 1, 12, 0, 0) - 5.5 * 3600e3;
+}
+
+/** Shop PC (token_confirm.py): token orders still waiting for the bank check. */
+exports.tokensPending = onRequest(
+  { region: "asia-south1", secrets: [PC_KEY], timeoutSeconds: 30, memory: "256MiB", maxInstances: 1, invoker: "public" },
+  async (req, res) => {
+    if (req.method !== "POST" || !pcOk(req)) return res.status(403).json({ ok: false });
+    const db = admin.firestore();
+    const snap = await db.collection("bbapp_orders").where("advanceAmt", ">", 0).get();
+    const out = [];
+    for (const x of snap.docs) {
+      const o = x.data();
+      if (o.tokenRecvAt && o.tallyDone) continue;
+      if (o.tokenRecvAt && Date.now() - (o.tokenRecvAt.toMillis ? o.tokenRecvAt.toMillis() : 0) > 30 * 86400e3) continue;
+      const a = (await db.collection("bbapp_advances").doc(x.id).get()).data() || {};
+      out.push({ ref: x.id, serial: o.serial || null, billName: o.billName || "", ledger: o.ledgerName || null,
+        amount: o.advanceAmt, utrs: a.utrs || (a.utr ? String(a.utr).split(/[ ,]+/) : []),
+        paidAt: a.paidAt || a.verifiedAt || null, method: a.method || o.tokenMethod || "upi",
+        due: o.tokenDue || tokenDeadline(a.paidAt || a.verifiedAt || Date.now()), missed: !!o.tokenMissAt,
+        recv: !!o.tokenRecvAt, tallyDone: o.tallyDone || null });
+    }
+    return res.json({ ok: true, tokens: out });
+  },
+);
+
+/** Shop PC (token_confirm.py): the bank check result for one token. */
+exports.tokenConfirm = onRequest(
+  { region: "asia-south1", secrets: [PC_KEY, TG_TOKEN, APNS_KEY], timeoutSeconds: 30, memory: "256MiB", maxInstances: 1, invoker: "public" },
+  async (req, res) => {
+    if (req.method !== "POST" || !pcOk(req)) return res.status(403).json({ ok: false });
+    const b = req.body || {};
+    const ref = String(b.ref || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
+    if (!ref) return res.status(400).json({ ok: false });
+    const db = admin.firestore();
+    const docRef = db.collection("bbapp_orders").doc(ref);
+    const d = (await docRef.get()).data();
+    if (!d || !d.advanceAmt) return res.json({ ok: false, error: "no token on this order" });
+    const by = String(b.by || "HDFC bank check").slice(0, 60);
+    if (b.tally) {
+      await docRef.set({ tallyDone: String(b.tally).slice(0, 200) }, { merge: true });
+      return res.json({ ok: true });
+    }
+    if (b.received && d.tokenRecvAt) {
+      if (b.note && d.tokenMsg && d.tokenMsg.chat) {
+        await tg("sendMessage", { chat_id: d.tokenMsg.chat, reply_to_message_id: d.tokenMsg.msg,
+          text: `ℹ️ ${d.billName || "Party"}${d.serial ? " · ORDER NO. " + d.serial : ""}: ${String(b.note).slice(0, 400)}` });
+      }
+      return res.json({ ok: true, already: true });
+    }
+    if (b.received) {
+      await docRef.set({ tokenRecvAt: admin.firestore.FieldValue.serverTimestamp(), tokenRecvBy: by, tokenRecvUid: 0,
+        tokenMissAt: admin.firestore.FieldValue.delete(),
+        tokenLog: admin.firestore.FieldValue.arrayUnion({ a: "do", by, at: Date.now() }) }, { merge: true });
+    } else {
+      if (d.tokenRecvAt || d.tokenMissAt) return res.json({ ok: true, already: true });
+      await docRef.set({ tokenMissAt: admin.firestore.FieldValue.serverTimestamp(),
+        tokenLog: admin.firestore.FieldValue.arrayUnion({ a: "miss", by, at: Date.now() }) }, { merge: true });
+    }
+    const fresh = (await docRef.get()).data() || {};
+    if (fresh.tokenMsg && fresh.tokenMsg.chat) {
+      await tg("editMessageText", { chat_id: fresh.tokenMsg.chat, message_id: fresh.tokenMsg.msg,
+        text: moneyText(fresh), parse_mode: "HTML", reply_markup: moneyKeyboard(ref, fresh) });
+      if (!b.received) {
+        await tg("sendMessage", { chat_id: fresh.tokenMsg.chat, reply_to_message_id: fresh.tokenMsg.msg,
+          text: `❌ ${fresh.billName || "Party"}${fresh.serial ? " · ORDER NO. " + fresh.serial : ""}: token ${inr(fresh.advanceAmt)} NOT found in the HDFC bank report by 12:00 — please check.${b.note ? "\n" + String(b.note).slice(0, 300) : ""}` });
+      }
+    }
+    return res.json({ ok: true });
   },
 );
 

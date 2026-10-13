@@ -139,7 +139,8 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
         content: Text(
           '${OrderService.formatRupees(paid)} token verified.\n'
           '${o?.serial != null ? 'ORDER NO. ${o!.serial}\n' : ''}'
-          'It will be deducted from your final bill. We will contact you shortly.',
+          'It will be deducted from your final bill.\n'
+          'Now we will process the order and send you the final bill within 2 to 3 working days.',
           textAlign: TextAlign.center,
         ),
         actions: [

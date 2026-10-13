@@ -73,8 +73,8 @@ class OrderService {
   static bool isTrial(String number) => number.startsWith(kTrialPrefix);
 
   static Future<void> seedTrialOnce(SharedPreferences p) async {
-    if (p.getBool('trial5_seeded_v1') == true) return;
-    await p.setBool('trial5_seeded_v1', true);
+    if (p.getBool('trial5_seeded_v2') == true) return;
+    await p.setBool('trial5_seeded_v2', true);
     final rnd = Random();
     const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     final tag = List.generate(5, (_) => abc[rnd.nextInt(abc.length)]).join();
@@ -278,7 +278,7 @@ class OrderService {
 
   /// Shop status per order (received → getting ready → packed → dispatched)
   /// and the LR / dispatch text the shop replied with.
-  static Future<Map<String, ({String? status, String? lr, bool bill})>> fetchStatuses(
+  static Future<Map<String, ({String? status, String? lr, bool bill, int? adv, bool tokenRecv, bool tokenMiss, int? tokenDue})>> fetchStatuses(
       Dio dio, List<String> refs, {Map<String, Map<String, dynamic>> info = const {}}) async {
     if (refs.isEmpty) return {};
     final res = await dio.post<dynamic>(
@@ -290,14 +290,18 @@ class OrderService {
           receiveTimeout: const Duration(seconds: 20)),
     );
     final d = res.data is String ? jsonDecode(res.data as String) : res.data;
-    final out = <String, ({String? status, String? lr, bool bill})>{};
+    final out = <String, ({String? status, String? lr, bool bill, int? adv, bool tokenRecv, bool tokenMiss, int? tokenDue})>{};
     if (d is Map && d['orders'] is Map) {
       (d['orders'] as Map).forEach((k, v) {
         if (v is Map) {
           out['$k'] = (
             status: v['status'] as String?,
             lr: v['lr'] as String?,
-            bill: v['bill'] == true
+            bill: v['bill'] == true,
+            adv: (v['adv'] as num?)?.toInt(),
+            tokenRecv: v['tokenRecv'] == true,
+            tokenMiss: v['tokenMiss'] == true,
+            tokenDue: (v['tokenDue'] as num?)?.toInt()
           );
         }
       });
@@ -714,11 +718,12 @@ class OrderService {
     final o = history(prefs).where((x) => x.number == number).firstOrNull;
     if (o == null || o.status == OrderStatus.sent) return o;
     if (isTrial(number)) {
+      // Stays in My Orders as "TRIAL — TOKEN VERIFIED"; never sent.
       o.awaitingAdvance = false;
       o.advancePaid = paid;
       o.advanceUtr = utr;
-      final rest = history(prefs).where((x) => x.number != number).toList();
-      await prefs.setString(_kOrdersKey, jsonEncode(rest.map((e) => e.toJson()).toList()));
+      o.lastError = null;
+      await _saveOrder(prefs, o);
       return o;
     }
     o.awaitingAdvance = false;
