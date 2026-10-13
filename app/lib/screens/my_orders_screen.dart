@@ -267,7 +267,8 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                               ),
                             ),
                           ])
-                        : o.awaitingAdvance
+                        // Owner 13-Oct: the trial is never sent — no "send now".
+                        : (o.awaitingAdvance || OrderService.isTrial(o.number))
                             ? null
                             : (_busy == o.number
                             ? const SizedBox(
