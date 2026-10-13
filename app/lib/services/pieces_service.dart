@@ -199,7 +199,7 @@ class PiecesNotifier extends StateNotifier<Map<String, int>> {
     try {
       final r = await _dio.get<dynamic>(
           'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net/countOverrides',
-          options: Options(headers: {'x-app-key': 'akn-zone-app-2026'}, responseType: ResponseType.plain));
+          options: Options(headers: {'x-app-key': 'akn-zone-app-v3'}, responseType: ResponseType.plain));
       final j = jsonDecode('${r.data}') as Map<String, dynamic>;
       final m = Map<String, dynamic>.from((j['counts'] ?? const {}) as Map);
       _fixed = {for (final e in m.entries) e.key: (e.value as num).toInt()};

@@ -24,7 +24,7 @@ class ChatMsg {
 
 class ChatService {
   static const _cloud = 'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net';
-  static const _hdr = {'x-app-key': 'akn-zone-app-2026'};
+  static const _hdr = {'x-app-key': 'akn-zone-app-v3'};
   static const _kSeen = 'chat_seen_v1';
 
   static Order? _latest(SharedPreferences p) => OrderService.history(p)

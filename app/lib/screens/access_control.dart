@@ -1,4 +1,6 @@
-import 'dart:io' show Platform;
+import 'package:package_info_plus/package_info_plus.dart';
+import 'dart:convert';
+import 'dart:io';
 
 import 'package:catalog_app/widgets/caps_text.dart';
 import 'package:flutter/material.dart';
@@ -47,6 +49,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   String _phone = '';
   bool _resolving = false;
   bool _checkedForceUpdate = false;
+  bool _checkedMinBuild = false;
 
   @override
   void initState() {
@@ -76,7 +79,34 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   /// spinner. Showing the spinner unmounts widget.child — which is the whole
   /// Router subtree — so a plain resume would otherwise tear the catalog down,
   /// lose the customer's place, and make them wait on two sheet downloads.
+  /// Owner 13-Oct: an app older than app-config.json's min_build must update
+  /// (works even with the customer sheet switched off). Offline = let in.
+  static Future<bool> _belowMinBuild() async {
+    try {
+      final c = HttpClient()..connectionTimeout = const Duration(seconds: 6);
+      final rq = await c.getUrl(Uri.parse('$kAppConfigUrl?t=${DateTime.now().millisecondsSinceEpoch ~/ 300000}'));
+      final rs = await rq.close().timeout(const Duration(seconds: 8));
+      final j = jsonDecode(await rs.transform(utf8.decoder).join()) as Map<String, dynamic>;
+      c.close();
+      // Owner's LIVE TEST (₹5 token, no minimum) — on/off from the website.
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool('live_test_v1', j['live_test'] == true);
+      final min = (j[Platform.isIOS ? 'min_build_ios' : 'min_build_android'] as num?)?.toInt() ?? 0;
+      final mine = int.tryParse((await PackageInfo.fromPlatform()).buildNumber) ?? 0;
+      return mine > 0 && mine < min;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> _resolve({bool silent = false}) async {
+    if (!_checkedMinBuild) {
+      _checkedMinBuild = true;
+      if (await _belowMinBuild()) {
+        if (mounted) setState(() => _state = _Gate.forceUpdate);
+        return;
+      }
+    }
     if (!kAccessControlEnabled || !AccessApi.isConfigured) {
       if (mounted) setState(() => _state = _Gate.allowed);
       return;

@@ -111,7 +111,10 @@ const String kWebsiteBase = 'https://bbsynthetics.in';
 
 /// Where ORDER NOW reads the Telegram bot token + group id (kept on the
 /// website, not in the app, so the bot can be replaced without an app update).
-const String kOrderConfigUrl = '$kWebsiteBase/app/order-config.json';
+// 3.0.0: own copy — the old file is switched off for old apps on release day.
+const String kOrderConfigUrl = '$kWebsiteBase/app/order-config-v3.json';
+/// Minimum build per platform (min_build_ios / min_build_android) → "Update now".
+const String kAppConfigUrl = '$kWebsiteBase/app/app-config.json';
 
 /// Minimum order value (owner, same rule as AKN Chat): price × pieces summed
 /// over the order. Below this the order cannot be sent — the customer is asked

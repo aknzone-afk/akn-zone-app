@@ -88,7 +88,7 @@ class MarksNotifier extends StateNotifier<Map<String, int>> {
         _url,
         data: {'image': base64Encode(bytes)},
         options: Options(
-          headers: {'x-app-key': 'akn-zone-app-2026'},
+          headers: {'x-app-key': 'akn-zone-app-v3'},
           contentType: Headers.jsonContentType,
           sendTimeout: const Duration(seconds: 60),
           receiveTimeout: const Duration(seconds: 120),

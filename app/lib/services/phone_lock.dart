@@ -43,7 +43,7 @@ class PhoneLock {
         'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net/phoneLock',
         data: {'device': id, 'mobile': mobile, if (peek) 'peek': true},
         options: Options(
-            headers: {'x-app-key': 'akn-zone-app-2026'},
+            headers: {'x-app-key': 'akn-zone-app-v3'},
             contentType: Headers.jsonContentType,
             receiveTimeout: const Duration(seconds: 15)),
       );

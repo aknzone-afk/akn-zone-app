@@ -111,8 +111,11 @@ class HomeScreen extends ConsumerWidget {
           // Tester 13-Oct: one guarded walk shared with the background
           // re-scan (no second concurrent Drive walk); the version checks
           // start at once and their price reads wait for the walk.
-          await ref.read(pullToRefreshProvider)();
-          await ref.read(catalogProvider.future);
+          // 13-Oct crash reports: `ref` dies if the screen rebuilds during
+          // the await — the app-wide container does not.
+          final c = ProviderScope.containerOf(context, listen: false);
+          await c.read(pullToRefreshProvider)();
+          await c.read(catalogProvider.future);
         },
         child: _buildBody(ref, catalogAsync),
       ),

@@ -115,7 +115,7 @@ class PushService {
             'platform': Platform.isIOS ? 'ios' : 'android'
           },
           options: Options(
-              headers: {'x-app-key': 'akn-zone-app-2026'},
+              headers: {'x-app-key': 'akn-zone-app-v3'},
               contentType: Headers.jsonContentType,
               receiveTimeout: const Duration(seconds: 15)));
       if (r.statusCode == 200) {

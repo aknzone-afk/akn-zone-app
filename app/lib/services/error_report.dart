@@ -19,6 +19,6 @@ void reportAppError(String error, StackTrace? stack) {
             'platform': Platform.operatingSystem,
             'os': Platform.operatingSystemVersion,
           },
-          options: Options(headers: {'x-app-key': 'akn-zone-app-2026'}))
+          options: Options(headers: {'x-app-key': 'akn-zone-app-v3'}))
       .catchError((_) => Response<dynamic>(requestOptions: RequestOptions()));
 }

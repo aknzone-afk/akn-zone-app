@@ -26,6 +26,12 @@ const GEMINI_API_KEY = defineSecret("BBAPP_GEMINI_KEY");
 // push goes straight to Apple (APNs), owner 11-Oct-2026.
 const APNS_KEY = defineSecret("BBAPP_APNS_KEY");
 const APP_KEY = "akn-zone-app-2026"; // not a secret — only keeps random traffic out
+// 3.0.0 (owner 13-Oct): the new app sends its own key. On store-release day
+// set OLD_KEY_OK = false → every older app stops (orders, chat, lookups) and
+// must update.
+const APP_KEY_V3 = "akn-zone-app-v3";
+const OLD_KEY_OK = true;
+const appOk = (req) => req.get("x-app-key") === APP_KEY_V3 || (OLD_KEY_OK && req.get("x-app-key") === APP_KEY);
 // Shop-PC programs (NewPartyBot, parties_sync, dispatch_sync, count_pieces)
 // prove themselves with this key (C:\BotSecrets\bbapp_pc_key.txt). The
 // app's key sits inside the APK, so it alone must not open party data.
@@ -77,7 +83,7 @@ exports.readMarks = onRequest(
   },
   async (req, res) => {
     if (req.method !== "POST") return res.status(405).json({ ok: false, error: "POST only" });
-    if (req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false, error: "forbidden" });
+    if (!appOk(req)) return res.status(403).json({ ok: false, error: "forbidden" });
     const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
     if (limited(ip)) return res.status(429).json({ ok: false, error: "too many" });
 
@@ -195,7 +201,7 @@ exports.lookupParty = onRequest(
   { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
     if (req.method !== "POST") return res.status(405).json({ ok: false });
-    if (req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    if (!appOk(req)) return res.status(403).json({ ok: false });
     const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
     if (limited("p:" + ip)) return res.status(429).json({ ok: false, error: "too many" });
     if (!PARTIES) PARTIES = require("./parties.json");
@@ -250,7 +256,7 @@ exports.nextOrderNo = onRequest(
   { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
     if (req.method !== "POST") return res.status(405).json({ ok: false });
-    if (req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    if (!appOk(req)) return res.status(403).json({ ok: false });
     const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
     if (limited("n:" + ip)) return res.status(429).json({ ok: false });
     const ref = String((req.body && req.body.ref) || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
@@ -532,7 +538,7 @@ exports.tgWebhook = onRequest(
 exports.registerOrder = onRequest(
   { region: "asia-south1", secrets: [TG_TOKEN], timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
-    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
     const ref = String((req.body && req.body.ref) || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
     const chat = String((req.body && req.body.chat) || "").replace(/[^0-9-]/g, "");
     const msg = Number(req.body && req.body.msg) || 0;
@@ -596,7 +602,7 @@ exports.registerOrder = onRequest(
 exports.orderStatus = onRequest(
   { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
-    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
     const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
     if (limited("s:" + ip)) return res.status(429).json({ ok: false });
     const refs = ((req.body && req.body.refs) || []).map((r) => String(r).replace(/[^A-Z0-9-]/gi, "").slice(0, 40)).filter(Boolean).slice(0, 60);
@@ -637,7 +643,7 @@ exports.orderStatus = onRequest(
 exports.phoneLock = onRequest(
   { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
-    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
     const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
     if (limited("l:" + ip)) return res.status(429).json({ ok: false });
     const device = String((req.body && req.body.device) || "").replace(/[^a-z0-9-]/gi, "").slice(0, 64);
@@ -917,7 +923,7 @@ async function checkPayment(db, ref, img) {
 exports.billImage = onRequest(
   { region: "asia-south1", secrets: [TG_TOKEN], timeoutSeconds: 30, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
-    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
     const ref = String((req.body && req.body.ref) || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
     const d = ref ? (await admin.firestore().collection("bbapp_orders").doc(ref).get()).data() : null;
     if (!d || !d.billFileId) return res.json({ ok: false, error: "no bill yet" });
@@ -932,7 +938,7 @@ exports.billImage = onRequest(
 exports.paymentProof = onRequest(
   { region: "asia-south1", secrets: [TG_TOKEN, GEMINI_API_KEY, APNS_KEY], timeoutSeconds: 60, memory: "512MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
-    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
     const ref = String((req.body && req.body.ref) || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
     const img = Buffer.from(String((req.body && req.body.image) || ""), "base64");
     if (!ref || !img.length || img.length > 6 * 1024 * 1024) return res.status(400).json({ ok: false });
@@ -1135,7 +1141,7 @@ exports.aknChatOut = onDocumentCreated(
 exports.chatSend = onRequest(
   { region: "asia-south1", secrets: [TG_TOKEN, GEMINI_API_KEY, APNS_KEY], timeoutSeconds: 60, memory: "512MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
-    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
     const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
     if (limited("c:" + ip)) return res.status(429).json({ ok: false });
     const ref = String((req.body && req.body.ref) || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
@@ -1178,7 +1184,7 @@ exports.chatSend = onRequest(
 exports.chatList = onRequest(
   { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
-    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
     const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
     // A phone polls its 1-3 numbers every 20 s — the limit only stops guessing.
     if (limited("cl:" + ip, 1500)) return res.status(429).json({ ok: false });
@@ -1222,7 +1228,7 @@ async function deviceOwns(db, device, cust) {
 exports.chatFile = onRequest(
   { region: "asia-south1", secrets: [TG_TOKEN], timeoutSeconds: 30, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
-    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
     const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
     if (limited("cf:" + ip, 600)) return res.status(429).json({ ok: false });
     const cust = custKey(req.body && req.body.mobile);
@@ -1296,7 +1302,7 @@ function nearest(q, list, n = 5) {
 exports.checkNewParty = onRequest(
   { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
-    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
     const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
     if (limited("n:" + ip)) return res.status(429).json({ ok: false });
     try {
@@ -1354,7 +1360,7 @@ exports.checkNewParty = onRequest(
 exports.registerPush = onRequest(
   { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
-    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
     const token = String((req.body && req.body.token) || "").slice(0, 400);
     const mobiles = ((req.body && req.body.mobiles) || []).map(custKey).filter(Boolean).slice(0, 3);
     if (token.length < 20 || !mobiles.length) return res.status(400).json({ ok: false });
@@ -1459,7 +1465,7 @@ function apnsSend(deviceToken, text, host = "api.push.apple.com") {
 exports.countOverrides = onRequest(
   { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
-    if (req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    if (!appOk(req)) return res.status(403).json({ ok: false });
     const snap = await admin.firestore().collection("bbapp_counts").get();
     const out = {};
     snap.docs.forEach((d) => { out[d.id] = d.get("n"); });
@@ -1471,7 +1477,7 @@ exports.countOverrides = onRequest(
 exports.appError = onRequest(
   { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
-    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
     const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
     if (limited("e:" + ip)) return res.status(429).json({ ok: false });
     const b = req.body || {};
@@ -1511,7 +1517,7 @@ function gstParse(t) {
 exports.gstLookup = onRequest(
   { region: "asia-south1", secrets: [GST_APPYFLOW, GST_CHECK], timeoutSeconds: 45, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
-    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
     const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
     if (limited("g:" + ip)) return res.status(429).json({ ok: false });
     const g = String((req.body && req.body.gstin) || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
@@ -1656,7 +1662,7 @@ function parseUpiText(t) {
 exports.advanceStart = onRequest(
   { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
-    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
     const b = req.body || {};
     const ref = String(b.ref || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
     let due = Math.round(Number(b.due) || 0);
@@ -1687,7 +1693,7 @@ exports.advanceStart = onRequest(
 exports.advanceProof = onRequest(
   { region: "asia-south1", secrets: [GEMINI_API_KEY], timeoutSeconds: 120, memory: "512MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
-    if (req.method !== "POST" || req.get("x-app-key") !== APP_KEY) return res.status(403).json({ ok: false });
+    if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
     const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
     if (limited("a:" + ip)) return res.status(429).json({ ok: false });
     const ref = String((req.body && req.body.ref) || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
@@ -1848,9 +1854,12 @@ exports.tokenButton = onRequest(
     const d = (await docRef.get()).data();
     if (!d || !d.advanceAmt) return res.json({ ok: false, error: "no token on this order" });
     const r = await tg("sendMessage", { chat_id: chat, text: moneyText(d), parse_mode: "HTML", reply_markup: moneyKeyboard(ref, d) });
-    if (!r.ok) return res.json({ ok: false, error: r.description || "telegram refused" });
+    // Owner 13-Oct: if the order bot is not in that group the status line is
+    // skipped — the ledger name and the receipts-group photo still go ahead.
+    if (!r.ok) logger.warn("tokenButton status line", { ref, chat, desc: r.description });
     const ledger = String((req.body && req.body.ledger) || "").slice(0, 120);
-    await docRef.set({ tokenMsg: { chat, msg: r.result.message_id }, ...(ledger ? { ledgerName: ledger } : {}) }, { merge: true });
+    await docRef.set({ ...(r.ok ? { tokenMsg: { chat, msg: r.result.message_id } } : {}),
+      ...(ledger ? { ledgerName: ledger } : {}) }, { merge: true });
     try {
       const rg = (await admin.firestore().collection("bbapp_settings").doc("receipts").get()).data();
       const adv = (await admin.firestore().collection("bbapp_advances").doc(ref).get()).data();

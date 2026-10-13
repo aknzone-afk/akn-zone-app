@@ -77,26 +77,15 @@ class OrderService {
   static bool liveTest(SharedPreferences p, String billName) =>
       (p.getBool('live_test_v1') ?? false) && billName.trim().toUpperCase().startsWith('TEST');
 
+  /// 3.0.0 store release (owner 13-Oct): the ₹5 trial and the LIVE TEST
+  /// switch are switched OFF on every phone and old trial orders removed.
   static Future<void> seedTrialOnce(SharedPreferences p) async {
-    if (p.getBool('live_test_seeded_v1') != true) {
-      await p.setBool('live_test_seeded_v1', true);
-      await p.setBool('live_test_v1', true);
-    }
-    if (p.getBool('trial5_seeded_v2') == true) return;
-    await p.setBool('trial5_seeded_v2', true);
-    final rnd = Random();
-    const abc = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    final tag = List.generate(5, (_) => abc[rnd.nextInt(abc.length)]).join();
-    final o = Order(
-      number: '${kTrialPrefix}5RS-$tag',
-      createdAt: DateTime.now(),
-      items: [
-        OrderItem(photoId: 'trial-5', designNumber: 'TRIAL ₹5', folder: 'Trial', price: 5, qty: 1),
-      ],
-      customer: CustomerDetails(billName: 'TRIAL ₹5 PAYMENT TEST'),
-      awaitingAdvance: true,
-    );
-    await _saveOrder(p, o);
+    if (p.getBool('release_clean_v1') == true) return;
+    await p.setBool('release_clean_v1', true);
+    await p.setBool('live_test_v1', false);
+    // trial orders + test orders never sent (held for a token) go.
+    final keep = history(p).where((o) => !isTrial(o.number) && !o.awaitingAdvance).toList();
+    await p.setString(_kOrdersKey, jsonEncode(keep.map((e) => e.toJson()).toList()));
   }
 
   static Future<void> wipeTestDataOnce(SharedPreferences p) async {
@@ -270,7 +259,7 @@ class OrderService {
       final res = await dio.post<dynamic>('$_cloud/checkNewParty',
           data: {'cust': c.toJson()},
           options: Options(
-              headers: {'x-app-key': 'akn-zone-app-2026'},
+              headers: {'x-app-key': 'akn-zone-app-v3'},
               contentType: Headers.jsonContentType,
               receiveTimeout: const Duration(seconds: 15)));
       final d = res.data is String ? jsonDecode(res.data as String) : res.data;
@@ -294,7 +283,7 @@ class OrderService {
       '$_cloud/orderStatus',
       data: {'refs': refs, 'info': info},
       options: Options(
-          headers: {'x-app-key': 'akn-zone-app-2026'},
+          headers: {'x-app-key': 'akn-zone-app-v3'},
           contentType: Headers.jsonContentType,
           receiveTimeout: const Duration(seconds: 20)),
     );
@@ -325,7 +314,7 @@ class OrderService {
     final res = await dio.post<dynamic>('$_cloud/billImage',
         data: {'ref': ref},
         options: Options(
-            headers: {'x-app-key': 'akn-zone-app-2026'},
+            headers: {'x-app-key': 'akn-zone-app-v3'},
             contentType: Headers.jsonContentType,
             receiveTimeout: const Duration(seconds: 40)));
     final d = res.data is String ? jsonDecode(res.data as String) : res.data;
@@ -342,7 +331,7 @@ class OrderService {
     final res = await dio.post<dynamic>('$_cloud/paymentProof',
         data: {'ref': ref, 'image': base64Encode(jpg)},
         options: Options(
-            headers: {'x-app-key': 'akn-zone-app-2026'},
+            headers: {'x-app-key': 'akn-zone-app-v3'},
             contentType: Headers.jsonContentType,
             sendTimeout: const Duration(seconds: 60),
             receiveTimeout: const Duration(seconds: 60)));
@@ -382,7 +371,7 @@ class OrderService {
       final res = await dio.post<dynamic>('$_cloud/gstLookup',
           data: {'gstin': gstin},
           options: Options(
-              headers: {'x-app-key': 'akn-zone-app-2026'},
+              headers: {'x-app-key': 'akn-zone-app-v3'},
               contentType: Headers.jsonContentType,
               receiveTimeout: const Duration(seconds: 40)));
       final d = res.data is String ? jsonDecode(res.data as String) : res.data;
@@ -398,7 +387,7 @@ class OrderService {
       _lookupUrl,
       data: {'tax': tax},
       options: Options(
-        headers: {'x-app-key': 'akn-zone-app-2026'},
+        headers: {'x-app-key': 'akn-zone-app-v3'},
         contentType: Headers.jsonContentType,
         receiveTimeout: const Duration(seconds: 20),
       ),
@@ -415,7 +404,7 @@ class OrderService {
       _lookupUrl,
       data: {'mobile': mobile},
       options: Options(
-        headers: {'x-app-key': 'akn-zone-app-2026'},
+        headers: {'x-app-key': 'akn-zone-app-v3'},
         contentType: Headers.jsonContentType,
         receiveTimeout: const Duration(seconds: 20),
       ),
@@ -833,7 +822,7 @@ class OrderService {
           'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net/nextOrderNo',
           data: {'ref': order.number},
           options: Options(
-            headers: {'x-app-key': 'akn-zone-app-2026'},
+            headers: {'x-app-key': 'akn-zone-app-v3'},
             contentType: Headers.jsonContentType,
             receiveTimeout: const Duration(seconds: 20),
           ),
@@ -1042,7 +1031,7 @@ class OrderService {
           'addOnTo': order.addOnTo,
         },
         options: Options(
-            headers: {'x-app-key': 'akn-zone-app-2026'},
+            headers: {'x-app-key': 'akn-zone-app-v3'},
             contentType: Headers.jsonContentType,
             receiveTimeout: const Duration(seconds: 20)),
       );

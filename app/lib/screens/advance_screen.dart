@@ -39,7 +39,7 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
   static const _qr =
       'https://firebasestorage.googleapis.com/v0/b/akn-chat-a7dd8.firebasestorage.app/o/public%2Fupi-qr.jpg?alt=media&token=b37ef652-5ac6-4242-b241-2f4d90b3b468';
   static const _cloud = 'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net';
-  static const _hdr = {'x-app-key': 'akn-zone-app-2026'};
+  static const _hdr = {'x-app-key': 'akn-zone-app-v3'};
 
   bool _busy = false;
   String? _error;

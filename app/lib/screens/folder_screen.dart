@@ -316,8 +316,11 @@ class _FolderScaffold extends ConsumerWidget {
         strokeWidth: 0,
         onRefresh: () async {
           // Tester 13-Oct: shared, guarded walk — see pullToRefreshProvider.
-          await ref.read(pullToRefreshProvider)();
-          await ref.read(catalogProvider.future);
+          // 13-Oct crash reports: `ref` dies if the screen rebuilds during
+          // the await — the app-wide container does not.
+          final c = ProviderScope.containerOf(context, listen: false);
+          await c.read(pullToRefreshProvider)();
+          await c.read(catalogProvider.future);
         },
         child: body,
       ),
