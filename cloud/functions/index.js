@@ -1626,7 +1626,9 @@ exports.advanceProof = onRequest(
     if (p.success === false) return fail("This payment does not show as successful. Please send the screenshot of a successful payment.");
     // Only OUR name / UPI id / account — "XYZ SYNTHETICS" must not pass.
     const who = `${p.payee || ""} ${p.payeeAccount || ""}`.toUpperCase().replace(/[^A-Z0-9]/g, "");
-    const ours = who.includes("BBSYNTHETIC") || who.includes("173947529358") || who.includes("270320110001776");
+    const ours = who.includes("BBSYNTHETIC") || who.includes("173947529358") || who.includes("270320110001776")
+      // Owner 13-Oct: the PAY-by-link UPI id 88665369922@kotak (apps may mask its middle digits)
+      || who.includes("88665369922") || (who.includes("KOTAK") && /8866\d*22/.test(who.replace(/[^0-9]/g, "")));
     if (!ours) return fail(`This payment went to "${p.payee || p.payeeAccount || "someone else"}". The token must be paid to B.B SYNTHETICS only.`);
     const tm = /^\d{1,2}:\d{2}$/.test(String(p.time || "")) ? String(p.time).padStart(5, "0") : null;
     const dt = /^\d{4}-\d{2}-\d{2}$/.test(String(p.date || "")) ? p.date

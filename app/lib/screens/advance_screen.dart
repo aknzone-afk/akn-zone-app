@@ -28,7 +28,10 @@ class AdvanceScreen extends ConsumerStatefulWidget {
 }
 
 class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
-  static const _upi = 'vyapar.173947529358@hdfcbank';
+  static const _upi = 'vyapar.173947529358@hdfcbank'; // QR + shown UPI id
+  // Owner 13-Oct: the HDFC Vyapar merchant id refuses link payments ("not
+  // accepting payments on this UPI ID") — the PAY button pays this one.
+  static const _upiLink = '88665369922@kotak';
   static const _qr =
       'https://firebasestorage.googleapis.com/v0/b/akn-chat-a7dd8.firebasestorage.app/o/public%2Fupi-qr.jpg?alt=media&token=b37ef652-5ac6-4242-b241-2f4d90b3b468';
   static const _cloud = 'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net';
@@ -87,13 +90,9 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
     (name: 'BHIM', scheme: 'bhim://upi/pay', color: Color(0xFFF47C20)),
   ];
 
-  // From the shop's own BharatQR (tags 52 + 27/62.05): the merchant category
-  // and terminal reference HDFC needs, else the payment is refused.
-  static const _mcc = '5651';
-  static const _tr = 'STQD19855341781331177222';
 
-  String _query(int due) => 'pa=$_upi&pn=${Uri.encodeComponent('B B SYNTHETICS')}'
-      '&mc=$_mcc&tr=$_tr&am=$due&cu=INR&tn=${Uri.encodeComponent('Token ${widget.number}')}';
+  String _query(int due) => 'pa=$_upiLink&pn=${Uri.encodeComponent('B B SYNTHETICS')}'
+      '&am=$due&cu=INR&tn=${Uri.encodeComponent('Token ${widget.number}')}';
 
   /// The QR as a picture: Save it (or share it to the UPI app), then in the
   /// UPI app "Scan QR" → gallery. Works even when a link is refused.
