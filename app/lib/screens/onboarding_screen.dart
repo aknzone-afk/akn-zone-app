@@ -916,14 +916,12 @@ class _SignupFormState extends State<_SignupForm> {
   final _aadhaar = TextEditingController();
   late String _country = widget.country;
 
-  bool _noGst = false;
-  bool _noPan = false;
   _KycPhoto? _panPhoto;
   _KycPhoto? _aadhaarPhoto;
   _KycPhoto? _cardPhoto; // shop / visiting card (existing business, no GST)
 
   /// Owner 14-Oct: an existing saree business without GST shows its card.
-  bool get _needCard => _india && _noGst && _businessType == 'existing_business';
+  bool get _needCard => _india && !_hasGst && _businessType == 'existing_business';
   bool _reading = false;
   String? _photoErr;
 
@@ -956,6 +954,8 @@ class _SignupFormState extends State<_SignupForm> {
     super.initState();
     if (_country == 'India' && !_india) _country = 'Other';
     _gst.addListener(_onGstTyped);
+    _pan.addListener(_refresh);
+    _aadhaar.addListener(_refresh);
     _pin.addListener(_onPinChanged);
     _place.addListener(() => setState(() {}));
     _transport.addListener(() => setState(() {}));
@@ -974,12 +974,18 @@ class _SignupFormState extends State<_SignupForm> {
   void dispose() {
     _pinDebounce?.cancel();
     _gst.removeListener(_onGstTyped);
+    _pan.removeListener(_refresh);
+    _aadhaar.removeListener(_refresh);
     _pin.removeListener(_onPinChanged);
     for (final c in [_contact, _bill, _address, _pin, _place, _transport, _gst, _pan, _aadhaar]) {
       c.dispose();
     }
     _transportFocus.dispose();
     super.dispose();
+  }
+
+  void _refresh() {
+    if (mounted) setState(() {});
   }
 
   String _norm(String s) => s.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
@@ -990,6 +996,9 @@ class _SignupFormState extends State<_SignupForm> {
       // ignore: discarded_futures
       _gstLookup(g);
     } else if (_gstNote != null || _gstLooked != null) {
+      final was = _gstLooked;
+      // GST removed -> drop the PAN it had filled in.
+      if (was != null && was.length >= 12 && _norm(_pan.text) == was.substring(2, 12)) _pan.clear();
       setState(() {
         _gstNote = null;
         _gstLooked = null;
@@ -1024,6 +1033,7 @@ class _SignupFormState extends State<_SignupForm> {
     setState(() {
       _gstChecking = false;
       if (name.isNotEmpty) _bill.text = name;
+      _pan.text = g.substring(2, 12); // PAN is inside the GST number
       if ('${r['address'] ?? ''}'.isNotEmpty) _address.text = '${r['address']}';
       if ('${r['pin'] ?? ''}'.isNotEmpty) _pin.text = '${r['pin']}';
       if ('${r['city'] ?? ''}'.isNotEmpty && _place.text.trim().isEmpty) {
@@ -1135,56 +1145,79 @@ class _SignupFormState extends State<_SignupForm> {
     }
   }
 
-  Widget _photoBox(bool aadhaar) {
+  /// A valid GST number is filled in (it may still be checking).
+  bool get _hasGst => _gstRe.hasMatch(_norm(_gst.text));
+
+  /// Which ID this sign-up uses: GST, else PAN, else Aadhaar.
+  String get _idUsed {
+    if (_hasGst) return 'gst';
+    if (_norm(_pan.text).isNotEmpty) return 'pan';
+    if (_aadhaar.text.trim().isNotEmpty) return 'aadhaar';
+    return '';
+  }
+
+  /// The box plus a photo button beside it (photo needed for PAN / Aadhaar
+  /// when that card is the ID used).
+  Widget _idRow(Widget field, {required bool aadhaar}) {
     final ph = aadhaar ? _aadhaarPhoto : _panPhoto;
-    final what = aadhaar ? 'Aadhaar card' : 'PAN card';
-    return Padding(
-      padding: const EdgeInsets.only(top: 10),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        if (ph != null)
-          ClipRRect(
-            borderRadius: BorderRadius.circular(10),
-            child: Container(
-              color: kLinen,
-              height: 150,
-              child: Image.memory(ph.jpg, fit: BoxFit.contain),
+    final need = _idUsed == (aadhaar ? 'aadhaar' : 'pan');
+    if (_hasGst) return field; // GST needs no photo
+    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      Expanded(child: field),
+      const SizedBox(width: 10),
+      SizedBox(
+        width: 64,
+        height: 58,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(10),
+          onTap: _reading ? null : () => _pickPhoto(aadhaar),
+          child: Container(
+            decoration: BoxDecoration(
+              color: ph != null ? null : (need ? const Color(0xFFFFF3E0) : kLinen),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: ph != null ? _green : (need ? _red : kHairline), width: need || ph != null ? 2 : 1),
             ),
+            clipBehavior: Clip.antiAlias,
+            child: ph != null
+                ? Image.memory(ph.jpg, fit: BoxFit.cover)
+                : Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                    _reading
+                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                        : Icon(Icons.add_a_photo_rounded, size: 22, color: need ? _red : Colors.black54),
+                    Text(need ? 'Photo *' : 'Photo',
+                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: need ? _red : Colors.black54)),
+                  ]),
           ),
-        const SizedBox(height: 8),
-        OutlinedButton.icon(
-          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(50)),
-          onPressed: _reading ? null : () => _pickPhoto(aadhaar),
-          icon: _reading
-              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-              : Icon(ph == null ? Icons.add_a_photo_rounded : Icons.cameraswitch_rounded),
-          label: Text(ph == null ? 'Add photo of your $what *' : 'Change photo',
-              textAlign: TextAlign.center),
         ),
-      ]),
-    );
+      ),
+    ]);
   }
 
   // ───────────────────────── submit ─────────────────────────
 
   String? _idError() {
     if (!_india) return null;
-    if (!_noGst) {
-      final g = _norm(_gst.text);
-      if (!_gstRe.hasMatch(g)) return 'Enter a valid 15-character GST number, or tick "I don\'t have GST".';
-      if (_gstChecking) return 'Please wait — checking your GST number…';
-      if (!_gstOk) return 'This GST number could not be verified — correct it, or use PAN instead.';
-      return null;
+    final g = _norm(_gst.text);
+    if (g.isNotEmpty && !_gstRe.hasMatch(g)) {
+      return 'GST number should be 15 characters — correct it, or clear it and use PAN / Aadhaar.';
     }
-    if (!_noPan) {
-      if (!_panRe.hasMatch(_norm(_pan.text))) return 'Enter a valid 10-character PAN number.';
-      if (_panPhoto == null) return 'Please add a photo of your PAN card.';
-      return null;
+    switch (_idUsed) {
+      case 'gst':
+        if (_gstChecking) return 'Please wait — checking your GST number…';
+        if (!_gstOk) return 'This GST number could not be verified — correct it, or clear it and use PAN / Aadhaar.';
+        return null;
+      case 'pan':
+        if (!_panRe.hasMatch(_norm(_pan.text))) return 'Enter a valid 10-character PAN number.';
+        if (_panPhoto == null) return 'Please add a photo of your PAN card (photo button beside PAN).';
+        return null;
+      case 'aadhaar':
+        if (!_aadhaarRe.hasMatch(_aadhaar.text.replaceAll(RegExp(r'\D'), ''))) {
+          return 'Enter your 12-digit Aadhaar number.';
+        }
+        if (_aadhaarPhoto == null) return 'Please add a photo of your Aadhaar card (photo button beside Aadhaar).';
+        return null;
     }
-    if (!_aadhaarRe.hasMatch(_aadhaar.text.replaceAll(RegExp(r'\D'), ''))) {
-      return 'Enter your 12-digit Aadhaar number.';
-    }
-    if (_aadhaarPhoto == null) return 'Please add a photo of your Aadhaar card.';
-    return null;
+    return 'Please fill any one: GST, PAN or Aadhaar number.';
   }
 
   Widget _cardBox() {
@@ -1237,10 +1270,11 @@ class _SignupFormState extends State<_SignupForm> {
     String kycDoc = '', taxId = '';
     _KycPhoto? photo;
     if (_india) {
-      if (!_noGst) {
+      final used = _idUsed;
+      if (used == 'gst') {
         kycDoc = 'gst';
         taxId = _norm(_gst.text);
-      } else if (!_noPan) {
+      } else if (used == 'pan') {
         kycDoc = 'pan';
         taxId = _norm(_pan.text);
         photo = _panPhoto;
@@ -1357,18 +1391,20 @@ class _SignupFormState extends State<_SignupForm> {
               ),
               const SizedBox(height: 12),
               if (_india) ...[
-                // GST first — a verified GST fills the rest (owner 14-Oct).
-                const Text('Your ID',
+                // Owner 14-Oct: three boxes — GST, PAN, Aadhaar. One is enough.
+                const Text('Your ID — fill any one *',
                     style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: _dark)),
-                const SizedBox(height: 8),
-                if (!_noGst)
-                  TextField(
-                    controller: _gst,
-                    textCapitalization: TextCapitalization.characters,
-                    inputFormatters: [LengthLimitingTextInputFormatter(20)],
-                    decoration: _dec('GST number *', hint: '15 characters, e.g. 24ABCDE1234F1Z5'),
-                  ),
-                if (!_noGst && _gstNote != null)
+                const SizedBox(height: 4),
+                const Text('GST fills your details by itself. PAN or Aadhaar needs a photo of the card.',
+                    style: TextStyle(fontSize: 12.5, color: Colors.black54)),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _gst,
+                  textCapitalization: TextCapitalization.characters,
+                  inputFormatters: [LengthLimitingTextInputFormatter(20)],
+                  decoration: _dec('GST number', hint: '15 characters, e.g. 24ABCDE1234F1Z5'),
+                ),
+                if (_gstNote != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 6, left: 4),
                     child: Text(_gstNote!,
@@ -1376,60 +1412,35 @@ class _SignupFormState extends State<_SignupForm> {
                             fontWeight: FontWeight.w700,
                             color: _gstChecking ? Colors.black54 : (_gstOk ? _green : _red))),
                   ),
-                CheckboxListTile(
-                  contentPadding: EdgeInsets.zero,
-                  controlAffinity: ListTileControlAffinity.leading,
-                  value: _noGst,
-                  onChanged: (v) => setState(() {
-                    _noGst = v ?? false;
-                    _photoErr = null;
-                  }),
-                  title: const Text("I don't have a GST number"),
-                ),
-                if (_noGst) ...[
-                  if (!_noPan) ...[
-                    TextField(
-                      controller: _pan,
-                      textCapitalization: TextCapitalization.characters,
-                      inputFormatters: [LengthLimitingTextInputFormatter(12)],
-                      decoration: _dec('PAN number *', hint: '10 characters, e.g. ABCDE1234F'),
-                    ),
-                    _photoBox(false),
-                    const Padding(
-                      padding: EdgeInsets.only(top: 6),
-                      child: Text('Your PAN photo is used only to verify you.',
-                          style: TextStyle(fontSize: 12.5, color: Colors.black54)),
-                    ),
-                  ],
-                  CheckboxListTile(
-                    contentPadding: EdgeInsets.zero,
-                    controlAffinity: ListTileControlAffinity.leading,
-                    value: _noPan,
-                    onChanged: (v) => setState(() {
-                      _noPan = v ?? false;
-                      _photoErr = null;
-                    }),
-                    title: const Text("I don't have a PAN card"),
+                const SizedBox(height: 12),
+                _idRow(
+                  TextField(
+                    controller: _pan,
+                    textCapitalization: TextCapitalization.characters,
+                    inputFormatters: [LengthLimitingTextInputFormatter(12)],
+                    decoration: _dec(_hasGst ? 'PAN number (from GST)' : 'PAN number',
+                        hint: '10 characters, e.g. ABCDE1234F'),
                   ),
-                  if (_noPan) ...[
-                    TextField(
-                      controller: _aadhaar,
-                      keyboardType: TextInputType.number,
-                      inputFormatters: [
-                        FilteringTextInputFormatter.digitsOnly,
-                        LengthLimitingTextInputFormatter(12),
-                      ],
-                      decoration: _dec('Aadhaar number (12 digits) *'),
-                    ),
-                    _photoBox(true),
-                    const Padding(
-                      padding: EdgeInsets.only(top: 6),
-                      child: Text(
-                          'Your Aadhaar photo is used only to verify you and is deleted after approval.',
-                          style: TextStyle(fontSize: 12.5, color: Colors.black54)),
-                    ),
-                  ],
-                ],
+                  aadhaar: false,
+                ),
+                const SizedBox(height: 12),
+                _idRow(
+                  TextField(
+                    controller: _aadhaar,
+                    keyboardType: TextInputType.number,
+                    inputFormatters: [
+                      FilteringTextInputFormatter.digitsOnly,
+                      LengthLimitingTextInputFormatter(12),
+                    ],
+                    decoration: _dec('Aadhaar number (12 digits)'),
+                  ),
+                  aadhaar: true,
+                ),
+                const Padding(
+                  padding: EdgeInsets.only(top: 6),
+                  child: Text('ID photos are used only to verify you and are deleted after approval.',
+                      style: TextStyle(fontSize: 12.5, color: Colors.black54)),
+                ),
                 if (_photoErr != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 8),

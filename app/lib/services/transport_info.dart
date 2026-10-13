@@ -8,7 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// each transport's GST number, and which transports the shop's parties use
 /// for each place ("JALGAON → VRL, …").
 class TransportInfo {
-  static const _url = 'https://bbsynthetics.in/app/transport-info.json';
+  static const _url = 'https://aknzone-afk.github.io/akn-zone-data/app/transport-info.json';
   static const _kCache = 'transport_info_v1';
 
   final Map<String, String> gst;

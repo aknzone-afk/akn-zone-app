@@ -235,7 +235,7 @@ class PiecesNotifier extends StateNotifier<Map<String, int>> {
     }
     try {
       final res = await _dio.get<dynamic>(
-        '$kWebsiteBase/app/pieces.json?t=${DateTime.now().millisecondsSinceEpoch ~/ 600000}',
+        '$kDataBase/app/pieces.json?t=${DateTime.now().millisecondsSinceEpoch ~/ 600000}',
         options: Options(responseType: ResponseType.plain),
       );
       final j = jsonDecode('${res.data}') as Map<String, dynamic>;

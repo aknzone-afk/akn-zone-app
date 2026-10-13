@@ -23,7 +23,7 @@ final similarProvider = FutureProvider<Map<String, List<String>>>((ref) async {
 
   try {
     final res = await ref.watch(dioProvider).get<dynamic>(
-        '$kWebsiteBase/app/similar.json?t=${DateTime.now().millisecondsSinceEpoch ~/ 3600000}');
+        '$kDataBase/app/similar.json?t=${DateTime.now().millisecondsSinceEpoch ~/ 3600000}');
     final s = res.data is String ? res.data as String : jsonEncode(res.data);
     await prefs.setString(k, s);
     return parse(s);

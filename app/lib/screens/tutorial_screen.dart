@@ -48,7 +48,7 @@ class Tutorial {
   static Future<void> refresh(SharedPreferences p, Dio dio) async {
     try {
       final res = await dio.get<dynamic>(
-        '$kWebsiteBase/app/app-config.json?t=${DateTime.now().millisecondsSinceEpoch ~/ 600000}',
+        '$kDataBase/app/app-config.json?t=${DateTime.now().millisecondsSinceEpoch ~/ 600000}',
         options: Options(responseType: ResponseType.plain),
       );
       final j = jsonDecode('${res.data}') as Map<String, dynamic>;
