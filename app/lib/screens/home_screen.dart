@@ -9,13 +9,11 @@ import '../config.dart';
 import '../models/folder.dart';
 import '../providers/providers.dart';
 import 'tutorial_screen.dart';
-import '../services/geofence_service.dart';
 import '../widgets/bar_button.dart';
 import '../widgets/filter_sheet.dart';
 import '../widgets/loading_collage.dart';
 import '../widgets/photo_stack.dart';
 import 'access_control.dart';
-import 'geofence_lock_screen.dart';
 import 'share_bar.dart';
 
 class HomeScreen extends ConsumerWidget {
@@ -27,17 +25,6 @@ class HomeScreen extends ConsumerWidget {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       Future<void>.delayed(const Duration(seconds: 3), () => warmAllFolderCovers(ref));
     });
-    // Geofence gate: block customers within 100 km of Surat (IP-based).
-    // While the check is in-flight on first launch, show the loading collage
-    // so the user never sees a blank screen.
-    final gateAsync = ref.watch(geofenceAllowedProvider);
-    if (gateAsync.isLoading) {
-      return const Scaffold(body: LoadingCollage());
-    }
-    if (gateAsync.value == false) {
-      return const GeofenceLockScreen();
-    }
-
     final catalogAsync = ref.watch(catalogProvider);
     final filter = ref.watch(filterProvider);
 
@@ -315,190 +302,6 @@ Widget _cartIconWithBadge(BuildContext context, int count) {
   );
 }
 
-/// Hidden long-press-on-logo helper that surfaces what ipapi.co decided. Lets
-/// the shop owner verify why a Surat customer wasn't gated (often the ISP
-/// routes traffic through a different city, so the IP geolocates far away).
-void _showGeoDebug(BuildContext context, WidgetRef ref) {
-  final prefs = ref.read(sharedPreferencesProvider);
-  final snap = GeofenceService.lastSnapshot(prefs);
-  showDialog<void>(
-    context: context,
-    builder: (_) => AlertDialog(
-      title: const UText('Region check'),
-      content: snap == null
-          ? const UText('No geofence check has run yet.')
-          : SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  _kv('Decision', snap.allowed ? 'ALLOWED' : 'BLOCKED'),
-                  _kv('Source', snap.source),
-                  _kv('IP', snap.ip),
-                  _kv(
-                      'City',
-                      [snap.city, snap.region, snap.country]
-                          .where((s) => s.isNotEmpty)
-                          .join(', ')),
-                  _kv('Lat / Lng',
-                      '${snap.lat.toStringAsFixed(3)}, ${snap.lng.toStringAsFixed(3)}'),
-                  _kv('Distance from Surat',
-                      '${snap.distanceKm.toStringAsFixed(0)} km'),
-                  _kv(
-                      'Checked at',
-                      snap.checkedAt.millisecondsSinceEpoch == 0
-                          ? '—'
-                          : snap.checkedAt.toLocal().toString()),
-                  if (snap.lastError.isNotEmpty)
-                    _kv('Last errors', snap.lastError),
-                ],
-              ),
-            ),
-      actions: [
-        TextButton(
-          onPressed: () async {
-            // Force a fresh check next launch — also clears the permanent
-            // (lifetime) bypass so the geofence runs a real IP-geo check again.
-            await prefs.remove('geo_check_ts');
-            await prefs.remove('geo_check_allowed');
-            await prefs.remove('geo_bypass_day');
-            await prefs.remove('geo_lifetime_bypass');
-            if (context.mounted) {
-              Navigator.pop(context);
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                    content: UText(
-                        'Unlock cleared. Re-open the app to run a real region check.')),
-              );
-            }
-          },
-          child: const UText('Reset & recheck'),
-        ),
-        TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const UText('Close')),
-      ],
-    ),
-  );
-}
-
-Widget _kv(String k, String v) => Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: Text.rich(
-        TextSpan(
-          children: [
-            TextSpan(
-              text: '$k:  ',
-              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12),
-            ),
-            TextSpan(
-              text: v.isEmpty ? '—' : v,
-              style: const TextStyle(fontSize: 12),
-            ),
-          ],
-        ),
-      ),
-    );
-
-/// Shop contact + address card surfaced when the customer taps the brand
-/// title on the home AppBar. Phone number and map link are tap-through.
-void _showShopInfo(BuildContext context) {
-  const address =
-      '4001-22, 3rd Floor,\nSai Krupa Market,\nRing Road, Surat — 395002';
-  const mapsUrl = 'https://maps.app.goo.gl/ZDC7mJpa3jKkJxaU8';
-  const phone = '7016638059';
-
-  // Tester 13-Oct: launch directly (like advance_screen) instead of gating on
-  // canLaunchUrl, which is false on Android 11+ when the browser/dialer isn't
-  // declared in <queries> — the tap silently did nothing.
-  Future<void> openUrl(String url) async {
-    try {
-      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-    } catch (_) {/* no app can open it — nothing to do */}
-  }
-
-  showDialog<void>(
-    context: context,
-    builder: (_) {
-      final scheme = Theme.of(context).colorScheme;
-      return AlertDialog(
-        title: const UText('AKN Zone',
-            style: TextStyle(fontWeight: FontWeight.w800)),
-        contentPadding: const EdgeInsets.fromLTRB(24, 14, 24, 8),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Icon(Icons.place_rounded, color: scheme.primary, size: 22),
-                const SizedBox(width: 10),
-                const Expanded(
-                  child: UText(
-                    address,
-                    style: TextStyle(fontSize: 14, height: 1.4),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            InkWell(
-              onTap: () => openUrl(mapsUrl),
-              child: Row(
-                children: [
-                  Icon(Icons.map_rounded, color: scheme.primary, size: 22),
-                  const SizedBox(width: 10),
-                  UText(
-                    'Open in Google Maps',
-                    style: TextStyle(
-                      fontSize: 14,
-                      fontWeight: FontWeight.w600,
-                      color: scheme.primary,
-                      decoration: TextDecoration.underline,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(height: 14),
-            InkWell(
-              onTap: () => openUrl('tel:$phone'),
-              child: Row(
-                children: [
-                  Icon(Icons.call_rounded, color: scheme.primary, size: 22),
-                  const SizedBox(width: 10),
-                  UText(
-                    phone,
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                      color: scheme.primary,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          // Account controls only exist once the OTP login gate is active.
-          // "Delete Account" is an App Store requirement for apps with login.
-          if (kAccessControlEnabled) ...[
-            TextButton(
-              onPressed: () async {
-                Navigator.pop(context);
-                await deleteMyAccount(context);
-              },
-              child: const UText('Delete Account',
-                  style: TextStyle(color: Color(0xFFB3261E))),
-            ),
-          ],
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const UText('Close')),
-        ],
-      );
     },
   );
 }
@@ -514,11 +317,8 @@ class _BrandTitle extends ConsumerWidget {
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
         // BB script monogram (transparent PNG). Box constrains so it never
-        // gets clipped by the AppBar bounds. Long-press surfaces the geofence
-        // debug dialog so the shop can see exactly what their IP resolved to.
-        GestureDetector(
-          onLongPress: () => _showGeoDebug(context, ref),
-          child: SizedBox(
+        // gets clipped by the AppBar bounds.
+        SizedBox(
             width: 44,
             height: 44,
             child: Padding(
@@ -529,7 +329,6 @@ class _BrandTitle extends ConsumerWidget {
                 filterQuality: FilterQuality.medium,
               ),
             ),
-          ),
         ),
         const SizedBox(width: 8),
         GestureDetector(

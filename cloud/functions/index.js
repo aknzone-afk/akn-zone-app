@@ -421,6 +421,10 @@ exports.tgWebhook = onRequest(
           await accountTap(db, q, k, ref);
           return res.status(200).send("ok");
         }
+        if (tag === "sb" && ref) {
+          await sheetBlockTap(db, q, k, ref);
+          return res.status(200).send("ok");
+        }
         if (tag === "m" && ref) {
           await moneyReceivedTap(db, q, ref);
           return res.status(200).send("ok");
@@ -2426,3 +2430,144 @@ exports.dailyDesignPush = onSchedule(
     logger.info("daily design push", { accounts: n });
   },
 );
+
+
+/* ---------- Owner 14-Oct: Google Sheet "AKN Zone app customers" ---------- */
+const SHEET_HEAD = ["Mobile", "Party / bill name", "City", "Pincode", "Status", "Signed up", "Approved by",
+  "App opens", "Days opened", "Last open", "Orders", "Last order", "Inactive days", "Action (type BLOCK / UNBLOCK)"];
+
+async function sheetToken() {
+  const r = await fetch("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token?scopes=https://www.googleapis.com/auth/spreadsheets,https://www.googleapis.com/auth/drive.metadata.readonly",
+    { headers: { "Metadata-Flavor": "Google" } });
+  return (await r.json()).access_token;
+}
+
+async function sheetApi(tok, id, path, method = "GET", body) {
+  const r = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${id}${path}`, { method,
+    headers: { Authorization: `Bearer ${tok}`, "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`sheets ${r.status} ${JSON.stringify(j).slice(0, 200)}`);
+  return j;
+}
+
+const istDate = (ms) => ms ? new Date(ms + 19800000).toISOString().slice(0, 16).replace("T", " ") : "";
+const lastActive = (a) => Math.max(a.lastOpen || 0, a.lastOrderAt || 0, a.at || a.verifiedAt || 0);
+
+async function setAccStatus(db, key, st, by) {
+  await db.collection("bbapp_accounts").doc(key).set({ status: st,
+    log: admin.firestore.FieldValue.arrayUnion({ a: st === "blocked" ? "🚫 blocked (sheet)" : "↩️ unblocked (sheet)", by, at: Date.now() }) },
+  { merge: true });
+}
+
+exports.sheetSync = onSchedule(
+  { region: "asia-south1", schedule: "every 15 minutes", timeZone: "Asia/Kolkata", secrets: [TG_TOKEN], timeoutSeconds: 120, memory: "256MiB" },
+  async () => {
+    const db = admin.firestore();
+    const cfgRef = db.collection("bbapp_settings").doc("sheet");
+    let cfg = (await cfgRef.get()).data() || {};
+    const tok = await sheetToken();
+    // Adopt the newest sheet named "AKN Zone…" that someone shared with us.
+    try {
+      const q = encodeURIComponent("mimeType='application/vnd.google-apps.spreadsheet' and name contains 'AKN Zone' and trashed=false");
+      const r = await fetch(`https://www.googleapis.com/drive/v3/files?q=${q}&orderBy=createdTime desc&pageSize=5&fields=files(id,name,createdTime)`,
+        { headers: { Authorization: `Bearer ${tok}` } });
+      const f = ((await r.json()).files || [])[0];
+      if (f && f.id !== cfg.id) {
+        await cfgRef.set({ id: f.id, name: f.name, styled: false, adoptedAt: Date.now(), prev: cfg.id || null }, { merge: true });
+        cfg = { ...cfg, id: f.id, styled: false };
+        logger.info("sheet adopted", { name: f.name });
+      }
+    } catch (e) { logger.warn("sheet adopt", { error: e.message }); }
+    if (!cfg.id) return;
+    const meta = await sheetApi(tok, cfg.id, "?fields=sheets.properties");
+    const tab = meta.sheets[0].properties;
+    const range = encodeURIComponent(`'${tab.title}'!A1:N2000`);
+    const cur = (await sheetApi(tok, cfg.id, `/values/${range}`)).values || [];
+
+    // 1. Row actions typed by the owner.
+    for (const row of cur.slice(3)) {
+      const act = String(row[13] || "").trim().toUpperCase();
+      const key = accKey(row[0]);
+      if (!key || !act) continue;
+      const a = (await db.collection("bbapp_accounts").doc(key).get()).data();
+      if (!a) continue;
+      if (act.startsWith("BLOCK") && a.status !== "blocked") await setAccStatus(db, key, "blocked", "Sheet");
+      if (act.startsWith("UNBLOCK") && a.status === "blocked") await setAccStatus(db, key, "approved", "Sheet");
+    }
+
+    const snap = await db.collection("bbapp_accounts").get();
+    const accs = snap.docs.map((d) => ({ key: d.id, ...d.data() }));
+
+    // 2. "Block inactive N months" (B1) → confirm in the approvals group.
+    const months = Number(String((cur[0] || [])[1] || "").replace(/[^\d.]/g, ""));
+    let note = "";
+    if (months >= 1) {
+      const cut = Date.now() - months * 30.4 * 86400000;
+      const list = accs.filter((a) => a.status === "approved" && lastActive(a) < cut);
+      const chat = await approvalsChat(db);
+      if (!list.length) note = `Nobody inactive for ${months} months.`;
+      else if (!chat) note = "Approvals group not connected.";
+      else {
+        const id = String(Date.now());
+        await db.collection("bbapp_settings").doc("sheetblock").set({ id, months, keys: list.map((a) => a.key), at: Date.now() });
+        const names = list.slice(0, 40).map((a) => `• ${escH(a.party || (a.cust || {}).billName || a.key)} (${a.key})`).join("\n");
+        await tg("sendMessage", { chat_id: chat, parse_mode: "HTML",
+          text: `📋 Sheet: block ${list.length} customers inactive ${months}+ months?\n${names}${list.length > 40 ? "\n…" : ""}`,
+          reply_markup: { inline_keyboard: [[{ text: `🚫 Block ${list.length}`, callback_data: `sb|ok|${id}` }, { text: "❌ Cancel", callback_data: `sb|no|${id}` }]] } });
+        note = `Asked in "Akn zone app" group: block ${list.length}?`;
+      }
+    }
+
+    // 3. Rewrite the sheet.
+    const now = Date.now();
+    accs.sort((x, y) => lastActive(y) - lastActive(x));
+    const rows = accs.map((a) => {
+      const c = a.cust || {};
+      const la = lastActive(a);
+      return [a.key, a.party || c.billName || "", c.bookingPlace || "", String(c.pincode || ""), String(a.status || "").toUpperCase(),
+        istDate(a.at || a.verifiedAt), a.approvedBy || "", a.opens || 0, a.openDays || 0, istDate(a.lastOpen), a.orders || 0,
+        istDate(a.lastOrderAt), la ? Math.floor((now - la) / 86400000) : "", ""];
+    });
+    const values = [
+      ["BLOCK INACTIVE (type months) →", "", note || "Type e.g. 6 in B1 — a ✅/❌ question comes in the Akn zone app group.", "", "", "", "", "", "", "", "", "", "Updated", istDate(now)],
+      [],
+      SHEET_HEAD,
+      ...rows,
+    ];
+    await sheetApi(tok, cfg.id, `/values/${range}:clear`, "POST", {});
+    await sheetApi(tok, cfg.id, `/values/${encodeURIComponent(`'${tab.title}'!A1`)}?valueInputOption=RAW`, "PUT", { values });
+    if (!cfg.styled) {
+      await sheetApi(tok, cfg.id, ":batchUpdate", "POST", { requests: [
+        { updateSheetProperties: { properties: { sheetId: tab.sheetId, title: "App customers", gridProperties: { frozenRowCount: 3 } }, fields: "title,gridProperties.frozenRowCount" } },
+        { repeatCell: { range: { sheetId: tab.sheetId, startRowIndex: 2, endRowIndex: 3 }, cell: { userEnteredFormat: { textFormat: { bold: true }, backgroundColor: { red: 0.95, green: 0.9, blue: 0.82 } } }, fields: "userEnteredFormat(textFormat,backgroundColor)" } },
+        { repeatCell: { range: { sheetId: tab.sheetId, startRowIndex: 0, endRowIndex: 1, startColumnIndex: 0, endColumnIndex: 2 }, cell: { userEnteredFormat: { textFormat: { bold: true }, backgroundColor: { red: 1, green: 0.96, blue: 0.8 } } }, fields: "userEnteredFormat(textFormat,backgroundColor)" } },
+        { autoResizeDimensions: { dimensions: { sheetId: tab.sheetId, dimension: "COLUMNS", startIndex: 0, endIndex: 14 } } },
+      ] });
+      await db.collection("bbapp_settings").doc("sheet").set({ styled: true }, { merge: true });
+    }
+    logger.info("sheet sync", { rows: rows.length, months });
+  },
+);
+
+async function sheetBlockTap(db, q, act, id) {
+  const ref = db.collection("bbapp_settings").doc("sheetblock");
+  const p = (await ref.get()).data();
+  if (!p || p.id !== id || p.done) {
+    await tg("answerCallbackQuery", { callback_query_id: q.id, text: "Already handled." });
+    return;
+  }
+  const by = [q.from && q.from.first_name, q.from && q.from.last_name].filter(Boolean).join(" ") || "staff";
+  let n = 0;
+  if (act === "ok") {
+    for (const k of p.keys || []) {
+      const a = (await db.collection("bbapp_accounts").doc(k).get()).data();
+      if (a && a.status === "approved") { await setAccStatus(db, k, "blocked", `${by} (sheet, ${p.months}m inactive)`); n++; }
+    }
+  }
+  await ref.set({ done: true, act, by, n }, { merge: true });
+  await tg("answerCallbackQuery", { callback_query_id: q.id, text: act === "ok" ? `Blocked ${n}` : "Cancelled" });
+  if (q.message) {
+    await tg("editMessageText", { chat_id: q.message.chat.id, message_id: q.message.message_id,
+      text: act === "ok" ? `🚫 Blocked ${n} inactive customers (${p.months}+ months) — ${by}` : `❌ Cancelled — ${by}` });
+  }
+}

@@ -60,8 +60,6 @@ Future<void> main() async {
   }
 
   // Daily 9 PM "new designs" reminder → opens the DAILY UPDATE folder on tap.
-  // Only schedule for users who pass the geofence gate — Surat-based people
-  // who can't enter the app shouldn't receive the notification.
   // Non-fatal: the catalog still works if notifications are denied/unavailable.
   String? launchPayload;
   try {

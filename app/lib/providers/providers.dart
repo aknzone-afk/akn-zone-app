@@ -17,7 +17,6 @@ import '../services/drive_scraper.dart';
 import '../services/drive_urls.dart';
 import '../services/favorites_service.dart';
 import '../services/edit_service.dart';
-import '../services/geofence_service.dart';
 import '../services/local_cache.dart';
 import '../services/photo_freshness.dart';
 import '../services/price_check.dart';
@@ -90,35 +89,6 @@ final favoritesServiceProvider = Provider<FavoritesService>((ref) {
 final shareServiceProvider = Provider<ShareService>((ref) => ShareService());
 
 final editServiceProvider = Provider<EditService>((ref) => EditService());
-
-final geofenceServiceProvider = Provider<GeofenceService>((ref) {
-  return GeofenceService(ref.watch(dioProvider));
-});
-
-/// Master switch for the Surat geofence lock. OFF — superseded by the
-/// customer OTP login gate (access_control.dart): an approved-customers-only
-/// app blocks local competitors far more reliably than IP geolocation, which
-/// we saw misplace even a Surat connection. Code kept in case it's ever
-/// wanted again.
-final bool kGeofenceLockEnabled = false;
-
-/// Resolves to `true` when the customer is allowed into the app, `false` when
-/// they should see the geofence lock screen. With [kGeofenceLockEnabled] off
-/// this always allows access instantly (no network check, no lock screen).
-/// When on: first read kicks off the IP-geo check; subsequent reads in the same
-/// 24h window are instant (cached in SharedPreferences).
-final geofenceAllowedProvider = FutureProvider<bool>((ref) async {
-  if (!kGeofenceLockEnabled) return true;
-  final svc = ref.watch(geofenceServiceProvider);
-  final prefs = ref.watch(sharedPreferencesProvider);
-  // Fail OPEN fast: if the IP-geo check is slow (≥6s), allow access. This keeps
-  // the app from ever hanging on the loading screen and guarantees an App
-  // Review tester is never stalled or locked out by a sluggish/blocked lookup.
-  return svc.isAllowed(prefs).timeout(
-        const Duration(seconds: 6),
-        onTimeout: () => true,
-      );
-});
 
 /// IDs of photos that have a saved markup edit on disk → a monotonic version
 /// counter that increments every time that photo is re-saved. Cart tiles use
