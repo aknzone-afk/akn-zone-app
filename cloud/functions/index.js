@@ -2150,6 +2150,11 @@ async function accountTap(db, q, act, key) {
     await admin.storage().bucket().file(fresh.kycPath).delete().catch(() => {});
     await docRef.set({ kycPath: null }, { merge: true });
   }
+  // The proof video already sits in the group; the cloud copy goes after the decision.
+  if ((act === "ok" || act === "no") && fresh.proofVideo) {
+    await admin.storage().bucket().file(fresh.proofVideo).delete().catch(() => {});
+    await docRef.set({ proofVideo: null }, { merge: true });
+  }
 }
 
 /** Read a WhatsApp verification (≤ 20 min old) → the verified key. */
@@ -2262,7 +2267,7 @@ exports.accountClaim = onRequest(
 
 /** App: a new customer's details → pending (India) / approved (abroad). */
 exports.accountSignup = onRequest(
-  { region: "asia-south1", secrets: [TG_TOKEN], timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
+  { region: "asia-south1", secrets: [TG_TOKEN], timeoutSeconds: 120, memory: "512MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
     if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
     const db = admin.firestore();
@@ -2314,13 +2319,21 @@ exports.accountSignup = onRequest(
     if (india && doc !== "gst" && doc !== "aadhaar") {
       return res.json({ ok: false, error: "No GST? Please add a photo of your Aadhaar card." });
     }
-    if (india && doc !== "gst" && card.length < 1000) {
-      return res.json({ ok: false, error: "Please add a business proof photo." });
+    const proofVideo = String(c.proofVideo || "");
+    let videoOk = false;
+    if (/^proof\/\d{7,15}-\d+\.mp4$/.test(proofVideo) && proofVideo.startsWith(`proof/${key}-`)) {
+      try { videoOk = (await admin.storage().bucket().file(proofVideo).exists())[0]; } catch (e) { videoOk = false; }
+    }
+    if (india && doc !== "gst" && card.length < 1000 && !videoOk) {
+      return res.json({ ok: false, error: "Please add a business proof photo or video." });
     }
     if (india && !idValid(doc, cust.taxId)) {
       return res.json({ ok: false, error: `This ${doc === "gst" ? "GST" : doc === "pan" ? "PAN" : "Aadhaar"} number is not valid — please check it.` });
     }
     const kyc = india ? await kycCheck(db, cust, doc, String(c.kycText || "")) : [];
+    if (india && doc !== "gst" && card.length < 1000 && videoOk) {
+      kyc.push("🎥 Business proof is a video — please watch it");
+    }
     if (india && doc !== "gst" && card.length >= 1000) {
       // Owner 14-Oct: the shop card / board must carry the bill name.
       const CT = String(c.cardText || "").toUpperCase();
@@ -2383,6 +2396,22 @@ exports.accountSignup = onRequest(
           await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/sendPhoto`, { method: "POST", body: fd });
         }
       } catch (e) { logger.warn("card photo", { key, error: e.message }); }
+    }
+    if (videoOk) {
+      try {
+        await ref.set({ proofVideo }, { merge: true });
+        const m = ((await ref.get()).data() || {}).msg;
+        if (m && m.chat) {
+          const [buf] = await admin.storage().bucket().file(proofVideo).download();
+          const fd = new FormData();
+          fd.append("chat_id", String(m.chat));
+          fd.append("reply_to_message_id", String(m.id));
+          fd.append("caption", `🎥 Business proof — ${cust.billName}${cust.bizNote ? "\n" + cust.bizNote : ""}`);
+          fd.append("video", new Blob([buf], { type: "video/mp4" }), "proof.mp4");
+          const r = await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/sendVideo`, { method: "POST", body: fd });
+          if (!r.ok) logger.warn("proof video tg", { status: r.status, body: (await r.text()).slice(0, 200) });
+        }
+      } catch (e) { logger.warn("proof video", { key, error: e.message }); }
     }
     return res.json({ ok: true, status, devKey });
   },
@@ -2546,7 +2575,7 @@ function kycLines(a, c) {
   const warn = (a.kyc || []).filter((x) => String(x).startsWith("⚠️"));
   const doc = String(a.kycDoc || c.kycDoc || "").toUpperCase();
   if (a.kind !== "foreign") {
-    const info = (a.kyc || []).filter((x) => String(x).startsWith("🪪"));
+    const info = (a.kyc || []).filter((x) => String(x).startsWith("🪪") || String(x).startsWith("🎥"));
     if (warn.length) out.push(...warn.map((x) => escH(x)));
     else if (doc) out.push(`✅ ${doc === "AADHAAR" ? "Aadhaar" : doc} verified`);
     out.push(...info.map((x) => escH(x)));
@@ -2898,3 +2927,20 @@ function cardFacts(text) {
 function cityKey(x) {
   return String(x || "").toUpperCase().replace(/\(.*?(\)|$)/g, " ").replace(/[^A-Z0-9]/g, "");
 }
+
+
+/** App: a one-time link to upload the business-proof VIDEO (owner 15-Oct).
+ *  Needs the WhatsApp-verified code; the file is proof/<mobile>-<time>.mp4. */
+exports.proofUploadUrl = onRequest(
+  { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
+  async (req, res) => {
+    if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
+    const db = admin.firestore();
+    const key = await verifiedKey(db, req.body && req.body.code);
+    if (!key) return res.json({ ok: false, error: "Please verify your number on WhatsApp again." });
+    const path = `proof/${key}-${Date.now()}.mp4`;
+    const [url] = await admin.storage().bucket().file(path).getSignedUrl({
+      version: "v4", action: "write", expires: Date.now() + 15 * 60e3, contentType: "video/mp4" });
+    return res.json({ ok: true, url, path });
+  },
+);

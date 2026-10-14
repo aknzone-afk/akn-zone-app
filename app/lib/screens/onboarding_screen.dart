@@ -1136,6 +1136,33 @@ class _SignupFormState extends State<_SignupForm> {
   /// Owner 14-Oct: an existing saree business without GST shows its card.
   bool get _needCard => _india && !_hasGst; // business proof (owner 15-Oct)
   final _bizNote = TextEditingController();
+  XFile? _proofVideo; // owner 15-Oct: business proof may be a video
+  String? _proofKind; // 'existing' (photo) | 'startup' (live video)
+  int _proofVideoBytes = 0;
+  String? _uploadMsg;
+
+  Future<void> _pickProofVideo() async {
+    FocusScope.of(context).unfocus();
+    const src = ImageSource.camera; // owner: a LIVE video, not from the gallery
+    try {
+      final v = await ImagePicker().pickVideo(source: src, maxDuration: const Duration(seconds: 60));
+      if (v == null) return;
+      final n = await v.length();
+      if (n > 45 * 1024 * 1024) {
+        if (mounted) setState(() => _bizErr = 'This video is too big — please keep it under 1 minute.');
+        return;
+      }
+      if (mounted) {
+        setState(() {
+          _proofVideo = v;
+          _proofVideoBytes = n;
+          _bizErr = null;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _bizErr = 'Could not open the camera / gallery. Please try again.');
+    }
+  }
   bool _reading = false;
   String? _photoErr;
 
@@ -1452,30 +1479,78 @@ class _SignupFormState extends State<_SignupForm> {
 
   Widget _cardBox() {
     final ph = _cardPhoto;
+    Widget choice(String k, IconData icon, String title, String sub) {
+      final on = _proofKind == k;
+      return Padding(
+        padding: const EdgeInsets.only(bottom: 8),
+        child: InkWell(
+          borderRadius: BorderRadius.circular(12),
+          onTap: () => setState(() {
+            _proofKind = k;
+            _bizErr = null;
+          }),
+          child: Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: on ? const Color(0xFFE8F5E9) : null,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: on ? _green : kHairline, width: on ? 2 : 1),
+            ),
+            child: Row(children: [
+              Icon(on ? Icons.radio_button_checked_rounded : Icons.radio_button_unchecked_rounded,
+                  color: on ? _green : Colors.black45),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Text(title, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+                  const SizedBox(height: 2),
+                  Text(sub, style: const TextStyle(fontSize: 12.5, height: 1.35, color: Colors.black54)),
+                ]),
+              ),
+              Icon(icon, color: Colors.black45),
+            ]),
+          ),
+        ),
+      );
+    }
+
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        const Text('Business proof *', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: _dark)),
-        const SizedBox(height: 4),
-        const Text('Add a photo of ANY business proof, for example: a shop photo with the board, your visiting card, '
-            'any purchase bill in your name, or any bill of your shop.',
-            style: TextStyle(fontSize: 13, height: 1.4)),
-        if (ph != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 8),
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: Container(color: kLinen, height: 150, child: Image.memory(ph.jpg, fit: BoxFit.contain)),
-            ),
-          ),
+        const Text('Your business *', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: _dark)),
         const SizedBox(height: 8),
-        OutlinedButton.icon(
-          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(50)),
-          onPressed: _reading ? null : () => _pickPhoto(false, card: true),
-          icon: Icon(ph == null ? Icons.add_a_photo_rounded : Icons.cameraswitch_rounded),
-          label: Text(ph == null ? 'Add business proof photo *' : 'Change photo',
-              textAlign: TextAlign.center),
-        ),
+        choice('existing', Icons.storefront_rounded, 'Existing business',
+            'Send a photo — shop with its board, your visiting card, or any bill / purchase bill in your name.'),
+        choice('startup', Icons.videocam_rounded, 'New startup',
+            'Record a live video (up to 1 minute) telling us about yourself and your business plan.'),
+        if (_proofKind == 'existing') ...[
+          if (ph != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 4, bottom: 6),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(10),
+                child: Container(color: kLinen, height: 150, child: Image.memory(ph.jpg, fit: BoxFit.contain)),
+              ),
+            ),
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(50)),
+            onPressed: _reading ? null : () => _pickPhoto(false, card: true),
+            icon: Icon(ph == null ? Icons.add_a_photo_rounded : Icons.cameraswitch_rounded),
+            label: Text(ph == null ? 'Add business photo *' : 'Change photo', textAlign: TextAlign.center),
+          ),
+        ],
+        if (_proofKind == 'startup')
+          OutlinedButton.icon(
+            style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(50)),
+            onPressed: _reading || _sending ? null : _pickProofVideo,
+            icon: Icon(_proofVideo == null ? Icons.videocam_rounded : Icons.check_circle_rounded,
+                color: _proofVideo == null ? null : _green),
+            label: Text(
+                _proofVideo == null
+                    ? 'Record live video (up to 1 minute) *'
+                    : 'Video recorded (${(_proofVideoBytes / 1048576).toStringAsFixed(1)} MB) — tap to record again',
+                textAlign: TextAlign.center),
+          ),
         const SizedBox(height: 8),
         TextField(
           controller: _bizNote,
@@ -1490,7 +1565,15 @@ class _SignupFormState extends State<_SignupForm> {
     FocusScope.of(context).unfocus();
     final okFields = _formKey.currentState?.validate() ?? false;
     final idErr = _idError();
-    final bizErr = (_needCard && _cardPhoto == null) ? 'Please add a business proof photo.' : null;
+    final bizErr = !_needCard
+        ? null
+        : _proofKind == null
+            ? 'Please choose: Existing business or New startup.'
+            : (_proofKind == 'existing' && _cardPhoto == null)
+                ? 'Please add a business photo.'
+                : (_proofKind == 'startup' && _proofVideo == null)
+                    ? 'Please record your live video.'
+                    : null;
     setState(() {
       _photoErr = idErr;
       _bizErr = bizErr;
@@ -1524,7 +1607,7 @@ class _SignupFormState extends State<_SignupForm> {
     final cust = <String, dynamic>{
       'contact': _contact.text.trim(),
       'billName': _bill.text.trim().toUpperCase(),
-      'businessType': (_india && _hasGst) ? 'gst_business' : 'proof',
+      'businessType': (_india && _hasGst) ? 'gst_business' : (_proofKind == 'startup' ? 'new_startup' : 'existing_business'),
       if (_india && !_hasGst && _panPhoto != null && panValid(_pan.text)) 'pan': _norm(_pan.text),
       if (_bizNote.text.trim().isNotEmpty) 'bizNote': _bizNote.text.trim(),
       'address': _address.text.trim(),
@@ -1539,12 +1622,26 @@ class _SignupFormState extends State<_SignupForm> {
     try {
       final abroadMobile = widget.abroad ? (OrderService.normalizeForeignMobile(_mobileAbroad.text) ?? '') : '';
       if (widget.abroad) cust['mobile'] = abroadMobile;
+      String? videoPath;
+      if (_needCard && _proofKind == 'startup' && _proofVideo != null) {
+        setState(() => _uploadMsg = 'Uploading your video… 0%');
+        videoPath = await AccountService.uploadProofVideo(widget.code, _proofVideo!.path,
+            onProgress: (f) {
+          if (mounted) setState(() => _uploadMsg = 'Uploading your video… ${(f * 100).round()}%');
+        });
+        if (mounted) setState(() => _uploadMsg = null);
+        if (videoPath == null) {
+          if (mounted) setState(() => _error = 'The video could not be uploaded — check your internet and try again.');
+          return;
+        }
+      }
       final d = await (widget.abroad ? AccountService.signupAbroad(abroadMobile, cust) : AccountService.signup(widget.code, {
+        if (videoPath != null) 'proofVideo': videoPath,
         ...cust,
         if (photo != null) 'kycImage': base64Encode(photo.jpg),
         if (photo != null) 'kycText': photo.text,
-        if (_needCard && _cardPhoto != null) 'cardImage': base64Encode(_cardPhoto!.jpg),
-        if (_needCard && _cardPhoto != null) 'cardText': _cardPhoto!.text,
+        if (_needCard && _proofKind == 'existing' && _cardPhoto != null) 'cardImage': base64Encode(_cardPhoto!.jpg),
+        if (_needCard && _proofKind == 'existing' && _cardPhoto != null) 'cardText': _cardPhoto!.text,
       }));
       if (!mounted) return;
       if (d == null) {
@@ -1778,6 +1875,12 @@ class _SignupFormState extends State<_SignupForm> {
                   ),
               ],
               const SizedBox(height: 14),
+              if (_uploadMsg != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: Text(_uploadMsg!, textAlign: TextAlign.center,
+                      style: const TextStyle(fontWeight: FontWeight.w700)),
+                ),
               if (_error != null)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 12),

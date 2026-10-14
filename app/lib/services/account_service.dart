@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math';
 
 import 'package:dio/dio.dart';
@@ -153,6 +154,26 @@ class AccountService {
       _post('accountSignup', {'abroad': true, 'mobile': mobile, 'cust': cust}, secs: 60);
 
   static const _kDevKey = 'account_devkey_v1';
+
+  /// Owner 15-Oct: business-proof VIDEO -> one-time upload link, then PUT.
+  /// Returns the stored path, or null (with [onProgress] 0..1 while sending).
+  static Future<String?> uploadProofVideo(String code, String filePath,
+      {void Function(double)? onProgress}) async {
+    final d = await _post('proofUploadUrl', {'code': code});
+    if (d == null || d['ok'] != true) return null;
+    try {
+      final f = File(filePath);
+      final len = await f.length();
+      final r = await Dio().put<dynamic>('${d['url']}',
+          data: f.openRead(),
+          options: Options(headers: {'Content-Type': 'video/mp4', 'Content-Length': len},
+              sendTimeout: const Duration(minutes: 5), receiveTimeout: const Duration(minutes: 1)),
+          onSendProgress: (a, b) => onProgress?.call(b > 0 ? a / b : 0));
+      return (r.statusCode ?? 500) < 300 ? '${d['path']}' : null;
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// Store reviewers (Google / Apple): fixed user ID + password -> demo account.
   static Future<Map<String, dynamic>?> demoLogin(String user, String pass) =>
