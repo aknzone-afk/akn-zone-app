@@ -2150,6 +2150,11 @@ async function accountTap(db, q, act, key) {
     await admin.storage().bucket().file(fresh.kycPath).delete().catch(() => {});
     await docRef.set({ kycPath: null }, { merge: true });
   }
+  // Owner 15-Oct: the ID photos leave the group after the decision.
+  if ((act === "ok" || act === "no") && (fresh.idMsgs || []).length) {
+    for (const x of fresh.idMsgs) await tg("deleteMessage", { chat_id: x.chat, message_id: x.id }).catch(() => {});
+    await docRef.set({ idMsgs: [] }, { merge: true });
+  }
   // The proof video already sits in the group; the cloud copy goes after the decision.
   if ((act === "ok" || act === "no") && fresh.proofVideo) {
     await admin.storage().bucket().file(fresh.proofVideo).delete().catch(() => {});
@@ -2396,6 +2401,23 @@ exports.accountSignup = onRequest(
           await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/sendPhoto`, { method: "POST", body: fd });
         }
       } catch (e) { logger.warn("card photo", { key, error: e.message }); }
+    }
+    // Owner 15-Oct: ID photos into the group too (Aadhaar / PAN).
+    for (const [b64, label] of [[img, doc === "pan" ? "PAN" : "Aadhaar"], [String(c.panImage || ""), "PAN"]]) {
+      if (!india || b64.length < 1000) continue;
+      try {
+        const m = ((await ref.get()).data() || {}).msg;
+        if (!m || !m.chat) continue;
+        const fd = new FormData();
+        fd.append("chat_id", String(m.chat));
+        fd.append("reply_to_message_id", String(m.id));
+        fd.append("caption", `🪪 ${label} — ${cust.billName} (deleted from here after approve / decline)`);
+        fd.append("photo", new Blob([Buffer.from(b64, "base64")], { type: "image/jpeg" }), "id.jpg");
+        const r = await (await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/sendPhoto`, { method: "POST", body: fd })).json();
+        if (r && r.ok && r.result) {
+          await ref.set({ idMsgs: admin.firestore.FieldValue.arrayUnion({ chat: m.chat, id: r.result.message_id }) }, { merge: true });
+        }
+      } catch (e) { logger.warn("id photo tg", { key, error: e.message }); }
     }
     if (videoOk) {
       try {

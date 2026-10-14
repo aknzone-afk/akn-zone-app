@@ -1640,6 +1640,8 @@ class _SignupFormState extends State<_SignupForm> {
         ...cust,
         if (photo != null) 'kycImage': base64Encode(photo.jpg),
         if (photo != null) 'kycText': photo.text,
+        // Owner 15-Oct: the optional PAN photo goes to the group too.
+        if (_india && !_hasGst && _panPhoto != null && panValid(_pan.text)) 'panImage': base64Encode(_panPhoto!.jpg),
         if (_needCard && _proofKind == 'existing' && _cardPhoto != null) 'cardImage': base64Encode(_cardPhoto!.jpg),
         if (_needCard && _proofKind == 'existing' && _cardPhoto != null) 'cardText': _cardPhoto!.text,
       }));
