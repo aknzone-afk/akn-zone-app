@@ -154,6 +154,10 @@ class AccountService {
 
   static const _kDevKey = 'account_devkey_v1';
 
+  /// Store reviewers (Google / Apple): fixed user ID + password -> demo account.
+  static Future<Map<String, dynamic>?> demoLogin(String user, String pass) =>
+      _post('accountDemo', {'user': user, 'pass': pass});
+
   /// "Delete my account" (App Store rule). True = deleted on the server.
   static Future<(bool, String?)> deleteAccount(SharedPreferences p) async {
     final m = '${saved(p)?['mobile'] ?? ''}';

@@ -232,6 +232,7 @@ exports.lookupParty = onRequest(
     if (d.length === 12 && d.startsWith("91")) d = d.slice(2);
     if (d.length === 11 && d.startsWith("0")) d = d.slice(1);
     if (!/^[6-9]\d{9}$/.test(d)) return res.json({ ok: false, error: "bad mobile" });
+    if (d === DEMO_KEY) return res.json({ ok: true, parties: [DEMO_PARTY] });
     // Owner 12-Oct: ledgers made today (NewPartyBot / app) are known at once.
     const live = await admin.firestore().collection("bbapp_parties_live").doc(d).get();
     // Live entries are a bridge until the 2-hourly Tally sync — never older
@@ -2103,7 +2104,7 @@ function accText(key, a) {
       `Destination: ${escH(c.bookingPlace || "-")}${c.country && c.country !== "India" ? " · " + escH(c.country) : ""}`,
       ...(c.transport ? [`Transport: ${escH(c.transport)}`] : []),
       ...(c.taxId ? [`${(c.kycDoc || "ID").toUpperCase()}: ${escH(c.kycDoc === "aadhaar" ? "XXXX XXXX " + String(c.taxId).slice(-4) : c.taxId)}`] : []),
-      `Mobile: ${key} (WhatsApp verified)`,
+      `Mobile: ${key} ${a.abroadDirect ? "(outside India — typed, not verified)" : "(WhatsApp verified)"}`,
       ...kycLines(a, c));
   }
   const st = { approved: "✅ APPROVED", pending: "⏳ waiting for approval", declined: "❌ DECLINED", blocked: "🚫 BLOCKED" }[a.status] || a.status;
@@ -2340,7 +2341,7 @@ exports.accountSignup = onRequest(
     const auto = india && (!known || pinSale < 500000) && clean && (doc === "gst" || doc === "aadhaar");
     const kycDocName = doc;
     const status = !india || auto ? "approved" : "pending";
-    await ref.set({ status, kind: india ? "new" : "foreign", cust, kyc, kycDoc: kycDocName, pinSale: india ? pinSale : null,
+    await ref.set({ status, kind: india ? "new" : "foreign", cust, kyc, kycDoc: kycDocName, abroadDirect, pinSale: india ? pinSale : null,
       kycPath, verifiedAt: Date.now(), at: Date.now(),
       ...(auto ? { approvedAt: Date.now(), approvedBy: "bot (new pincode)" } : {}),
       log: admin.firestore.FieldValue.arrayUnion({ a: india ? "🆕 signed up" : "🌍 signed up", by: "app", at: Date.now() },
@@ -2780,5 +2781,35 @@ exports.lookupQueue = onRequest(
     const q = await db.collection("bbapp_lookup").where("done", "==", null).get();
     const keys = q.docs.filter((d) => Date.now() - (d.get("req") || 0) < 3 * 60e3).map((d) => d.id);
     return res.json({ ok: true, keys });
+  },
+);
+
+
+/* ---------- Store reviewers: fixed demo login (Google Play rejected 3.1.15) ---------- */
+const DEMO_KEY = "9999900001";
+const DEMO_PARTY = { name: "DEMO REVIEWER — IGNORE", address: "Demo account for app store review", dest: "SURAT",
+  pincode: "395002", gstin: "", transport: "COURIER" };
+
+exports.accountDemo = onRequest(
+  { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
+  async (req, res) => {
+    if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
+    const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
+    if (limited("d:" + ip)) return res.status(429).json({ ok: false, error: "Too many tries — wait a minute." });
+    const db = admin.firestore();
+    const cfg = (await db.collection("bbapp_settings").doc("demo").get()).data() || {};
+    const user = String((req.body && req.body.user) || "").trim().toLowerCase();
+    const pass = String((req.body && req.body.pass) || "").trim();
+    if (!cfg.user || user !== String(cfg.user).toLowerCase() || pass !== String(cfg.pass)) {
+      return res.json({ ok: false, error: "Wrong user ID or password." });
+    }
+    const cust = { billName: DEMO_PARTY.name, address: DEMO_PARTY.address, pincode: DEMO_PARTY.pincode,
+      bookingPlace: DEMO_PARTY.dest, transport: DEMO_PARTY.transport, taxId: "", mobile: DEMO_KEY, country: "India", kind: "old" };
+    await db.collection("bbapp_accounts").doc(DEMO_KEY).set({ status: "approved", kind: "existing", demo: true,
+      party: DEMO_PARTY.name, cust, verifiedAt: Date.now(),
+      log: admin.firestore.FieldValue.arrayUnion({ a: "🧪 demo login (store review)", by: "app", at: Date.now() }) }, { merge: true });
+    const devKey = await giveDevKey(db, DEMO_KEY, null);
+    return res.json({ ok: true, mobile: DEMO_KEY, india: true, status: "approved", kind: "existing",
+      party: DEMO_PARTY.name, cust, devKey });
   },
 );

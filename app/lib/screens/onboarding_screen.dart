@@ -745,6 +745,49 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
     } catch (_) {}
   }
 
+  /// Google Play / App Store reviewers: user ID + password from the store notes.
+  Future<void> _reviewerLogin() async {
+    final u = TextEditingController(), pw = TextEditingController();
+    String? err;
+    var busy = false;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => StatefulBuilder(builder: (c, setD) => AlertDialog(
+        title: const Text('Store reviewer login'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          TextField(controller: u, keyboardType: TextInputType.emailAddress, autocorrect: false,
+              decoration: const InputDecoration(labelText: 'User ID')),
+          TextField(controller: pw, obscureText: true, autocorrect: false,
+              decoration: const InputDecoration(labelText: 'Password')),
+          if (err != null)
+            Padding(padding: const EdgeInsets.only(top: 10),
+                child: Text(err!, style: const TextStyle(color: _red, fontWeight: FontWeight.w700))),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+          FilledButton(
+            onPressed: busy ? null : () async {
+              setD(() { busy = true; err = null; });
+              final d = await AccountService.demoLogin(u.text.trim(), pw.text.trim());
+              if (d != null && d['ok'] == true) {
+                final p = _prefs ?? await SharedPreferences.getInstance();
+                await AccountService.approve(p, {
+                  'mobile': d['mobile'], 'india': true, 'status': 'approved',
+                  'kind': d['kind'], 'party': d['party'], 'cust': d['cust'],
+                });
+                if (c.mounted) Navigator.pop(c, true);
+                return;
+              }
+              setD(() { busy = false; err = d == null ? 'No internet — please try again.' : '${d['error'] ?? 'Could not log in.'}'; });
+            },
+            child: const Text('Log in'),
+          ),
+        ],
+      )),
+    );
+    if (ok == true && mounted) widget.onDone();
+  }
+
   Widget _phoneScreen() {
     if (_netCountry == null) {
       // ignore: discarded_futures
@@ -788,6 +831,10 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
       TextButton(
         onPressed: () => launchUrl(Uri.parse(kPrivacyUrl), mode: LaunchMode.externalApplication),
         child: const Text('Privacy policy', style: TextStyle(fontSize: 12.5)),
+      ),
+      TextButton(
+        onPressed: _reviewerLogin,
+        child: const Text('Store reviewer login', style: TextStyle(fontSize: 12.5)),
       ),
     ]);
   }
