@@ -484,8 +484,10 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     }
     if (!_newForm) {
       if (_party == null) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-            content: Text('Type your 10-digit mobile number first.')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(_accMobile != null
+                ? 'Finding your account — one moment, then tap Place order again.'
+                : 'Type your 10-digit mobile number first.')));
         return;
       }
       await _send(photos, _oldCustomer());
@@ -648,6 +650,27 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
   }
 
   Future<void> _send(List<Photo> photos, CustomerDetails customer) async {
+    // Owner 14-Oct: one last "are you sure?" before the order goes.
+    final pcs = photos.fold<int>(0, (s, p) => s + _qtyFor(p));
+    final sure = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: Text(t('Place this order?', 'यह ऑर्डर भेजें?')),
+        content: Text(t(
+            '${photos.length} design${photos.length == 1 ? '' : 's'} · $pcs pcs\n'
+                'Bill name: ${customer.billName}\n\n'
+                'Your order will be placed. Tap YES only if everything is right.',
+            '${photos.length} डिज़ाइन · $pcs पीस\n'
+                'बिल नाम: ${customer.billName}\n\n'
+                'आपका ऑर्डर लग जाएगा। सब सही हो तभी YES दबाएँ।')),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('NO')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('YES, PLACE ORDER')),
+        ],
+      ),
+    );
+    if (sure != true || !mounted) return;
     if (_isDuplicate(photos)) {
       final again = await showDialog<bool>(
         context: context,
@@ -771,10 +794,9 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         note: _note.text,
         lockNote: _lockNote,
         onStep: (s) => step.value = s,
-        // Owner 12-Oct: NEW Indian customer pays a 10% advance first.
-        holdForAdvance: customer.kind != 'old' &&
-            customer.isIndia &&
-            OrderService.activeParcel(ref.read(sharedPreferencesProvider), mobile: customer.mobile) == null,
+        // Owner 14-Oct: no 10% token any more — customers are verified at
+        // sign-up; the bill comes first, payment after it.
+        holdForAdvance: false,
       );
     } on OrderPhotosMissing catch (e) {
       order = null;
