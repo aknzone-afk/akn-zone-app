@@ -1711,12 +1711,23 @@ class _SignupFormState extends State<_SignupForm> {
 
   /// Transports the shop's parties use for the typed city — tap to choose.
   Widget _usualTransports() {
+    // Owner 14-Oct: same as the order form — suggestions stay even when a
+    // transport is typed, plus where our parties use the typed one.
     final usual = _tInfo?.forPlace(_place.text) ?? const <(String, int)>[];
-    if (usual.isEmpty || _transport.text.trim().isNotEmpty) return const SizedBox.shrink();
+    final typed = _transport.text.trim();
+    final goes = typed.isEmpty ? const <(String, int)>[] : (_tInfo?.placesOf(typed) ?? const <(String, int)>[]);
+    if (usual.isEmpty && goes.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.only(top: 8),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('Transports going to ${_place.text.trim().toUpperCase()} — tap to choose:',
+        if (goes.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 6),
+            child: Text('Our parties use it for: ${goes.take(8).map((e) => e.$1).join(', ')}',
+                style: const TextStyle(fontSize: 12, color: Colors.black54)),
+          ),
+        if (usual.isNotEmpty)
+        Text('Suggestion of transports going to ${_place.text.trim().toUpperCase()} — tap to choose:',
             style: const TextStyle(fontWeight: FontWeight.w700)),
         const SizedBox(height: 4),
         Wrap(spacing: 6, runSpacing: 4, children: [
