@@ -1,5 +1,7 @@
 import 'package:catalog_app/widgets/caps_text.dart';
 import 'package:flutter/material.dart';
+import '../config.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'dart:io';
 import 'dart:typed_data';
 
@@ -147,6 +149,34 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
     refreshAccessGate();
   }
 
+  /// App Store rule: delete the account from inside the app.
+  Future<void> _deleteAccount() async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (c) => AlertDialog(
+        title: const Text('Delete your account?'),
+        content: const Text('Your AKN Zone account, your details and your ID / shop photos will be deleted. '
+            'Orders already placed stay with us for billing. You can sign up again any time.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
+          FilledButton(
+              style: FilledButton.styleFrom(backgroundColor: const Color(0xFFB3261E)),
+              onPressed: () => Navigator.pop(c, true),
+              child: const Text('Delete')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    final (done, err) = await AccountService.deleteAccount(ref.read(sharedPreferencesProvider));
+    if (!mounted) return;
+    if (!done) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err ?? 'Could not delete.')));
+      return;
+    }
+    context.go('/');
+    refreshAccessGate();
+  }
+
   Future<void> _retry(String number) async {
     setState(() => _busy = number);
     final o = await OrderService.retryOne(
@@ -170,9 +200,13 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
         PopupMenuButton<String>(
           onSelected: (v) {
             if (v == 'logout') _logout();
+            if (v == 'delete') _deleteAccount();
+            if (v == 'privacy') launchUrl(Uri.parse(kPrivacyUrl), mode: LaunchMode.externalApplication);
           },
           itemBuilder: (_) => const [
             PopupMenuItem(value: 'logout', child: Text('Log out / change number')),
+            PopupMenuItem(value: 'privacy', child: Text('Privacy policy')),
+            PopupMenuItem(value: 'delete', child: Text('Delete my account', style: TextStyle(color: Color(0xFFB3261E)))),
           ],
         ),
       ]),

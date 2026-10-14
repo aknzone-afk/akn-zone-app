@@ -5,6 +5,7 @@ import 'dart:typed_data';
 import 'package:catalog_app/widgets/caps_text.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import '../config.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
@@ -706,6 +707,10 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
         'WhatsApp opens with a message ready — just tap SEND and come back to this app.',
         textAlign: TextAlign.center,
         style: TextStyle(fontSize: 13, color: Colors.black54, height: 1.4),
+      ),
+      TextButton(
+        onPressed: () => launchUrl(Uri.parse(kPrivacyUrl), mode: LaunchMode.externalApplication),
+        child: const Text('Privacy policy', style: TextStyle(fontSize: 12.5)),
       ),
     ]);
   }

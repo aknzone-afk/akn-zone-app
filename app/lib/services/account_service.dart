@@ -127,6 +127,11 @@ class AccountService {
               receiveTimeout: Duration(seconds: secs),
               validateStatus: (s) => s != null && s < 500));
       final d = res.data is String ? jsonDecode(res.data as String) : res.data;
+      // Store review: keep this device's key — needed to delete the account.
+      if (d is Map && '${d['devKey'] ?? ''}'.length >= 16) {
+        final p = await SharedPreferences.getInstance();
+        await p.setString(_kDevKey, '${d['devKey']}');
+      }
       return d is Map ? Map<String, dynamic>.from(d) : null;
     } catch (_) {
       return null;
@@ -146,6 +151,19 @@ class AccountService {
   /// network is outside India and the number is not Indian.
   static Future<Map<String, dynamic>?> signupAbroad(String mobile, Map<String, dynamic> cust) =>
       _post('accountSignup', {'abroad': true, 'mobile': mobile, 'cust': cust}, secs: 60);
+
+  static const _kDevKey = 'account_devkey_v1';
+
+  /// "Delete my account" (App Store rule). True = deleted on the server.
+  static Future<(bool, String?)> deleteAccount(SharedPreferences p) async {
+    final m = '${saved(p)?['mobile'] ?? ''}';
+    final d = await _post('accountDelete', {'mobile': m, 'devKey': p.getString(_kDevKey) ?? ''});
+    if (d == null) return (false, 'No internet — please try again.');
+    if (d['ok'] != true) return (false, '${d['error'] ?? 'Could not delete. Please try again.'}');
+    await clear(p);
+    await p.remove(_kDevKey);
+    return (true, null);
+  }
 
   static Future<Map<String, dynamic>?> checkStatus(String mobile) =>
       _post('accountStatus', {'mobile': mobile});

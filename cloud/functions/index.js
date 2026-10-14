@@ -1325,8 +1325,12 @@ exports.newParties = onRequest(
     const snap = await db.collection("bbapp_orders")
       // Owner 11-Oct: the ledger is made as soon as the customer places the order.
       .where("status", "in", ["received", "getting_ready", "bill_sent", "payment_received", "dispatched", "bilty"]).get();
+    // Owner 14-Oct: an app account's ledger is made at approval — its orders
+    // are not sent again (no "already in Tally" note for every first order).
+    const accAll = await db.collection("bbapp_accounts").get();
+    const hasLedger = new Set(accAll.docs.filter((x) => x.get("kind") === "existing" || x.get("partyQueuedAt")).map((x) => x.id));
     const out = snap.docs.map((x) => ({ ref: x.id, ...x.data() }))
-      .filter((o) => o.cust && !o.addOnTo && !o.partyQueuedAt)
+      .filter((o) => o.cust && !o.addOnTo && !o.partyQueuedAt && !hasLedger.has(accKey(o.mobile)))
       .sort((a, b) => (a.serial || 0) - (b.serial || 0)) // oldest first
       .map((o) => ({ ref: o.ref, serial: o.serial || null, cust: o.cust,
         advance: o.advanceAmt ? { paid: o.advanceAmt, utr: o.advanceUtr || null } : null }));
@@ -2174,7 +2178,8 @@ exports.accountVerify = onRequest(
     if (!key) return res.json({ ok: true, verified: false });
     const a = (await db.collection("bbapp_accounts").doc(key).get()).data();
     const india = key.length === 10;
-    return res.json({ ok: true, verified: true, mobile: key, india, status: (a && a.status) || "none",
+    const devKey = a ? await giveDevKey(db, key, a) : null; // new numbers get it at sign-up
+    return res.json({ ok: true, verified: true, mobile: key, india, devKey, status: (a && a.status) || "none",
       kind: (a && a.kind) || null, party: (a && a.party) || null, cust: (a && a.cust) || null,
       parties: india ? partiesFor(key) : [] });
   },
@@ -2198,7 +2203,7 @@ exports.accountClaim = onRequest(
       pincode: hit.pincode, bookingPlace: hit.dest, transport: hit.transport, taxId: hit.gstin, mobile: key, country: "India", kind: "old" },
     verifiedAt: Date.now(), log: admin.firestore.FieldValue.arrayUnion({ a: "📱 logged in", by: "app", at: Date.now() }) }, { merge: true });
     await accPost(db, key);
-    return res.json({ ok: true, status: "approved" });
+    return res.json({ ok: true, status: "approved", devKey: await giveDevKey(db, key, null) });
   },
 );
 
@@ -2294,6 +2299,7 @@ exports.accountSignup = onRequest(
         ...(auto ? [{ a: known ? "✅ auto-approved — pincode sales under ₹5 lakh" : "✅ auto-approved — no customer on this pincode yet", by: "bot", at: Date.now() + 1 }] : [])) }, { merge: true });
     if (auto && kycPath) await admin.storage().bucket().file(kycPath).delete().catch(() => {});
     await accPost(db, key);
+    const devKey = await giveDevKey(db, key, null);
     // Owner 14-Oct: an existing business without GST sends its shop card —
     // shown under the sign-up message in the group.
     if (card.length > 1000) {
@@ -2312,7 +2318,7 @@ exports.accountSignup = onRequest(
         }
       } catch (e) { logger.warn("card photo", { key, error: e.message }); }
     }
-    return res.json({ ok: true, status });
+    return res.json({ ok: true, status, devKey });
   },
 );
 
@@ -2673,3 +2679,35 @@ async function ipCountry(req) {
   } catch (e) { logger.warn("ipCountry", { error: e.message }); }
   return null;
 }
+
+
+/** Store review: a key for THIS device, kept on the account (several devices ok). */
+async function giveDevKey(db, key, a) {
+  const k = require("crypto").randomBytes(16).toString("hex");
+  await db.collection("bbapp_accounts").doc(key).set({ devKeys: admin.firestore.FieldValue.arrayUnion(k) }, { merge: true });
+  return k;
+}
+
+/** App: "Delete my account" (Apple 5.1.1(v)). Needs the device key. Orders
+ *  stay (bills / GST records); details, ID / card photos and keys go. */
+exports.accountDelete = onRequest(
+  { region: "asia-south1", secrets: [TG_TOKEN], timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
+  async (req, res) => {
+    if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
+    const db = admin.firestore();
+    const key = accKey(req.body && req.body.mobile);
+    const dk = String((req.body && req.body.devKey) || "");
+    if (!key || dk.length < 16) return res.json({ ok: false, error: "Please log in again, then delete." });
+    const ref = db.collection("bbapp_accounts").doc(key);
+    const a = (await ref.get()).data();
+    if (!a) return res.json({ ok: true, deleted: true });
+    if (!(a.devKeys || []).includes(dk)) return res.json({ ok: false, error: "Please log in again, then delete." });
+    for (const p of [a.kycPath, a.cardPath]) if (p) await admin.storage().bucket().file(p).delete().catch(() => {});
+    const blocked = a.status === "blocked";
+    await ref.delete();
+    if (blocked) await ref.set({ status: "blocked", deletedAt: Date.now() }); // a block survives deletion
+    const chat = await approvalsChat(db);
+    if (chat) await tg("sendMessage", { chat_id: chat, text: `🗑️ ${key} (${a.party || (a.cust || {}).billName || "-"}) deleted their app account.` }).catch(() => {});
+    return res.json({ ok: true, deleted: true });
+  },
+);

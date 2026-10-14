@@ -116,6 +116,9 @@ const String kWebsiteBase = 'https://bbsynthetics.in';
 /// deploy credits ran out). bbsynthetics.in stays for links / website.
 const String kDataBase = 'https://aknzone-afk.github.io/akn-zone-data';
 
+/// Store review: the privacy policy (GitHub Pages — Netlify deploys paused).
+const String kPrivacyUrl = '$kDataBase/privacy.html';
+
 const String kOrderConfigUrl = '$kDataBase/app/order-config-v3.json';
 /// Minimum build per platform (min_build_ios / min_build_android) → "Update now".
 const String kAppConfigUrl = '$kDataBase/app/app-config.json';
