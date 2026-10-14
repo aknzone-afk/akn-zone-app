@@ -62,6 +62,10 @@ platform :ios do
       version:              marketing_version,
       initial_build_number: 0
     ) + 1
+    # Owner 14-Oct: use the pubspec build number (e.g. 147) when it is higher,
+    # so the app's min_build_ios force-update can compare builds.
+    pubspec_build = pubspec_version.split("+")[1].to_i
+    build_number = [build_number, pubspec_build].max
     UI.message("Building #{APP_IDENTIFIER} #{marketing_version} (#{build_number})")
 
     # 5. Runner target only: Automatic → Manual signing with the match profile.
