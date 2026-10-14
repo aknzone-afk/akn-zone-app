@@ -77,7 +77,7 @@ class _DesignLinkScreenState extends ConsumerState<DesignLinkScreen> {
     }
 
     return Scaffold(
-      appBar: AppBar(title: const UText('AKN ZONE')),
+      appBar: AppBar(title: const UText('B.B SYNTHETICS')),
       body: Center(
         child: Padding(
           padding: const EdgeInsets.all(28),

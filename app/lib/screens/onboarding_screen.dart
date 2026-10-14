@@ -87,7 +87,7 @@ class _Wordmark extends StatelessWidget {
   const _Wordmark();
   @override
   Widget build(BuildContext context) => const UText(
-        'AKN Zone',
+        'B.B Synthetics',
         textAlign: TextAlign.center,
         style: TextStyle(
             fontFamily: 'Playfair',
@@ -147,8 +147,8 @@ class AccountRemovedScreen extends StatelessWidget {
       const SizedBox(height: 10),
       Text(
         declined
-            ? 'Your account was not approved. Please contact AKN Zone.'
-            : 'Your access to the AKN Zone catalog has been removed. Please contact AKN Zone.',
+            ? 'Your account was not approved. Please contact B.B Synthetics.'
+            : 'Your access to the B.B Synthetics catalog has been removed. Please contact B.B Synthetics.',
         textAlign: TextAlign.center,
         style: const TextStyle(fontSize: 15, height: 1.5),
       ),
@@ -676,7 +676,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
     return _Page(children: [
       const _Wordmark(),
       const SizedBox(height: 26),
-      const Text('Welcome to AKN Zone',
+      const Text('Welcome to B.B Synthetics',
           textAlign: TextAlign.center,
           style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: _dark)),
       const SizedBox(height: 8),
@@ -910,7 +910,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
                             style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: _dark)),
                         const SizedBox(height: 10),
                         const Text(
-                          'Thank you! AKN Zone is checking your details. We will notify you as soon '
+                          'Thank you! B.B Synthetics is checking your details. We will notify you as soon '
                           'as your account is approved — the catalog then opens by itself.',
                           textAlign: TextAlign.center,
                           style: TextStyle(fontSize: 15, height: 1.5),
@@ -1496,7 +1496,7 @@ class _SignupFormState extends State<_SignupForm> {
                 Text('✓ Verified: ${widget.mobileLabel}',
                     style: const TextStyle(color: _green, fontWeight: FontWeight.w800)),
               const SizedBox(height: 6),
-              const Text('New customer — please fill your details. AKN Zone will approve your account.',
+              const Text('New customer — please fill your details. B.B Synthetics will approve your account.',
                   style: TextStyle(fontSize: 14, height: 1.4)),
               const SizedBox(height: 16),
               TextFormField(

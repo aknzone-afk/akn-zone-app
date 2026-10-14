@@ -19,7 +19,7 @@ const String _channelId = 'daily_update';
 const AndroidNotificationChannel _chatChannel = AndroidNotificationChannel(
   'chat',
   'Shop messages',
-  description: 'Bills, payment notes and replies from AKN Zone',
+  description: 'Bills, payment notes and replies from B.B Synthetics',
   importance: Importance.high,
 );
 
@@ -103,7 +103,7 @@ class NotificationService {
         android: AndroidNotificationDetails(
           'chat',
           'Shop messages',
-          channelDescription: 'Bills, payment notes and replies from AKN Zone',
+          channelDescription: 'Bills, payment notes and replies from B.B Synthetics',
           importance: Importance.high,
           priority: Priority.high,
         ),
@@ -143,7 +143,7 @@ class NotificationService {
     await _plugin.zonedSchedule(
       id: _dailyId,
       title: 'New designs this week! 🆕',
-      body: "Tap to see the latest updates from AKN Zone.",
+      body: "Tap to see the latest updates from B.B Synthetics.",
       scheduledDate: _nextSunday(_dailyHour, _dailyMinute),
       notificationDetails: _details,
       androidScheduleMode: AndroidScheduleMode.inexactAllowWhileIdle,

@@ -31,7 +31,7 @@ const int kOcrBatchSize = 128;
 const int kDetailImageWidth = 2000;
 
 /// App branding.
-const String kAppTitle = 'AKN ZONE';
+const String kAppTitle = 'B.B SYNTHETICS';
 const String kBrandSubtitle = 'SURAT SAREE MANUFACTURER';
 
 /// Default WhatsApp number for the "Contact us" CTA (international format,

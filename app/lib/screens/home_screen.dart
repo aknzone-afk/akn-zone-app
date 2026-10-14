@@ -39,7 +39,7 @@ class HomeScreen extends ConsumerWidget {
     }
 
     return Scaffold(
-      // Owner 12-Oct: only the AKN ZONE logo (no "Surat saree manufacturer"
+      // Owner 12-Oct: only the B.B SYNTHETICS logo (no "Surat saree manufacturer"
       // text) + four boxed buttons with icon AND word.
       appBar: AppBar(
         toolbarHeight: 72,
@@ -329,7 +329,7 @@ void _showShopInfo(BuildContext context) {
     builder: (_) {
       final scheme = Theme.of(context).colorScheme;
       return AlertDialog(
-        title: const UText('AKN Zone',
+        title: const UText('B.B Synthetics',
             style: TextStyle(fontWeight: FontWeight.w800)),
         contentPadding: const EdgeInsets.fromLTRB(24, 14, 24, 8),
         content: Column(
@@ -446,7 +446,7 @@ class _BrandTitle extends ConsumerWidget {
                 TextSpan(
                   children: [
                     TextSpan(
-                      text: 'AKN ZONE',
+                      text: 'B.B SYNTHETICS',
                       style: TextStyle(
                         fontFamily: 'Playfair',
                         fontWeight: FontWeight.w700,

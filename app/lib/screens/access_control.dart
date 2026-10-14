@@ -317,7 +317,7 @@ class _GateWordmark extends StatelessWidget {
     return Column(
       children: [
         const UText(
-          'AKN Zone',
+          'B.B Synthetics',
           textAlign: TextAlign.center,
           style: TextStyle(
             fontFamily: 'Playfair',
@@ -646,7 +646,7 @@ class RemovedScreen extends StatelessWidget {
       icon: Icons.lock_outline_rounded,
       title: 'Access not available',
       message:
-          'Your access is currently not available. Please contact AKN Zone for details.',
+          'Your access is currently not available. Please contact B.B Synthetics for details.',
       actions: [
         OutlinedButton(onPressed: onRetry, child: const UText('Try again')),
       ],
@@ -706,7 +706,7 @@ class DeviceConflictScreen extends StatelessWidget {
       title: 'Active on another device',
       message:
           'This number is already in use on the maximum number of devices. '
-          'Please contact AKN Zone to transfer your access to this device.',
+          'Please contact B.B Synthetics to transfer your access to this device.',
       actions: [
         FilledButton.icon(
           onPressed: _requestTransfer,

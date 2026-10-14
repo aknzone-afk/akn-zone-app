@@ -465,7 +465,7 @@ class _GlassPanel extends StatelessWidget {
               const Text.rich(
                 TextSpan(
                   children: [
-                    TextSpan(text: 'LOADING AKN ZONE'),
+                    TextSpan(text: 'LOADING B.B SYNTHETICS'),
                     WidgetSpan(
                       alignment: PlaceholderAlignment.top,
                       child: Padding(

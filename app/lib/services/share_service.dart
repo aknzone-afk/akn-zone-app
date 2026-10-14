@@ -66,7 +66,7 @@ class ShareService {
     await Share.shareXFiles(
       files,
       text: message,
-      subject: 'AKN Zone catalog',
+      subject: 'B.B Synthetics catalog',
       // iOS requires a non-zero anchor rect; this path has no widget context,
       // so use a minimal valid rect (this share path is currently unused).
       sharePositionOrigin: const Rect.fromLTWH(0, 0, 1, 1),

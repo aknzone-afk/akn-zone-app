@@ -161,7 +161,7 @@ class ChatService {
     final fresh = msgs.where((m) => !m.mine && m.at > last && m.at > seen).toList();
     if (fresh.isEmpty) return;
     final m = fresh.last;
-    await show('AKN ZONE', m.text.isNotEmpty ? m.text : '📎 You have a new file from AKN ZONE');
+    await show('B.B SYNTHETICS', m.text.isNotEmpty ? m.text : '📎 You have a new file from B.B SYNTHETICS');
     await p.setInt(_kNotified, m.at);
   }
 

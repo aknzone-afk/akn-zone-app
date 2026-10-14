@@ -1465,7 +1465,7 @@ async function pushTo(db, mobile, body, route = "/chat") {
     const tokens = fcmDocs.map((d) => d.get("token"));
     const r = await admin.messaging().sendEachForMulticast({
       tokens,
-      notification: { title: "AKN ZONE", body: String(body || "New message").slice(0, 180) },
+      notification: { title: "B.B SYNTHETICS", body: String(body || "New message").slice(0, 180) },
       data: { route },
       apns: { payload: { aps: { sound: "default", badge: 1 } } },
       android: { priority: "high", notification: { sound: "default", channelId: "chat" } }, // heads-up channel
@@ -1525,7 +1525,7 @@ function apnsSend(deviceToken, text, host = "api.push.apple.com", route = "/chat
       req.setTimeout(10000, () => { req.close(); finish(0); });
       // "gcm.message_id": firebase_messaging reports a tap / a foreground
       // arrival to the app only when this key is present (tester 13-Oct).
-      req.end(JSON.stringify({ aps: { alert: { title: "AKN ZONE", body: text }, sound: "default", badge: 1 },
+      req.end(JSON.stringify({ aps: { alert: { title: "B.B SYNTHETICS", body: text }, sound: "default", badge: 1 },
         route, "gcm.message_id": `${Date.now()}-${Math.random().toString(36).slice(2, 10)}` }));
     } catch (e) {
       logger.warn("apns send", { error: e.message });
@@ -2139,7 +2139,7 @@ async function accountTap(db, q, act, key) {
     await tg("editMessageText", { chat_id: q.message.chat.id, message_id: q.message.message_id,
       text: accText(key, fresh), parse_mode: "HTML", reply_markup: accKeyboard(key, fresh.status) });
   }
-  if (act === "ok") await pushTo(db, key, "✅ Your AKN Zone account is approved — open the app and start ordering.");
+  if (act === "ok") await pushTo(db, key, "✅ Your B.B Synthetics account is approved — open the app and start ordering.");
   // Owner 14-Oct: the PAN / Aadhaar photo is only kept until the decision.
   if ((act === "ok" || act === "no") && fresh.kycPath) {
     await admin.storage().bucket().file(fresh.kycPath).delete().catch(() => {});
@@ -2156,7 +2156,22 @@ async function verifiedKey(db, code) {
   return accKey(v.from);
 }
 
-function partiesFor(key) {
+/** Owner 14-Oct: a fresh live Tally answer (shop PC) beats the saved list. */
+async function partiesLive(db, key) {
+  const lk = (await db.collection("bbapp_lookup").doc(key).get()).data();
+  if (lk && lk.ok && lk.done && Date.now() - lk.done < 30 * 60e3) return lk.parties || [];
+  return null;
+}
+
+async function partiesFor(key, db) {
+  if (db) {
+    const live = await partiesLive(db, key);
+    if (live) return live;
+  }
+  return partiesSaved(key);
+}
+
+function partiesSaved(key) {
   try {
     if (!PARTIES) PARTIES = require("./parties.json");
   } catch (e) {
@@ -2176,12 +2191,45 @@ exports.accountVerify = onRequest(
     const db = admin.firestore();
     const key = await verifiedKey(db, req.body && req.body.code);
     if (!key) return res.json({ ok: true, verified: false });
-    const a = (await db.collection("bbapp_accounts").doc(key).get()).data();
+    let a = (await db.collection("bbapp_accounts").doc(key).get()).data();
     const india = key.length === 10;
+    let parties = null;
+    if (india) {
+      // Owner 14-Oct: ask Tally live (shop PC). The app keeps polling while
+      // we wait (verified:false), at most ~12 s, then the saved list.
+      const lref = db.collection("bbapp_lookup").doc(key);
+      const lk = (await lref.get()).data() || {};
+      const hb = ((await db.collection("bbapp_settings").doc("lookup").get()).data() || {}).at || 0;
+      const pcUp = Date.now() - hb < 90e3;
+      const fresh = lk.req && Date.now() - lk.req < 3 * 60e3;
+      if (!fresh) {
+        if (pcUp) {
+          await lref.set({ req: Date.now(), done: null, ok: null, parties: [] });
+          return res.json({ ok: true, verified: false, checking: true });
+        }
+      } else if (!lk.done && pcUp && Date.now() - lk.req < 12e3) {
+        return res.json({ ok: true, verified: false, checking: true });
+      }
+      const live = lk.done && lk.ok && fresh ? (lk.parties || []) : null;
+      parties = live || partiesSaved(key);
+      if (live && a && a.status === "approved") {
+        const linked = a.kind === "existing" && live.some((p) => p.name === a.party);
+        if (a.kind === "existing" && !linked) {
+          // The number left that party in Tally -> link again / sign up.
+          await db.collection("bbapp_accounts").doc(key).set({ status: "none", kind: null, party: null,
+            log: admin.firestore.FieldValue.arrayUnion({ a: `↩️ number no longer in ${a.party} (Tally) — asked again`, by: "bot", at: Date.now() }) }, { merge: true });
+          a = { ...a, status: "none", kind: null, party: null };
+        } else if (a.kind === "new" && live.length) {
+          // The shop made / found a ledger with this number -> pick it.
+          a = { ...a, status: "none" };
+        }
+      }
+      if (live && a && a.status === "pending" && live.length) a = { ...a, status: "none" };
+    }
     const devKey = a ? await giveDevKey(db, key, a) : null; // new numbers get it at sign-up
     return res.json({ ok: true, verified: true, mobile: key, india, devKey, status: (a && a.status) || "none",
       kind: (a && a.kind) || null, party: (a && a.party) || null, cust: (a && a.cust) || null,
-      parties: india ? partiesFor(key) : [] });
+      parties: india ? (parties || []) : [] });
   },
 );
 
@@ -2194,7 +2242,7 @@ exports.accountClaim = onRequest(
     const key = await verifiedKey(db, req.body && req.body.code);
     if (!key) return res.json({ ok: false, error: "Please verify your number on WhatsApp again." });
     const name = String((req.body && req.body.party) || "");
-    const hit = partiesFor(key).find((x) => x.name === name);
+    const hit = (await partiesFor(key, db)).find((x) => x.name === name);
     if (!hit) return res.json({ ok: false, error: "This party is not on this number." });
     const ref = db.collection("bbapp_accounts").doc(key);
     const cur = (await ref.get()).data();
@@ -2709,5 +2757,28 @@ exports.accountDelete = onRequest(
     const chat = await approvalsChat(db);
     if (chat) await tg("sendMessage", { chat_id: chat, text: `🗑️ ${key} (${a.party || (a.cust || {}).billName || "-"}) deleted their app account.` }).catch(() => {});
     return res.json({ ok: true, deleted: true });
+  },
+);
+
+
+/** Shop PC (tally_lookup.py, every few seconds): numbers waiting for a live
+ *  Tally check; also its heartbeat (no heartbeat -> the cloud does not wait). */
+exports.lookupQueue = onRequest(
+  { region: "asia-south1", secrets: [PC_KEY], timeoutSeconds: 20, memory: "256MiB", maxInstances: 1, invoker: "public" },
+  async (req, res) => {
+    if (req.method !== "POST" || !pcOk(req)) return res.status(403).json({ ok: false });
+    const db = admin.firestore();
+    const b = req.body || {};
+    for (const r of (b.results || []).slice(0, 20)) {
+      const key = accKey(r.key);
+      if (!key) continue;
+      await db.collection("bbapp_lookup").doc(key).set({ done: Date.now(), ok: !!r.ok,
+        parties: (r.parties || []).slice(0, 10).map((x) => ({ name: String(x.name || ""), address: String(x.address || ""),
+          dest: String(x.dest || ""), pincode: String(x.pincode || ""), gstin: String(x.gstin || ""), transport: String(x.transport || "") })) }, { merge: true });
+    }
+    await db.collection("bbapp_settings").doc("lookup").set({ at: Date.now() });
+    const q = await db.collection("bbapp_lookup").where("done", "==", null).get();
+    const keys = q.docs.filter((d) => Date.now() - (d.get("req") || 0) < 3 * 60e3).map((d) => d.id);
+    return res.json({ ok: true, keys });
   },
 );

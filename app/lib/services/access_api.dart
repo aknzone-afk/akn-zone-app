@@ -210,7 +210,7 @@ class AccessApi {
         'Firm: $firm\n'
         'City: $city\n'
         'Mobile: ${normalisePhone(phone)}\n'
-        'Please approve my access to the AKN Zone catalog.';
+        'Please approve my access to the B.B Synthetics catalog.';
     return Uri.parse(
         'https://wa.me/$ownerWhatsApp?text=${Uri.encodeComponent(msg)}');
   }

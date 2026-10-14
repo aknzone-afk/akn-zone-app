@@ -139,7 +139,7 @@ class _ChatBubbleState extends ConsumerState<ChatBubble> with WidgetsBindingObse
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      'AKN ZONE: ${_popup!.text.isNotEmpty ? _popup!.text : (_popup!.file ? '📎 sent you a file' : 'new message')}',
+                      'B.B SYNTHETICS: ${_popup!.text.isNotEmpty ? _popup!.text : (_popup!.file ? '📎 sent you a file' : 'new message')}',
                       maxLines: 2,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),

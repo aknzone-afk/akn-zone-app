@@ -155,7 +155,7 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
       context: context,
       builder: (c) => AlertDialog(
         title: const Text('Delete your account?'),
-        content: const Text('Your AKN Zone account, your details and your ID / shop photos will be deleted. '
+        content: const Text('Your B.B Synthetics account, your details and your ID / shop photos will be deleted. '
             'Orders already placed stay with us for billing. You can sign up again any time.'),
         actions: [
           TextButton(onPressed: () => Navigator.pop(c, false), child: const Text('Cancel')),
