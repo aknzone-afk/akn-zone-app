@@ -112,9 +112,8 @@ void _openDailyUpdate(String payload) {
     openChat(); // bill / shop message notification
     return;
   }
-  // Open the folder immediately so the tap feels instant (cached view first),
-  // then refresh in the background.
-  appRouter.push('/folder/${Uri.encodeComponent(payload)}');
+  // Owner 15-Oct: the 9 PM push opens the DAILY UPDATE history (day bubbles).
+  appRouter.push('/daily');
   final c = _rootContainer;
   if (c == null) return;
   // FAST PATH: refresh ONLY this one folder from Drive (1–2 requests) and

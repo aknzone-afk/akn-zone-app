@@ -2614,10 +2614,20 @@ exports.dailyDesignPush = onSchedule(
   { region: "asia-south1", schedule: "0 21 * * *", timeZone: "Asia/Kolkata", secrets: [APNS_KEY], timeoutSeconds: 300, memory: "256MiB" },
   async () => {
     const db = admin.firestore();
+    // Owner 15-Oct: tell how many designs came today (Daily Update history);
+    // no push on a day with nothing new.
+    let today = 0;
+    try {
+      const f = await (await fetch(`https://aknzone-afk.github.io/akn-zone-data/app/daily-feed.json?t=${Date.now()}`)).json();
+      const ymd = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
+      today = ((f.days || []).find((x) => x.d === ymd) || { items: [] }).items.length;
+    } catch (e) { logger.warn("daily feed", { error: e.message }); today = -1; }
+    if (today === 0) { logger.info("daily design push: nothing new today"); return; }
+    const text = today > 0 ? `🆕 ${today} new design${today === 1 ? "" : "s"} today — tap to see DAILY UPDATE` : "🆕 New designs are in — check DAILY UPDATE";
     const snap = await db.collection("bbapp_accounts").where("status", "==", "approved").get();
     let n = 0;
     for (const d of snap.docs) {
-      await pushTo(db, d.id, "🆕 New designs are in — check DAILY UPDATE", "daily");
+      await pushTo(db, d.id, text, "daily");
       n++;
     }
     logger.info("daily design push", { accounts: n });

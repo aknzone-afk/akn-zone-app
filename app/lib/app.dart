@@ -16,6 +16,7 @@ import 'screens/tutorial_screen.dart';
 import 'screens/chat_screen.dart';
 import 'screens/order_detail_screen.dart';
 import 'screens/advance_screen.dart';
+import 'screens/daily_feed_screen.dart';
 import 'widgets/chat_bubble.dart';
 import 'widgets/keyboard_hide.dart';
 import 'screens/whats_new_screen.dart';
@@ -75,6 +76,12 @@ final appRouter = GoRouter(
           PickScreen(photoId: Uri.decodeComponent(s.pathParameters['id']!)),
     ),
     GoRoute(path: '/orders', builder: (_, __) => const MyOrdersScreen()),
+    // Owner 15-Oct: DAILY UPDATE history (one bubble per day).
+    GoRoute(path: '/daily', builder: (_, __) => const DailyFeedScreen()),
+    GoRoute(
+      path: '/daily/:date',
+      builder: (_, s) => DailyDayScreen(date: s.pathParameters['date']!),
+    ),
     GoRoute(path: '/whats-new', builder: (_, __) => const WhatsNewScreen()),
     // Links from videos / reels / WhatsApp (https://bbsynthetics.in/... or
     // aknzone://open/...).

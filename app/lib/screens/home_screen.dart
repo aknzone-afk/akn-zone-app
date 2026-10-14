@@ -9,6 +9,7 @@ import '../config.dart';
 import '../models/folder.dart';
 import '../providers/providers.dart';
 import 'tutorial_screen.dart';
+import 'daily_feed_screen.dart';
 import '../widgets/bar_button.dart';
 import '../widgets/filter_sheet.dart';
 import '../widgets/loading_collage.dart';
@@ -44,26 +45,42 @@ class HomeScreen extends ConsumerWidget {
       appBar: AppBar(
         toolbarHeight: 72,
         leadingWidth: 64,
+        // Owner 15-Oct: TUTORIAL sits on the left (where the logo was).
         leading: Padding(
-          padding: const EdgeInsets.fromLTRB(12, 6, 4, 6),
-          child: Image.asset('assets/icon/bb_logo.png', fit: BoxFit.contain),
+          padding: const EdgeInsets.fromLTRB(8, 8, 2, 8),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(10),
+            onTap: () {
+              if (Tutorial.videoId(ref.read(sharedPreferencesProvider)) == null) {
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+                    content: Text('How-to-order video coming soon.')));
+                return;
+              }
+              context.push('/tutorial');
+            },
+            child: Container(
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Theme.of(context).colorScheme.outline),
+              ),
+              child: const Column(mainAxisAlignment: MainAxisAlignment.center, children: [
+                Icon(Icons.play_circle_outline_rounded, size: 22),
+                Text('HOW TO', style: TextStyle(fontSize: 8.5, fontWeight: FontWeight.w800, letterSpacing: 0.3)),
+              ]),
+            ),
+          ),
         ),
         titleSpacing: 4,
         title: Row(children: [
           Expanded(
+            // Owner 15-Oct: DAILY UPDATE (day-wise history, like WhatsApp).
             child: BarButton(
               stacked: true,
-              icon: Icons.play_circle_outline_rounded,
-              label: 'TUTORIAL',
-              sub: '(How to order)',
-              onTap: () {
-                if (Tutorial.videoId(ref.read(sharedPreferencesProvider)) == null) {
-                  ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                      content: Text('How-to-order video coming soon.')));
-                  return;
-                }
-                context.push('/tutorial');
-              },
+              icon: Icons.fiber_new_rounded,
+              label: 'DAILY',
+              sub: 'UPDATE',
+              count: ref.watch(dailyTodayCountProvider),
+              onTap: () => context.push('/daily'),
             ),
           ),
           const SizedBox(width: 6),
