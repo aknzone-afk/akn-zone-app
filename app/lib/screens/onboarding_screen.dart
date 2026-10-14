@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:catalog_app/widgets/caps_text.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:flutter/services.dart';
@@ -588,10 +589,16 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
           india: _vIndia,
           country: _vIndia ? 'India' : (_india ? 'Other' : _country),
           header: _mismatchNote(),
-          mobileLabel: _shownMobile(_vMobile, _vIndia),
-          onBack: _parties.isNotEmpty ? () => setState(() => _step = _Step.pick) : _changeNumber,
+          abroad: _abroad,
+          mobileLabel: _abroad ? '' : _shownMobile(_vMobile, _vIndia),
+          onBack: _abroad
+              ? () => setState(() {
+                    _abroad = false;
+                    _step = _Step.phone;
+                  })
+              : (_parties.isNotEmpty ? () => setState(() => _step = _Step.pick) : _changeNumber),
           onResult: (status, cust) => _afterSubmit({
-            'mobile': _vMobile,
+            'mobile': _abroad ? '${cust['mobile'] ?? ''}' : _vMobile,
             'india': _vIndia,
             'status': status,
             'kind': 'new',
@@ -647,7 +654,24 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
     ]);
   }
 
+  /// Owner 14-Oct: network location — 'IN', another code, or null (unknown).
+  String? _netCountry;
+  bool _abroad = false;
+
+  Future<void> _checkNetCountry() async {
+    try {
+      final r = await AccountService.dio.get<String>('https://www.cloudflare.com/cdn-cgi/trace',
+          options: Options(receiveTimeout: const Duration(seconds: 5), sendTimeout: const Duration(seconds: 5)));
+      final m = RegExp(r'^loc=([A-Z]{2})$', multiLine: true).firstMatch(r.data ?? '');
+      if (m != null && mounted) setState(() => _netCountry = m.group(1));
+    } catch (_) {}
+  }
+
   Widget _phoneScreen() {
+    if (_netCountry == null) {
+      // ignore: discarded_futures
+      _checkNetCountry();
+    }
     return _Page(children: [
       const _Wordmark(),
       const SizedBox(height: 26),
@@ -660,6 +684,23 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
       const SizedBox(height: 22),
       _BigButton(
           label: 'Login with WhatsApp', icon: Icons.chat_rounded, color: _green, onPressed: _verify),
+      if (_netCountry != null && _netCountry != 'IN') ...[
+        const SizedBox(height: 18),
+        const Text('Outside India? No login needed.',
+            textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
+        const SizedBox(height: 8),
+        OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(52)),
+          onPressed: () => setState(() {
+            _abroad = true;
+            _vIndia = false;
+            _country = 'Other';
+            _step = _Step.form;
+          }),
+          icon: const Icon(Icons.public_rounded),
+          label: const UText('Continue — I am outside India'),
+        ),
+      ],
       const SizedBox(height: 12),
       const Text(
         'WhatsApp opens with a message ready — just tap SEND and come back to this app.',
@@ -713,8 +754,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
             style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, letterSpacing: 2, color: _dark)),
         const SizedBox(height: 6),
         const Text(
-          'No WhatsApp on this phone / iPad? Scan this QR with the phone that has WhatsApp and tap SEND there.\n'
-          'No WhatsApp at all? Call us on +91 70166 38059 and tell us this code.',
+          'Using an iPad or another phone? Scan this QR with the phone that has WhatsApp and tap SEND there.',
           textAlign: TextAlign.center,
           style: TextStyle(fontSize: 13, color: Colors.black54, height: 1.45),
         ),
@@ -917,6 +957,10 @@ class _SignupForm extends StatefulWidget {
   final String mobileLabel;
   final VoidCallback onBack;
 
+  /// Owner 14-Oct: customer abroad, no WhatsApp login — the form asks the
+  /// mobile number (with country code) and the cloud approves at once.
+  final bool abroad;
+
   /// accountSignup's status + the details sent (without the photo).
   final Future<void> Function(String status, Map<String, dynamic> cust) onResult;
   const _SignupForm({
@@ -928,6 +972,7 @@ class _SignupForm extends StatefulWidget {
     required this.mobileLabel,
     required this.onBack,
     required this.onResult,
+    this.abroad = false,
   });
 
   @override
@@ -950,6 +995,7 @@ class _SignupFormState extends State<_SignupForm> {
   final _transport = TextEditingController();
   final _transportFocus = FocusNode();
   final _gst = TextEditingController();
+  final _mobileAbroad = TextEditingController();
   final _pan = TextEditingController();
   final _aadhaar = TextEditingController();
   late String _country = widget.country;
@@ -959,7 +1005,7 @@ class _SignupFormState extends State<_SignupForm> {
   _KycPhoto? _cardPhoto; // shop / visiting card (existing business, no GST)
 
   /// Owner 14-Oct: an existing saree business without GST shows its card.
-  bool get _needCard => _india && _businessType == 'existing_business';
+  bool get _needCard => _india && !_hasGst && _businessType == 'existing_business';
   bool _reading = false;
   String? _photoErr;
 
@@ -1284,7 +1330,7 @@ class _SignupFormState extends State<_SignupForm> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        const Text('Existing shop: add a photo of your visiting card or your shop board *',
+        const Text('Old saree shop: add a photo of your visiting card or your shop board *',
             style: TextStyle(fontWeight: FontWeight.w700)),
         if (ph != null)
           Padding(
@@ -1310,7 +1356,9 @@ class _SignupFormState extends State<_SignupForm> {
     FocusScope.of(context).unfocus();
     final okFields = _formKey.currentState?.validate() ?? false;
     final idErr = _idError();
-    final bizErr = _businessType == null
+    final bizErr = (_india && _hasGst)
+        ? null
+        : _businessType == null
         ? 'Please choose your business type.'
         : (_needCard && _cardPhoto == null ? 'Please add a photo of your shop / visiting card.' : null);
     setState(() {
@@ -1346,7 +1394,7 @@ class _SignupFormState extends State<_SignupForm> {
     final cust = <String, dynamic>{
       'contact': _contact.text.trim(),
       'billName': _bill.text.trim().toUpperCase(),
-      'businessType': _businessType,
+      'businessType': (_india && _hasGst) ? 'gst_business' : _businessType,
       'address': _address.text.trim(),
       'pincode': _india ? _pin.text.trim() : '',
       'bookingPlace': _place.text.trim().toUpperCase(),
@@ -1357,13 +1405,15 @@ class _SignupFormState extends State<_SignupForm> {
     };
     setState(() => _sending = true);
     try {
-      final d = await AccountService.signup(widget.code, {
+      final abroadMobile = widget.abroad ? (OrderService.normalizeForeignMobile(_mobileAbroad.text) ?? '') : '';
+      if (widget.abroad) cust['mobile'] = abroadMobile;
+      final d = await (widget.abroad ? AccountService.signupAbroad(abroadMobile, cust) : AccountService.signup(widget.code, {
         ...cust,
         if (photo != null) 'kycImage': base64Encode(photo.jpg),
         if (photo != null) 'kycText': photo.text,
         if (_needCard && _cardPhoto != null) 'cardImage': base64Encode(_cardPhoto!.jpg),
         if (_needCard && _cardPhoto != null) 'cardText': _cardPhoto!.text,
-      });
+      }));
       if (!mounted) return;
       if (d == null) {
         setState(() => _error = 'No internet — please check your connection and try again.');
@@ -1437,8 +1487,9 @@ class _SignupFormState extends State<_SignupForm> {
             padding: const EdgeInsets.fromLTRB(18, 14, 18, 30),
             children: [
               widget.header,
-              Text('✓ Verified: ${widget.mobileLabel}',
-                  style: const TextStyle(color: _green, fontWeight: FontWeight.w800)),
+              if (widget.mobileLabel.isNotEmpty)
+                Text('✓ Verified: ${widget.mobileLabel}',
+                    style: const TextStyle(color: _green, fontWeight: FontWeight.w800)),
               const SizedBox(height: 6),
               const Text('New customer — please fill your details. AKN Zone will approve your account.',
                   style: TextStyle(fontSize: 14, height: 1.4)),
@@ -1534,6 +1585,24 @@ class _SignupFormState extends State<_SignupForm> {
                 validator: (v) => _need(v, 2, _india ? 'Enter booking place' : 'Enter your city'),
               ),
               const SizedBox(height: 12),
+              if (widget.abroad) ...[
+                TextFormField(
+                  controller: _mobileAbroad,
+                  keyboardType: TextInputType.phone,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[0-9+ \-]')),
+                    LengthLimitingTextInputFormatter(20),
+                  ],
+                  decoration: _dec('Mobile / WhatsApp number with country code *', hint: 'e.g. 971 50 123 4567'),
+                  validator: (v) {
+                    final m = OrderService.normalizeForeignMobile(v ?? '');
+                    if (m == null) return 'Enter your full number with country code';
+                    if (m.startsWith('91') && m.length == 12) return 'Indian numbers log in with WhatsApp';
+                    return null;
+                  },
+                ),
+                const SizedBox(height: 12),
+              ],
               if (!_india)
                 DropdownButtonFormField<String>(
                   key: ValueKey('signup-country-$_country'),
@@ -1566,6 +1635,8 @@ class _SignupFormState extends State<_SignupForm> {
                   ),
                 _usualTransports(),
               ],
+              // Owner 14-Oct: with a GST number there is no old / new question.
+              if (!_india || !_hasGst) ...[
               const SizedBox(height: 18),
               // Owner 14-Oct 09:15: business type is the LAST question.
               const Text('Business type *',
@@ -1573,7 +1644,7 @@ class _SignupFormState extends State<_SignupForm> {
               const SizedBox(height: 6),
               for (final o in const [
                 ('new_startup', 'New startup (new to saree business)', Icons.rocket_launch_rounded),
-                ('existing_business', 'Existing saree shop', Icons.storefront_rounded),
+                ('existing_business', 'Old saree shop', Icons.storefront_rounded),
               ])
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8),
@@ -1615,6 +1686,7 @@ class _SignupFormState extends State<_SignupForm> {
                   padding: const EdgeInsets.only(left: 4, bottom: 6),
                   child: Text(_bizErr!, style: const TextStyle(color: _red, fontWeight: FontWeight.w700)),
                 ),
+              ],
               const SizedBox(height: 14),
               if (_error != null)
                 Padding(

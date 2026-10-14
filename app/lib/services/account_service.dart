@@ -142,6 +142,11 @@ class AccountService {
   static Future<Map<String, dynamic>?> signup(String code, Map<String, dynamic> cust) =>
       _post('accountSignup', {'code': code, 'cust': cust}, secs: 60);
 
+  /// Owner 14-Oct: customer abroad — no WhatsApp code; the cloud checks the
+  /// network is outside India and the number is not Indian.
+  static Future<Map<String, dynamic>?> signupAbroad(String mobile, Map<String, dynamic> cust) =>
+      _post('accountSignup', {'abroad': true, 'mobile': mobile, 'cust': cust}, secs: 60);
+
   static Future<Map<String, dynamic>?> checkStatus(String mobile) =>
       _post('accountStatus', {'mobile': mobile});
 

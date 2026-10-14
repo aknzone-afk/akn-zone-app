@@ -2093,7 +2093,7 @@ function accText(key, a) {
   else {
     lines.push(...(a.kind === "foreign" ? ["🌍 Outside India"] : []),
       ...(c.contact ? [`Name: ${escH(c.contact)}`] : []), `Bill name: ${escH(c.billName || "-")}`,
-      ...(c.businessType ? [`Business: ${c.businessType === "new_startup" ? "🌱 NEW STARTUP" : "🏪 EXISTING SAREE BUSINESS"}`] : []),
+      ...(c.businessType ? [`Business: ${c.businessType === "new_startup" ? "🌱 NEW STARTUP" : "🏪 OLD SAREE SHOP"}`] : []),
       `Address: ${escH(c.address || "-")}`,
       ...(c.pincode ? [`Pincode: ${escH(c.pincode)}`] : []),
       `Destination: ${escH(c.bookingPlace || "-")}${c.country && c.country !== "India" ? " · " + escH(c.country) : ""}`,
@@ -2208,11 +2208,28 @@ exports.accountSignup = onRequest(
   async (req, res) => {
     if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
     const db = admin.firestore();
-    const key = await verifiedKey(db, req.body && req.body.code);
+    let key = await verifiedKey(db, req.body && req.body.code);
+    let abroadDirect = false;
+    if (!key && req.body && req.body.abroad) {
+      // Owner 14-Oct: customer abroad — no WhatsApp login, approved at once,
+      // but only from a network outside India and with a non-Indian number.
+      const k = accKey(req.body.mobile);
+      if (!k || k.length === 10) return res.json({ ok: false, error: "Indian numbers log in with WhatsApp." });
+      const cc = await ipCountry(req);
+      if (cc !== "ABROAD") {
+        return res.json({ ok: false, error: cc === "IN" ? "You are in India — please log in with WhatsApp." : "Could not check your location — please log in with WhatsApp." });
+      }
+      key = k;
+      abroadDirect = true;
+    }
     if (!key) return res.json({ ok: false, error: "Please verify your number on WhatsApp again." });
     const c = (req.body && req.body.cust) || {};
     const cust = Object.fromEntries(["contact", "billName", "address", "pincode", "bookingPlace", "transport", "taxId", "country", "kycDoc", "businessType"]
       .map((k) => [k, String(c[k] || "").trim().slice(0, 300)]));
+    // Security (14-Oct): an Indian number is ALWAYS India — the chosen
+    // country can never skip the ID checks.
+    if (key.length === 10) cust.country = "India";
+    if (abroadDirect && cust.country === "India") cust.country = "Other";
     cust.country = cust.country || "India";
     cust.mobile = key;
     cust.kind = "new";
@@ -2223,6 +2240,7 @@ exports.accountSignup = onRequest(
     }
     const ref = db.collection("bbapp_accounts").doc(key);
     const cur = (await ref.get()).data();
+    if (abroadDirect && cur) return res.json({ ok: false, error: "This number already has an account — please log in with WhatsApp." });
     if (cur && cur.status === "blocked") return res.json({ ok: true, status: "blocked" });
     if (cur && cur.status === "approved") return res.json({ ok: true, status: "approved" });
     // Owner 14-Oct: PAN / Aadhaar need their photo; GST only the number.
@@ -2641,4 +2659,17 @@ function idAadhaarOk(a) {
 }
 function idValid(doc, id) {
   return doc === "gst" ? idGstOk(id) : doc === "pan" ? idPanOk(id) : idAadhaarOk(id);
+}
+
+
+/** Owner 14-Oct: is the caller's network in India? "IN" | "ABROAD" | null. */
+async function ipCountry(req) {
+  const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
+  if (!ip) return null;
+  try {
+    const r = await fetch(`https://ipwho.is/${encodeURIComponent(ip)}?fields=success,country_code`, { signal: AbortSignal.timeout(6000) });
+    const j = await r.json();
+    if (j && j.success && j.country_code) return j.country_code === "IN" ? "IN" : "ABROAD";
+  } catch (e) { logger.warn("ipCountry", { error: e.message }); }
+  return null;
 }
