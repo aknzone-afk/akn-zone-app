@@ -4,6 +4,7 @@ import 'dart:typed_data';
 
 import 'package:catalog_app/widgets/caps_text.dart';
 import 'package:flutter/material.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_image_compress/flutter_image_compress.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
@@ -13,6 +14,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../services/account_service.dart';
 import '../services/chat_service.dart';
+import '../services/id_check.dart';
 import '../services/order_service.dart';
 import '../services/push_service.dart';
 import '../services/transport_info.dart';
@@ -691,6 +693,32 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
         textAlign: TextAlign.center,
         style: const TextStyle(fontSize: 15, height: 1.45),
       ),
+      if (!_timedOut && code.isNotEmpty) ...[
+        const SizedBox(height: 16),
+        Center(
+          child: Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: kHairline),
+            ),
+            child: QrImageView(
+                data: AccountService.whatsAppLink(code).toString(), size: 150, padding: EdgeInsets.zero),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text('Code: $code',
+            textAlign: TextAlign.center,
+            style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w900, letterSpacing: 2, color: _dark)),
+        const SizedBox(height: 6),
+        const Text(
+          'No WhatsApp on this phone / iPad? Scan this QR with the phone that has WhatsApp and tap SEND there.\n'
+          'No WhatsApp at all? Call us on +91 70166 38059 and tell us this code.',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 13, color: Colors.black54, height: 1.45),
+        ),
+      ],
       const SizedBox(height: 8),
       if (_typed.isNotEmpty)
       Text('Number: ${_shownMobile(_typed, _india)}',
@@ -723,7 +751,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
         ),
       ],
       const SizedBox(height: 6),
-      TextButton(onPressed: _changeNumber, child: const UText('Change number')),
+      TextButton(onPressed: _changeNumber, child: const UText('Start again')),
     ]);
   }
 
@@ -805,7 +833,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
         child: const Text('My account is not in this list — sign up as a new customer',
             textAlign: TextAlign.center),
       ),
-      TextButton(onPressed: _changeNumber, child: const UText('Change number')),
+      TextButton(onPressed: _changeNumber, child: const UText('Start again')),
     ]);
   }
 
@@ -862,7 +890,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
                           onPressed: () => _checkPending(manual: true),
                         ),
                         const SizedBox(height: 6),
-                        TextButton(onPressed: _changeNumber, child: const UText('Change number')),
+                        TextButton(onPressed: _changeNumber, child: const UText('Start again')),
                       ],
                     ),
                   ),
@@ -965,6 +993,7 @@ class _SignupFormState extends State<_SignupForm> {
     if (_country == 'India' && !_india) _country = 'Other';
     _gst.addListener(_onGstTyped);
     _pan.addListener(_refresh);
+    _gst.addListener(_refresh);
     _aadhaar.addListener(_refresh);
     _pin.addListener(_onPinChanged);
     _place.addListener(() => setState(() {}));
@@ -985,6 +1014,7 @@ class _SignupFormState extends State<_SignupForm> {
     _pinDebounce?.cancel();
     _gst.removeListener(_onGstTyped);
     _pan.removeListener(_refresh);
+    _gst.removeListener(_refresh);
     _aadhaar.removeListener(_refresh);
     _pin.removeListener(_onPinChanged);
     for (final c in [_contact, _bill, _address, _pin, _place, _transport, _gst, _pan, _aadhaar]) {
@@ -1002,7 +1032,7 @@ class _SignupFormState extends State<_SignupForm> {
 
   void _onGstTyped() {
     final g = _norm(_gst.text);
-    if (_gstRe.hasMatch(g)) {
+    if (gstValid(g)) {
       // ignore: discarded_futures
       _gstLookup(g);
     } else if (_gstNote != null || _gstLooked != null) {
@@ -1156,7 +1186,7 @@ class _SignupFormState extends State<_SignupForm> {
   }
 
   /// A valid GST number is filled in (it may still be checking).
-  bool get _hasGst => _gstRe.hasMatch(_norm(_gst.text));
+  bool get _hasGst => gstValid(_gst.text);
 
   /// Which ID this sign-up uses: GST, else PAN, else Aadhaar.
   String get _idUsed {
@@ -1171,35 +1201,17 @@ class _SignupFormState extends State<_SignupForm> {
   Widget _idRow(Widget field, {required bool aadhaar}) {
     final ph = aadhaar ? _aadhaarPhoto : _panPhoto;
     final need = _idUsed == (aadhaar ? 'aadhaar' : 'pan');
-    if (_hasGst) return field; // GST needs no photo
-    return Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Expanded(child: field),
-      const SizedBox(width: 10),
-      SizedBox(
-        width: 64,
-        height: 58,
-        child: InkWell(
-          borderRadius: BorderRadius.circular(10),
-          onTap: _reading ? null : () => _pickPhoto(aadhaar),
-          child: Container(
-            decoration: BoxDecoration(
-              color: ph != null ? null : (need ? const Color(0xFFFFF3E0) : kLinen),
-              borderRadius: BorderRadius.circular(10),
-              border: Border.all(color: ph != null ? _green : (need ? _red : kHairline), width: need || ph != null ? 2 : 1),
-            ),
-            clipBehavior: Clip.antiAlias,
-            child: ph != null
-                ? Image.memory(ph.jpg, fit: BoxFit.cover)
-                : Column(mainAxisAlignment: MainAxisAlignment.center, children: [
-                    _reading
-                        ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
-                        : Icon(Icons.add_a_photo_rounded, size: 22, color: need ? _red : Colors.black54),
-                    Text(need ? 'Photo *' : 'Photo',
-                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: need ? _red : Colors.black54)),
-                  ]),
-          ),
+    // Owner 14-Oct 09:15: no ID photos — the number is checked instead.
+    final h = idHint(aadhaar ? 'aadhaar' : 'pan', aadhaar ? _aadhaar.text : _pan.text);
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      field,
+      if (h != null && !(_hasGst && !aadhaar))
+        Padding(
+          padding: const EdgeInsets.only(top: 4, left: 4),
+          child: Text(h,
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5,
+                  color: h.startsWith('✓') ? _green : _red)),
         ),
-      ),
     ]);
   }
 
@@ -1208,7 +1220,7 @@ class _SignupFormState extends State<_SignupForm> {
   String? _idError() {
     if (!_india) return null;
     final g = _norm(_gst.text);
-    if (g.isNotEmpty && !_gstRe.hasMatch(g)) {
+    if (g.isNotEmpty && !gstValid(g)) {
       return 'GST number should be 15 characters — correct it, or clear it and use PAN / Aadhaar.';
     }
     switch (_idUsed) {
@@ -1217,14 +1229,10 @@ class _SignupFormState extends State<_SignupForm> {
         if (!_gstOk) return 'This GST number could not be verified — correct it, or clear it and use PAN / Aadhaar.';
         return null;
       case 'pan':
-        if (!_panRe.hasMatch(_norm(_pan.text))) return 'Enter a valid 10-character PAN number.';
-        if (_panPhoto == null) return 'Please add a photo of your PAN card (photo button beside PAN).';
+        if (!panValid(_pan.text)) return 'This PAN number is not valid — 5 letters, 4 digits, 1 letter.';
         return null;
       case 'aadhaar':
-        if (!_aadhaarRe.hasMatch(_aadhaar.text.replaceAll(RegExp(r'\D'), ''))) {
-          return 'Enter your 12-digit Aadhaar number.';
-        }
-        if (_aadhaarPhoto == null) return 'Please add a photo of your Aadhaar card (photo button beside Aadhaar).';
+        if (!aadhaarValid(_aadhaar.text)) return 'This Aadhaar number is not valid — please check the 12 digits.';
         return null;
     }
     return 'Please fill any one: GST, PAN or Aadhaar number.';
@@ -1394,18 +1402,18 @@ class _SignupFormState extends State<_SignupForm> {
                   style: TextStyle(fontSize: 14, height: 1.4)),
               const SizedBox(height: 16),
               TextFormField(
-                controller: _contact,
-                textCapitalization: TextCapitalization.words,
-                decoration: _dec('Your name (contact person) *'),
-                validator: (v) => _need(v, 2, 'Enter your name'),
+                controller: _bill,
+                textCapitalization: TextCapitalization.characters,
+                decoration: _dec('Bill name *', hint: 'Firm / party name'),
+                validator: (v) => _need(v, 2, 'Enter bill name'),
               ),
-              const SizedBox(height: 12),
+              const SizedBox(height: 14),
               if (_india) ...[
                 // Owner 14-Oct: three boxes — GST, PAN, Aadhaar. One is enough.
                 const Text('Your ID — fill any one *',
                     style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: _dark)),
                 const SizedBox(height: 4),
-                const Text('GST fills your details by itself. PAN or Aadhaar needs a photo of the card.',
+                const Text('GST fills your details by itself.',
                     style: TextStyle(fontSize: 12.5, color: Colors.black54)),
                 const SizedBox(height: 10),
                 TextField(
@@ -1414,6 +1422,12 @@ class _SignupFormState extends State<_SignupForm> {
                   inputFormatters: [LengthLimitingTextInputFormatter(20)],
                   decoration: _dec('GST number', hint: '15 characters, e.g. 24ABCDE1234F1Z5'),
                 ),
+                if (_gstNote == null && idHint('gst', _gst.text) != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6, left: 4),
+                    child: Text(idHint('gst', _gst.text)!,
+                        style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5, color: _red)),
+                  ),
                 if (_gstNote != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 6, left: 4),
@@ -1446,11 +1460,6 @@ class _SignupFormState extends State<_SignupForm> {
                   ),
                   aadhaar: true,
                 ),
-                const Padding(
-                  padding: EdgeInsets.only(top: 6),
-                  child: Text('ID photos are used only to verify you and are deleted after approval.',
-                      style: TextStyle(fontSize: 12.5, color: Colors.black54)),
-                ),
                 if (_photoErr != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
@@ -1458,61 +1467,6 @@ class _SignupFormState extends State<_SignupForm> {
                   ),
                 const SizedBox(height: 16),
               ],
-              TextFormField(
-                controller: _bill,
-                textCapitalization: TextCapitalization.characters,
-                decoration: _dec('Bill name *', hint: 'Firm / party name'),
-                validator: (v) => _need(v, 2, 'Enter bill name'),
-              ),
-              const SizedBox(height: 14),
-              // Owner 14-Oct: required business type, right after the bill name.
-              const Text('Business type *',
-                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: _dark)),
-              const SizedBox(height: 6),
-              for (final o in const [
-                ('new_startup', 'New startup (new to the saree business)', Icons.rocket_launch_rounded),
-                ('existing_business', 'Existing saree business / shop', Icons.storefront_rounded),
-              ])
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(12),
-                    onTap: () => setState(() {
-                      _businessType = o.$1;
-                      _bizErr = null;
-                    }),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                      decoration: BoxDecoration(
-                        color: _businessType == o.$1 ? const Color(0xFFE8F5E9) : null,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                            color: _businessType == o.$1 ? _green : kHairline,
-                            width: _businessType == o.$1 ? 2 : 1),
-                      ),
-                      child: Row(children: [
-                        Icon(
-                            _businessType == o.$1
-                                ? Icons.radio_button_checked_rounded
-                                : Icons.radio_button_unchecked_rounded,
-                            color: _businessType == o.$1 ? _green : Colors.black45),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(o.$2,
-                              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-                        ),
-                        const SizedBox(width: 6),
-                        Icon(o.$3, color: Colors.black45, size: 20),
-                      ]),
-                    ),
-                  ),
-                ),
-              if (_needCard) _cardBox(),
-              if (_bizErr != null)
-                Padding(
-                  padding: const EdgeInsets.only(left: 4, bottom: 6),
-                  child: Text(_bizErr!, style: const TextStyle(color: _red, fontWeight: FontWeight.w700)),
-                ),
               const SizedBox(height: 8),
               TextFormField(
                 controller: _address,
@@ -1578,7 +1532,56 @@ class _SignupFormState extends State<_SignupForm> {
                   ),
                 _usualTransports(),
               ],
-              const SizedBox(height: 22),
+              const SizedBox(height: 18),
+              // Owner 14-Oct 09:15: business type is the LAST question.
+              const Text('Business type *',
+                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: _dark)),
+              const SizedBox(height: 6),
+              for (final o in const [
+                ('new_startup', 'New startup (new to saree business)', Icons.rocket_launch_rounded),
+                ('existing_business', 'Existing saree shop', Icons.storefront_rounded),
+              ])
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: InkWell(
+                    borderRadius: BorderRadius.circular(12),
+                    onTap: () => setState(() {
+                      _businessType = o.$1;
+                      _bizErr = null;
+                    }),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                      decoration: BoxDecoration(
+                        color: _businessType == o.$1 ? const Color(0xFFE8F5E9) : null,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                            color: _businessType == o.$1 ? _green : kHairline,
+                            width: _businessType == o.$1 ? 2 : 1),
+                      ),
+                      child: Row(children: [
+                        Icon(
+                            _businessType == o.$1
+                                ? Icons.radio_button_checked_rounded
+                                : Icons.radio_button_unchecked_rounded,
+                            color: _businessType == o.$1 ? _green : Colors.black45),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(o.$2,
+                              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
+                        ),
+                        const SizedBox(width: 6),
+                        Icon(o.$3, color: Colors.black45, size: 20),
+                      ]),
+                    ),
+                  ),
+                ),
+              if (_needCard) _cardBox(),
+              if (_bizErr != null)
+                Padding(
+                  padding: const EdgeInsets.only(left: 4, bottom: 6),
+                  child: Text(_bizErr!, style: const TextStyle(color: _red, fontWeight: FontWeight.w700)),
+                ),
+              const SizedBox(height: 14),
               if (_error != null)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 12),

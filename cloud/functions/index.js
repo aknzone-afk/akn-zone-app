@@ -520,6 +520,23 @@ exports.tgWebhook = onRequest(
           }
         }
         await tg("sendMessage", { chat_id: u.message.chat.id, reply_to_message_id: u.message.message_id, text: txt });
+      } else if (u.message && /^\/verify(\s|$)/i.test(String(u.message.text || ""))) {
+        // Owner 14-Oct: customer without WhatsApp calls the shop and tells the
+        // code on the app screen. Staff call that number back, then send
+        // "/verify 123456 98xxxxxxxx" — ONLY in the "Akn zone app" group.
+        const chat = await approvalsChat(db);
+        const by = (u.message.from && u.message.from.first_name) || "staff";
+        const parts = String(u.message.text).replace(/^\/\w+/, "").trim().split(/\s+/);
+        const code = String(parts[0] || "").replace(/\D/g, "");
+        const key = accKey(parts.slice(1).join(""));
+        let txt = "Send: /verify 123456 98xxxxxxxx  (the code on the customer's screen, then their number — call them back first)";
+        if (!chat || String(u.message.chat.id) !== String(chat)) {
+          txt = "/verify works only in the Akn zone app group.";
+        } else if (code.length === 6 && key) {
+          await db.collection("bbapp_verify").doc(code).set({ from: key.length === 10 ? "91" + key : key, at: Date.now(), manual: true, by });
+          txt = `✅ Code ${code} → ${key} — the app on their phone / iPad opens in a few seconds (code works 20 min).`;
+        }
+        await tg("sendMessage", { chat_id: u.message.chat.id, reply_to_message_id: u.message.message_id, text: txt });
       } else if (u.message && /^\/(un)?block(\s|$)/i.test(String(u.message.text || ""))) {
         // Owner 14-Oct: "/block 98xxxxxxxx" — that number loses the app.
         const un = /^\/unblock/i.test(u.message.text);
@@ -2075,7 +2092,7 @@ function accText(key, a) {
   if (a.kind === "existing") lines.push(`📱 LOGIN — ${escH(a.party || "-")}`, `Mobile: ${key} (WhatsApp verified)`);
   else {
     lines.push(...(a.kind === "foreign" ? ["🌍 Outside India"] : []),
-      `Name: ${escH(c.contact || "-")}`, `Bill name: ${escH(c.billName || "-")}`,
+      ...(c.contact ? [`Name: ${escH(c.contact)}`] : []), `Bill name: ${escH(c.billName || "-")}`,
       ...(c.businessType ? [`Business: ${c.businessType === "new_startup" ? "🌱 NEW STARTUP" : "🏪 EXISTING SAREE BUSINESS"}`] : []),
       `Address: ${escH(c.address || "-")}`,
       ...(c.pincode ? [`Pincode: ${escH(c.pincode)}`] : []),
@@ -2212,12 +2229,13 @@ exports.accountSignup = onRequest(
     const doc = (cust.kycDoc || (/^\d{2}[A-Z]{5}\d{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/i.test(cust.taxId) ? "gst"
       : /^[A-Z]{5}\d{4}[A-Z]$/i.test(cust.taxId) ? "pan" : "aadhaar")).toLowerCase();
     const img = String((c.kycImage) || "");
-    if (india && doc !== "gst" && img.length < 1000) {
-      return res.json({ ok: false, error: `Please add a photo of your ${doc === "pan" ? "PAN card" : "Aadhaar card"}.` });
+    // Owner 14-Oct 09:15: no photo needed — the number must be well-formed.
+    if (india && !idValid(doc, cust.taxId)) {
+      return res.json({ ok: false, error: `This ${doc === "gst" ? "GST" : doc === "pan" ? "PAN" : "Aadhaar"} number is not valid — please check it.` });
     }
     const kyc = india ? await kycCheck(db, cust, doc, String(c.kycText || "")) : [];
     let kycPath = null;
-    if (india && doc !== "gst") {
+    if (india && doc !== "gst" && img.length >= 1000) {
       kycPath = `kyc/${key}.jpg`;
       try {
         await admin.storage().bucket().file(kycPath).save(Buffer.from(img, "base64"), { contentType: "image/jpeg" });
@@ -2330,7 +2348,8 @@ async function kycCheck(db, cust, doc, text) {
     if (info.pin) out.push(String(info.pin) === pin ? "✅ Pincode matches the GST address" : `⚠️ Pincode ${pin} ≠ GST address ${info.pin}`);
     return out;
   }
-  if (!T || T.length < 20) return [`⚠️ The ${doc === "pan" ? "PAN" : "Aadhaar"} photo could not be read — please look at it`];
+  if (!T) return [`🪪 ${doc === "pan" ? "PAN" : "Aadhaar"} number checked (no photo)`];
+  if (T.length < 20) return [`⚠️ The ${doc === "pan" ? "PAN" : "Aadhaar"} photo could not be read — please look at it`];
   if (doc === "pan") {
     const pan = String(cust.taxId || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
     out.push(flat.includes(pan) ? "✅ PAN number matches the photo" : "⚠️ PAN number NOT found on the photo");
@@ -2407,7 +2426,9 @@ function kycLines(a, c) {
   const warn = (a.kyc || []).filter((x) => String(x).startsWith("⚠️"));
   const doc = String(a.kycDoc || c.kycDoc || "").toUpperCase();
   if (a.kind !== "foreign") {
+    const noPhoto = (a.kyc || []).find((x) => String(x).startsWith("🪪"));
     if (warn.length) out.push(...warn.map((x) => escH(x)));
+    else if (noPhoto) out.push(escH(noPhoto));
     else if (doc) out.push(`✅ ${doc === "AADHAAR" ? "Aadhaar" : doc} verified`);
     if (a.pinSale != null) out.push(`${escH(String(c.bookingPlace || "").toUpperCase())} ${inr(a.pinSale)}`);
   }
@@ -2570,4 +2591,35 @@ async function sheetBlockTap(db, q, act, id) {
     await tg("editMessageText", { chat_id: q.message.chat.id, message_id: q.message.message_id,
       text: act === "ok" ? `🚫 Blocked ${n} inactive customers (${p.months}+ months) — ${by}` : `❌ Cancelled — ${by}` });
   }
+}
+
+
+/* Owner 14-Oct: shape checks for GST / PAN / Aadhaar numbers. */
+const GST_CH = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+function idGstOk(g) {
+  g = String(g || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  if (!/^\d{2}[A-Z]{3}[PCHFATBLJG][A-Z]\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(g)) return false;
+  const st = Number(g.slice(0, 2));
+  if (!((st >= 1 && st <= 38) || st === 97 || st === 99)) return false;
+  let sum = 0;
+  for (let i = 0; i < 14; i++) {
+    const v = GST_CH.indexOf(g[i]) * (i % 2 ? 2 : 1);
+    sum += Math.floor(v / 36) + (v % 36);
+  }
+  return GST_CH[(36 - (sum % 36)) % 36] === g[14];
+}
+const idPanOk = (p) => /^[A-Z]{3}[PCHFATBLJG][A-Z]\d{4}[A-Z]$/.test(String(p || "").toUpperCase().replace(/[^A-Z0-9]/g, ""));
+const VD = [[0,1,2,3,4,5,6,7,8,9],[1,2,3,4,0,6,7,8,9,5],[2,3,4,0,1,7,8,9,5,6],[3,4,0,1,2,8,9,5,6,7],[4,0,1,2,3,9,5,6,7,8],
+  [5,9,8,7,6,0,4,3,2,1],[6,5,9,8,7,1,0,4,3,2],[7,6,5,9,8,2,1,0,4,3],[8,7,6,5,9,3,2,1,0,4],[9,8,7,6,5,4,3,2,1,0]];
+const VP = [[0,1,2,3,4,5,6,7,8,9],[1,5,7,6,2,8,3,0,9,4],[5,8,0,3,7,9,6,1,4,2],[8,9,1,6,0,4,3,5,2,7],[9,4,5,3,1,2,6,8,7,0],
+  [4,2,8,6,5,7,3,9,0,1],[2,7,9,3,8,0,6,4,1,5],[7,0,4,6,9,1,3,2,5,8]];
+function idAadhaarOk(a) {
+  a = String(a || "").replace(/\D/g, "");
+  if (!/^[2-9]\d{11}$/.test(a)) return false;
+  let c = 0;
+  a.split("").reverse().forEach((d, i) => { c = VD[c][VP[i % 8][Number(d)]]; });
+  return c === 0;
+}
+function idValid(doc, id) {
+  return doc === "gst" ? idGstOk(id) : doc === "pan" ? idPanOk(id) : idAadhaarOk(id);
 }
