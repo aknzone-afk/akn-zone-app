@@ -2100,7 +2100,9 @@ function accText(key, a) {
   else {
     lines.push(...(a.kind === "foreign" ? ["🌍 Outside India"] : []),
       ...(c.contact ? [`Name: ${escH(c.contact)}`] : []), `Bill name: ${escH(c.billName || "-")}`,
-      ...(c.businessType ? [`Business: ${c.businessType === "new_startup" ? "🌱 NEW STARTUP" : "🏪 OLD SAREE SHOP"}`] : []),
+      ...(c.businessType === "new_startup" || c.businessType === "existing_business" ? [`Business: ${c.businessType === "new_startup" ? "🌱 NEW STARTUP" : "🏪 OLD SAREE SHOP"}`] : []),
+      ...(c.pan ? [`PAN: ${escH(c.pan)}`] : []),
+      ...(c.bizNote ? [`Note: ${escH(c.bizNote)}`] : []),
       `Address: ${escH(c.address || "-")}`,
       ...(c.pincode ? [`Pincode: ${escH(c.pincode)}`] : []),
       `Destination: ${escH(c.bookingPlace || "-")}${c.country && c.country !== "India" ? " · " + escH(c.country) : ""}`,
@@ -2280,7 +2282,7 @@ exports.accountSignup = onRequest(
     }
     if (!key) return res.json({ ok: false, error: "Please verify your number on WhatsApp again." });
     const c = (req.body && req.body.cust) || {};
-    const cust = Object.fromEntries(["contact", "billName", "address", "pincode", "bookingPlace", "transport", "taxId", "country", "kycDoc", "businessType"]
+    const cust = Object.fromEntries(["contact", "billName", "address", "pincode", "bookingPlace", "transport", "taxId", "country", "kycDoc", "businessType", "pan", "bizNote"]
       .map((k) => [k, String(c[k] || "").trim().slice(0, 300)]));
     // Security (14-Oct): an Indian number is ALWAYS India — the chosen
     // country can never skip the ID checks.
@@ -2308,20 +2310,24 @@ exports.accountSignup = onRequest(
       return res.json({ ok: false, error: `Please add a photo of your ${doc === "pan" ? "PAN card" : "Aadhaar card"}.` });
     }
     const card = String(c.cardImage || "");
-    if (india && cust.businessType === "existing_business" && card.length < 1000) {
-      return res.json({ ok: false, error: "Please add a photo of your visiting card or shop board." });
+    // Owner 15-Oct: no GST -> Aadhaar photo + a business proof photo, both compulsory.
+    if (india && doc !== "gst" && doc !== "aadhaar") {
+      return res.json({ ok: false, error: "No GST? Please add a photo of your Aadhaar card." });
+    }
+    if (india && doc !== "gst" && card.length < 1000) {
+      return res.json({ ok: false, error: "Please add a business proof photo." });
     }
     if (india && !idValid(doc, cust.taxId)) {
       return res.json({ ok: false, error: `This ${doc === "gst" ? "GST" : doc === "pan" ? "PAN" : "Aadhaar"} number is not valid — please check it.` });
     }
     const kyc = india ? await kycCheck(db, cust, doc, String(c.kycText || "")) : [];
-    if (india && cust.businessType === "existing_business") {
+    if (india && doc !== "gst" && card.length >= 1000) {
       // Owner 14-Oct: the shop card / board must carry the bill name.
       const CT = String(c.cardText || "").toUpperCase();
       const bw = String(cust.billName || "").toUpperCase().split(/[^A-Z]+/).filter((w) => w.length >= 3 && !["THE", "AND", "SAREE", "SAREES"].includes(w));
       const hit = bw.filter((w) => CT.includes(w)).length;
-      kyc.push(!CT.trim() ? "⚠️ Shop card / board photo could not be read — please look at it"
-        : hit >= Math.max(1, Math.ceil(bw.length / 2)) ? "✅ Bill name is on the shop card / board" : "⚠️ Bill name NOT found on the shop card / board");
+      kyc.push(!CT.trim() ? "ℹ️ Business proof photo has no readable text — please look at it"
+        : hit >= Math.max(1, Math.ceil(bw.length / 2)) ? "✅ Bill name is on the business proof" : "ℹ️ Bill name not seen on the business proof — please look at the photo");
     }
     let kycPath = null;
     if (india && doc !== "gst" && img.length >= 1000) {
@@ -2372,7 +2378,7 @@ exports.accountSignup = onRequest(
           const fd = new FormData();
           fd.append("chat_id", String(m.chat));
           fd.append("reply_to_message_id", String(m.id));
-          fd.append("caption", `🪪 Shop / visiting card — ${cust.billName}`);
+          fd.append("caption", `📎 Business proof — ${cust.billName}${cust.bizNote ? "\n" + cust.bizNote : ""}`);
           fd.append("photo", new Blob([Buffer.from(card, "base64")], { type: "image/jpeg" }), "card.jpg");
           await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/sendPhoto`, { method: "POST", body: fd });
         }

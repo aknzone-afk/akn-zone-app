@@ -1134,7 +1134,8 @@ class _SignupFormState extends State<_SignupForm> {
   _KycPhoto? _cardPhoto; // shop / visiting card (existing business, no GST)
 
   /// Owner 14-Oct: an existing saree business without GST shows its card.
-  bool get _needCard => _india && !_hasGst && _businessType == 'existing_business';
+  bool get _needCard => _india && !_hasGst; // business proof (owner 15-Oct)
+  final _bizNote = TextEditingController();
   bool _reading = false;
   String? _photoErr;
 
@@ -1390,11 +1391,7 @@ class _SignupFormState extends State<_SignupForm> {
   /// Which ID this sign-up uses: GST, else PAN, else Aadhaar.
   String get _idUsed {
     if (_hasGst) return 'gst';
-    if (_panPhoto != null && panValid(_pan.text)) return 'pan';
-    if (_aadhaarPhoto != null && aadhaarValid(_aadhaar.text)) return 'aadhaar';
-    if (_panPhoto != null) return 'pan';
-    if (_aadhaarPhoto != null) return 'aadhaar';
-    return '';
+    return 'aadhaar'; // owner 15-Oct: without GST, Aadhaar is compulsory
   }
 
   /// PAN / Aadhaar card photo; the number is read from it on the phone.
@@ -1425,7 +1422,7 @@ class _SignupFormState extends State<_SignupForm> {
         icon: _reading
             ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
             : Icon(ph == null ? Icons.add_a_photo_rounded : Icons.cameraswitch_rounded),
-        label: Text(ph == null ? 'Add photo of your $what' : 'Change ${aadhaar ? 'Aadhaar' : 'PAN'} photo',
+        label: Text(ph == null ? 'Add photo of your $what${aadhaar ? ' *' : ' (optional)'}' : 'Change ${aadhaar ? 'Aadhaar' : 'PAN'} photo',
             textAlign: TextAlign.center),
       ),
     ]);
@@ -1444,14 +1441,13 @@ class _SignupFormState extends State<_SignupForm> {
         if (_gstChecking) return 'Please wait — checking your GST number…';
         if (!_gstOk) return 'This GST number could not be verified — correct it, or clear it and use PAN / Aadhaar.';
         return null;
-      case 'pan':
-        if (!panValid(_pan.text)) return 'Could not read the PAN number from the photo — please take a clear, straight photo of the PAN card.';
-        return null;
       case 'aadhaar':
+        if (_aadhaarPhoto == null) return 'No GST? Please add a photo of your Aadhaar card (side with your address).';
         if (!aadhaarValid(_aadhaar.text)) return 'Could not read the Aadhaar number from the photo — please take a clear photo of the side with your address.';
+        if (_panPhoto != null && !panValid(_pan.text)) return 'Could not read the PAN card — take a clear photo, or remove it (PAN is optional).';
         return null;
     }
-    return 'Please type your GST number, or add a photo of your PAN card or Aadhaar card.';
+    return null;
   }
 
   Widget _cardBox() {
@@ -1459,8 +1455,11 @@ class _SignupFormState extends State<_SignupForm> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        const Text('Old saree shop: add a photo of your visiting card or your shop board *',
-            style: TextStyle(fontWeight: FontWeight.w700)),
+        const Text('Business proof *', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: _dark)),
+        const SizedBox(height: 4),
+        const Text('Add a photo of ANY business proof, for example: a shop photo with the board, your visiting card, '
+            'any purchase bill in your name, or any bill of your shop.',
+            style: TextStyle(fontSize: 13, height: 1.4)),
         if (ph != null)
           Padding(
             padding: const EdgeInsets.only(top: 8),
@@ -1474,8 +1473,14 @@ class _SignupFormState extends State<_SignupForm> {
           style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(50)),
           onPressed: _reading ? null : () => _pickPhoto(false, card: true),
           icon: Icon(ph == null ? Icons.add_a_photo_rounded : Icons.cameraswitch_rounded),
-          label: Text(ph == null ? 'Add photo of your shop / visiting card *' : 'Change photo',
+          label: Text(ph == null ? 'Add business proof photo *' : 'Change photo',
               textAlign: TextAlign.center),
+        ),
+        const SizedBox(height: 8),
+        TextField(
+          controller: _bizNote,
+          maxLines: 2,
+          decoration: _dec('Anything to tell us about your business? (optional)'),
         ),
       ]),
     );
@@ -1485,11 +1490,7 @@ class _SignupFormState extends State<_SignupForm> {
     FocusScope.of(context).unfocus();
     final okFields = _formKey.currentState?.validate() ?? false;
     final idErr = _idError();
-    final bizErr = (_india && _hasGst)
-        ? null
-        : _businessType == null
-        ? 'Please choose your business type.'
-        : (_needCard && _cardPhoto == null ? 'Please add a photo of your shop / visiting card.' : null);
+    final bizErr = (_needCard && _cardPhoto == null) ? 'Please add a business proof photo.' : null;
     setState(() {
       _photoErr = idErr;
       _bizErr = bizErr;
@@ -1523,7 +1524,9 @@ class _SignupFormState extends State<_SignupForm> {
     final cust = <String, dynamic>{
       'contact': _contact.text.trim(),
       'billName': _bill.text.trim().toUpperCase(),
-      'businessType': (_india && _hasGst) ? 'gst_business' : _businessType,
+      'businessType': (_india && _hasGst) ? 'gst_business' : 'proof',
+      if (_india && !_hasGst && _panPhoto != null && panValid(_pan.text)) 'pan': _norm(_pan.text),
+      if (_bizNote.text.trim().isNotEmpty) 'bizNote': _bizNote.text.trim(),
       'address': _address.text.trim(),
       'pincode': _india ? _pin.text.trim() : '',
       'bookingPlace': _place.text.trim().toUpperCase(),
@@ -1662,12 +1665,12 @@ class _SignupFormState extends State<_SignupForm> {
                 if (!_hasGst) ...[
                   const Padding(
                     padding: EdgeInsets.symmetric(vertical: 8),
-                    child: Text('No GST? Add a photo of ONE card:',
+                    child: Text('No GST? Aadhaar card photo is compulsory (PAN is optional):',
                         style: TextStyle(fontWeight: FontWeight.w700)),
                   ),
-                  _idPhoto(aadhaar: false),
-                  const SizedBox(height: 10),
                   _idPhoto(aadhaar: true),
+                  const SizedBox(height: 10),
+                  _idPhoto(aadhaar: false),
                   const Padding(
                     padding: EdgeInsets.only(top: 6),
                     child: Text('Card photos are used only to verify you and are deleted after approval.',
@@ -1764,57 +1767,15 @@ class _SignupFormState extends State<_SignupForm> {
                   ),
                 _usualTransports(),
               ],
-              // Owner 14-Oct: with a GST number there is no old / new question.
-              if (!_india || !_hasGst) ...[
-              const SizedBox(height: 18),
-              // Owner 14-Oct 09:15: business type is the LAST question.
-              const Text('Business type *',
-                  style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: _dark)),
-              const SizedBox(height: 6),
-              for (final o in const [
-                ('new_startup', 'New startup (new to saree business)', Icons.rocket_launch_rounded),
-                ('existing_business', 'Old saree shop', Icons.storefront_rounded),
-              ])
-                Padding(
-                  padding: const EdgeInsets.only(bottom: 8),
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(12),
-                    onTap: () => setState(() {
-                      _businessType = o.$1;
-                      _bizErr = null;
-                    }),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
-                      decoration: BoxDecoration(
-                        color: _businessType == o.$1 ? const Color(0xFFE8F5E9) : null,
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(
-                            color: _businessType == o.$1 ? _green : kHairline,
-                            width: _businessType == o.$1 ? 2 : 1),
-                      ),
-                      child: Row(children: [
-                        Icon(
-                            _businessType == o.$1
-                                ? Icons.radio_button_checked_rounded
-                                : Icons.radio_button_unchecked_rounded,
-                            color: _businessType == o.$1 ? _green : Colors.black45),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: Text(o.$2,
-                              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15)),
-                        ),
-                        const SizedBox(width: 6),
-                        Icon(o.$3, color: Colors.black45, size: 20),
-                      ]),
-                    ),
+              // Owner 15-Oct: no business-type question; without GST a business proof photo.
+              if (_needCard) ...[
+                const SizedBox(height: 18),
+                _cardBox(),
+                if (_bizErr != null)
+                  Padding(
+                    padding: const EdgeInsets.only(left: 4, bottom: 6),
+                    child: Text(_bizErr!, style: const TextStyle(color: _red, fontWeight: FontWeight.w700)),
                   ),
-                ),
-              if (_needCard) _cardBox(),
-              if (_bizErr != null)
-                Padding(
-                  padding: const EdgeInsets.only(left: 4, bottom: 6),
-                  child: Text(_bizErr!, style: const TextStyle(color: _red, fontWeight: FontWeight.w700)),
-                ),
               ],
               const SizedBox(height: 14),
               if (_error != null)
