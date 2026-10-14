@@ -18,6 +18,7 @@ import '../services/drive_urls.dart';
 import '../services/favorites_service.dart';
 import '../services/edit_service.dart';
 import '../services/local_cache.dart';
+import '../services/notification_service.dart' show kDailyUpdateFolder;
 import '../services/photo_freshness.dart';
 import '../services/price_check.dart';
 import '../services/price_ocr.dart';
@@ -1184,6 +1185,44 @@ final topLevelFoldersProvider = Provider<List<CatalogFolder>>((ref) {
 
 /// One random number per app launch — the home folder order.
 final int _launchShuffleSeed = DateTime.now().microsecondsSinceEpoch & 0x7fffffff;
+
+/// Owner 14-Oct: a folder's photo order — random, but the SAME for the whole
+/// launch, so the start-up preload fetches exactly the first screen.
+int folderShuffleSeed(String path) => (_launchShuffleSeed ^ path.hashCode) & 0x7fffffff;
+
+/// Owner 14-Oct: start-up preload of the first [perFolder] photos of every
+/// folder (same order as the folder screen). The start-up screen waits for it
+/// at most 5 s; the rest keeps loading in the background.
+final firstScreensWarmProvider = FutureProvider<void>((ref) async {
+  final photos = ref.read(photosProvider);
+  if (photos.isEmpty) return;
+  const perFolder = 6;
+  final byFolder = <String, List<Photo>>{};
+  for (final p in photos) {
+    (byFolder[p.folder] ??= <Photo>[]).add(p);
+  }
+  final urls = <String>[];
+  // DAILY UPDATE first (newest first, as its screen shows them).
+  final daily = [...?byFolder[kDailyUpdateFolder]]..sort(Photo.compareNewestFirst);
+  urls.addAll(daily.take(perFolder).map((p) => p.thumbUrl()));
+  final paths = byFolder.keys.where((k) => k != kDailyUpdateFolder).toList()..sort();
+  for (final path in paths) {
+    final list = [...byFolder[path]!]..shuffle(Random(folderShuffleSeed(path)));
+    urls.addAll(list.take(perFolder).map((p) => p.thumbUrl()));
+  }
+  final queue = [...urls];
+  Future<void> worker() async {
+    while (queue.isNotEmpty) {
+      final u = queue.removeAt(0);
+      try {
+        final hit = await photoCacheManager.getFileFromCache(u);
+        if (hit == null) await photoCacheManager.downloadFile(u);
+      } catch (_) {}
+    }
+  }
+  final all = Future.wait(List.generate(10, (_) => worker()));
+  await Future.any([all, Future<void>.delayed(const Duration(seconds: 5))]);
+});
 
 /// Direct children of [parentPath] only — non-recursive.
 /// `parentPath = ""` for the catalog root.

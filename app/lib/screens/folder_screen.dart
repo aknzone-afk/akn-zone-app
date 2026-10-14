@@ -47,7 +47,9 @@ class _FolderScreenState extends ConsumerState<FolderScreen> {
   // A fresh random seed per folder-open. The shuffle order stays stable while
   // you browse this folder (no jumping as you scroll/select), and is different
   // the next time you open it.
-  final int _shuffleSeed = Random().nextInt(0x7fffffff);
+  // Owner 14-Oct: fixed per launch (new every launch) — matches the
+  // start-up preload, so the first screen is already downloaded.
+  late final int _shuffleSeed = folderShuffleSeed(widget.folderPath == '_root' ? '' : widget.folderPath);
 
   @override
   Widget build(BuildContext context) {

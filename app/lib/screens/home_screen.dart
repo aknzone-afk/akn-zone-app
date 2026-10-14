@@ -32,6 +32,11 @@ class HomeScreen extends ConsumerWidget {
     if (catalogAsync.value == null && !catalogAsync.hasError) {
       return const Scaffold(body: LoadingCollage());
     }
+    // Owner 14-Oct: up to 5 s more on the collage while the first screen of
+    // every folder downloads — no spinning circles inside folders.
+    if (catalogAsync.hasValue && ref.watch(firstScreensWarmProvider).isLoading) {
+      return const Scaffold(body: LoadingCollage());
+    }
 
     return Scaffold(
       // Owner 12-Oct: only the AKN ZONE logo (no "Surat saree manufacturer"
