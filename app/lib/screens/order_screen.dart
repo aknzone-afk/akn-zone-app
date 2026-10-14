@@ -278,6 +278,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       setState(() {
         _matches = list;
         if (list.length == 1) _party = list.first;
+        _loadTransportOverride();
         _newForm = list.isEmpty; // not with us → the new-customer form
         if (list.isEmpty) _mobile.text = m;
       });
@@ -300,7 +301,8 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     final lines = <String>[
       if (v('address').isNotEmpty) v('address'),
       [v('dest'), v('pincode')].where((s) => s.isNotEmpty).join(' - '),
-      if (v('transport').isNotEmpty) 'Transport: ${v('transport')}',
+      if ((_party == pt && _tOverride != null) || v('transport').isNotEmpty)
+        'Transport: ${_party == pt && _tOverride != null ? _tOverride : v('transport')}',
       if (v('gstin').isNotEmpty) 'GST/PAN: ${v('gstin')}',
     ].where((s) => s.isNotEmpty).toList();
     final chosen = _party == pt;
@@ -313,7 +315,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
             color: chosen ? const Color(0xFF2E7D32) : const Color(0xFFE8E3DA)),
       ),
       child: ListTile(
-        onTap: selectable ? () => setState(() => _party = pt) : null,
+        onTap: selectable ? () => setState(() { _party = pt; _loadTransportOverride(); }) : null,
         leading: Icon(chosen ? Icons.check_circle_rounded : Icons.storefront_rounded,
             color: chosen ? const Color(0xFF2E7D32) : null),
         title: Text(v('name'), style: const TextStyle(fontWeight: FontWeight.w800)),
@@ -552,9 +554,71 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       bookingPlace: v('dest'),
       pincode: v('pincode'),
       mobile: OrderService.normalizeIndianMobile(_oldMobile.text) ?? _oldMobile.text.trim(),
-      transport: v('transport'),
+      transport: _tOverride ?? v('transport'),
       taxId: v('gstin'),
     );
+  }
+
+  /// Owner 14-Oct: an old customer may change ONLY the transport.
+  String? _tOverride;
+  String get _tKey => 'transport_override_${'${_party?['name'] ?? ''}'.toUpperCase()}';
+
+  void _loadTransportOverride() {
+    final v = ref.read(sharedPreferencesProvider).getString(_tKey);
+    _tOverride = (v == null || v.trim().isEmpty) ? null : v;
+  }
+
+  Future<void> _editTransport() async {
+    final cur = _tOverride ?? '${_party?['transport'] ?? ''}'.trim();
+    final ctrl = TextEditingController(text: cur);
+    final picked = await showModalBottomSheet<String>(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => StatefulBuilder(builder: (ctx, setSt) {
+        final q = ctrl.text.trim().toUpperCase();
+        final opts = q.isEmpty
+            ? _transports.take(30).toList()
+            : _transports.where((o) => q.split(RegExp(r'\s+')).every(o.contains)).take(30).toList();
+        return Padding(
+          padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(ctx).viewInsets.bottom + 16),
+          child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+            const Text('Change your transport', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+            const SizedBox(height: 10),
+            TextField(
+              controller: ctrl,
+              autofocus: true,
+              textCapitalization: TextCapitalization.characters,
+              decoration: _dec('Transport name', hint: 'Search or type your own'),
+              onChanged: (_) => setSt(() {}),
+            ),
+            const SizedBox(height: 6),
+            ConstrainedBox(
+              constraints: const BoxConstraints(maxHeight: 260),
+              child: ListView(shrinkWrap: true, children: [
+                for (final o in opts) ListTile(dense: true, title: Text(o), onTap: () => Navigator.pop(ctx, o)),
+              ]),
+            ),
+            const SizedBox(height: 8),
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx, ctrl.text.trim().toUpperCase()),
+              child: const Text('SAVE TRANSPORT'),
+            ),
+          ]),
+        );
+      }),
+    );
+    if (picked == null || picked.trim().length < 2 || !mounted) return;
+    final orig = '${_party?['transport'] ?? ''}'.trim();
+    final prefs = ref.read(sharedPreferencesProvider);
+    setState(() {
+      if (picked.toUpperCase() == orig.toUpperCase()) {
+        _tOverride = null;
+        prefs.remove(_tKey);
+      } else {
+        _tOverride = picked.toUpperCase();
+        prefs.setString(_tKey, _tOverride!);
+      }
+    });
   }
 
   /// Same designs + pieces sent in the last 24 hours (owner)?
@@ -737,10 +801,14 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         OrderService.activeParcel(ref.read(sharedPreferencesProvider), mobile: customer.mobile) == null) {
       if (!await _newPartyCheck(customer) || !mounted) return;
     }
+    // Owner 14-Oct: no phone-lock lines any more (WhatsApp-verified accounts);
+    // only a transport the customer changed is told to the staff.
+    final oldT = _party == null ? '' : '${_party!['transport'] ?? ''}'.trim();
     final lockNote = [
-      if (lock.newPhone) '⚠️ NEW PHONE for this number',
-      if (lock.index == 2) '⚠️ 2nd number on this phone (1st: ${lock.first ?? '-'})',
-    ].join('\n');
+      if (lock.index < 0) '',
+      if (_party != null && _tOverride != null && _tOverride!.toUpperCase() != oldT.toUpperCase())
+        '🚚 Customer changed transport: ${oldT.isEmpty ? '-' : oldT} → $_tOverride',
+    ].where((x) => x.isNotEmpty).join('\n');
     _lockNote = lockNote.isEmpty ? null : lockNote;
     setState(() => _sending = true);
     final step = ValueNotifier<String>('Preparing…');
@@ -1066,6 +1134,15 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                     Text(_lookErr!, style: TextStyle(color: scheme.error, fontWeight: FontWeight.w600)),
                   if (_accMobile != null) ...[
                     for (final pt in _matches) _partyCard(pt, selectable: _matches.length > 1),
+                    if (_party != null)
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: TextButton.icon(
+                          onPressed: _editTransport,
+                          icon: const Icon(Icons.local_shipping_outlined, size: 18),
+                          label: const Text('EDIT TRANSPORT'),
+                        ),
+                      ),
                   ],
                   if (_accMobile == null && (_india || !_newForm)) ...[
                     Text('Type your mobile number — we find your account by ourselves.',
@@ -1328,7 +1405,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                     controller: _note,
                     minLines: 1,
                     maxLines: 4,
-                    decoration: _dec(t('Message for us (optional)', 'हमारे लिए संदेश (ज़रूरी नहीं)'),
+                    decoration: _dec(t('Any special request or note — please type here', 'कोई खास रिक्वेस्ट या नोट — यहाँ लिखें'),
                         hint: t('Colour, delivery date, packing…', 'रंग, डिलीवरी तारीख, पैकिंग…')),
                   ),
                   const SizedBox(height: 18),

@@ -90,6 +90,7 @@
 	<key>LSApplicationQueriesSchemes</key>
 	<array>
 		<string>whatsapp</string>
+		<string>whatsapp-smb</string>
 		<string>upi</string>
 		<string>phonepe</string>
 		<string>tez</string>

@@ -5,6 +5,8 @@ import 'dart:typed_data';
 import 'package:catalog_app/widgets/caps_text.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
+import 'package:android_intent_plus/android_intent.dart';
+import 'dart:io' show Platform;
 import '../config.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:flutter/services.dart';
@@ -294,14 +296,89 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
     final code = _code;
     if (code == null) return;
     var ok = false;
+    // Owner 14-Oct: WhatsApp AND WhatsApp Business on the phone -> he chooses.
+    final which = await _pickWhatsApp();
+    if (which == 'cancel') return;
     try {
-      ok = await launchUrl(AccountService.whatsAppLink(code), mode: LaunchMode.externalApplication);
+      if (which == 'business' || which == 'normal') {
+        ok = await _openWhich(which!, code);
+      } else {
+        ok = await launchUrl(AccountService.whatsAppLink(code), mode: LaunchMode.externalApplication);
+      }
     } catch (_) {}
     if (!ok && mounted) {
       setState(() => _waitMsg =
           'WhatsApp could not be opened. Please install WhatsApp, or send "AKN LOGIN $code" '
           'to +91 70166 38059 on WhatsApp.');
     }
+  }
+
+  static const _waPkg = {'normal': 'com.whatsapp', 'business': 'com.whatsapp.w4b'};
+
+  Future<bool> _hasWa(String which) async {
+    try {
+      if (Platform.isAndroid) {
+        return await AndroidIntent(action: 'action_view', data: 'https://wa.me/1', package: _waPkg[which]).canResolveActivity() ?? false;
+      }
+      if (Platform.isIOS) {
+        return await canLaunchUrl(Uri.parse(which == 'business' ? 'whatsapp-smb://' : 'whatsapp://'));
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  /// null = only one (or none) installed -> the normal link; 'cancel' = closed.
+  Future<String?> _pickWhatsApp() async {
+    final both = await _hasWa('normal') && await _hasWa('business');
+    if (!both || !mounted) return null;
+    final r = await showModalBottomSheet<String>(
+      context: context,
+      builder: (c) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 16, 16, 4),
+            child: Text('Send the login code from which WhatsApp?',
+                style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+          ),
+          const Padding(
+            padding: EdgeInsets.fromLTRB(16, 0, 16, 8),
+            child: Text('Your account will be the number of the WhatsApp you choose.',
+                style: TextStyle(fontSize: 13, color: Colors.black54)),
+          ),
+          ListTile(
+            leading: const Icon(Icons.chat_rounded, color: _green),
+            title: const Text('WhatsApp'),
+            onTap: () => Navigator.pop(c, 'normal'),
+          ),
+          ListTile(
+            leading: const Icon(Icons.storefront_rounded, color: _green),
+            title: const Text('WhatsApp Business'),
+            onTap: () => Navigator.pop(c, 'business'),
+          ),
+        ]),
+      ),
+    );
+    return r ?? 'cancel';
+  }
+
+  Future<bool> _openWhich(String which, String code) async {
+    final link = AccountService.whatsAppLink(code);
+    if (Platform.isAndroid) {
+      await AndroidIntent(action: 'action_view', data: link.toString(), package: _waPkg[which]).launch();
+      return true;
+    }
+    final q = link.query; // phone=...&text=...
+    final phone = link.pathSegments.isNotEmpty ? link.pathSegments.last : '';
+    final scheme = which == 'business' ? 'whatsapp-smb' : 'whatsapp';
+    final ok = await launchUrl(Uri.parse('$scheme://send?phone=$phone&$q'), mode: LaunchMode.externalApplication);
+    if (!ok && which == 'business') {
+      await Clipboard.setData(ClipboardData(text: 'AKN LOGIN $code'));
+      if (mounted) {
+        setState(() => _waitMsg = 'Copied "AKN LOGIN $code". Open WhatsApp Business, send it to +91 70166 38059, then come back.');
+      }
+      return true;
+    }
+    return ok;
   }
 
   void _startPolling(DateTime from) {
