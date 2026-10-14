@@ -284,9 +284,10 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                             // is sent — the chat where the payment screenshot goes.
                             // Owner 13-Oct: a new customer's chat opens as soon as
                             // the token is paid (its screenshot is the first message).
-                            if (const ['bill_sent', 'payment_received', 'dispatched', 'bilty']
-                                    .contains(_st[o.number]?.status) ||
-                                o.advancePaid != null)
+                            // Owner 14-Oct: no token any more — the chat opens
+                            // as soon as the order is placed (questions, bill,
+                            // payment all in the chat).
+                            if (!o.awaitingAdvance)
                             InkWell(
                               borderRadius: BorderRadius.circular(10),
                               onTap: openChat,
