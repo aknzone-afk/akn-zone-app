@@ -162,6 +162,13 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       PushService.register(prefs, AccountService.dio);
       final d = await AccountService.checkStatus('${a['mobile'] ?? ''}');
       final now = '${d?['status'] ?? ''}';
+      // Owner 15-Oct: "⏳ Waiting" in the group -> back to the normal
+      // "waiting for approval" screen (the customer never sees a block).
+      if (now == 'pending') {
+        await AccountService.save(prefs, {...a, 'status': 'pending'});
+        if (mounted) setState(() => _state = _Gate.onboarding);
+        return;
+      }
       if (now != 'blocked' && now != 'declined') return; // offline / fine → stay in
       await AccountService.save(prefs, {...a, 'status': now});
       if (mounted) {

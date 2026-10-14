@@ -1322,6 +1322,11 @@ exports.newParties = onRequest(
       // Owner 14-Oct: an approved sign-up ("ACCT-<mobile>") is acked on the account.
       await (id.startsWith("ACCT-") ? db.collection("bbapp_accounts").doc(id.slice(5)) : db.collection("bbapp_orders").doc(id)).set(
         { partyQueuedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      // Owner 14-Oct: the first order made the ledger -> the account has one now.
+      if (!id.startsWith("ACCT-")) {
+        const om = accKey(((await db.collection("bbapp_orders").doc(id).get()).data() || {}).mobile);
+        if (om) await db.collection("bbapp_accounts").doc(om).set({ partyQueuedAt: admin.firestore.FieldValue.serverTimestamp() }, { merge: true });
+      }
     }
     const snap = await db.collection("bbapp_orders")
       // Owner 11-Oct: the ledger is made as soon as the customer places the order.
@@ -1335,14 +1340,8 @@ exports.newParties = onRequest(
       .sort((a, b) => (a.serial || 0) - (b.serial || 0)) // oldest first
       .map((o) => ({ ref: o.ref, serial: o.serial || null, cust: o.cust,
         advance: o.advanceAmt ? { paid: o.advanceAmt, utr: o.advanceUtr || null } : null }));
-    // Owner 14-Oct: the ledger of an APPROVED new customer is made at approval.
-    const acc = await db.collection("bbapp_accounts").where("status", "==", "approved").get();
-    for (const x of acc.docs) {
-      const a = x.data();
-      if (a.kind === "new" && a.cust && !a.partyQueuedAt) {
-        out.unshift({ ref: "ACCT-" + x.id, serial: null, cust: a.cust, advance: null });
-      }
-    }
+    // Owner 14-Oct 21:50: NO ledger at approval any more — the first order
+    // (above) makes it. Accounts acked before keep their ledger (hasLedger).
     return res.json({ ok: true, parties: out });
   },
 );
@@ -2088,8 +2087,11 @@ async function approvalsChat(db) {
 const accKeyboard = (key, status) => ({ inline_keyboard: status === "pending"
   ? [[{ text: "✅ Approve", callback_data: `a|ok|${key}` }, { text: "❌ Decline", callback_data: `a|no|${key}` }],
     [{ text: "🚫 Block", callback_data: `a|blk|${key}` }]]
-  : status === "blocked" ? [[{ text: "↩️ Unblock", callback_data: `a|unb|${key}` }]]
-    : [[{ text: "🚫 Block", callback_data: `a|blk|${key}` }]] });
+  : status === "blocked" ? [[{ text: "↩️ Unblock", callback_data: `a|unb|${key}` }, { text: "⏳ Waiting", callback_data: `a|wait|${key}` }]]
+    : status === "declined" ? [[{ text: "✅ Approve", callback_data: `a|ok|${key}` }, { text: "🚫 Block", callback_data: `a|blk|${key}` }]]
+    // Owner 15-Oct: "Waiting" puts an approved customer back on the
+    // "waiting for approval" screen — they never see that they were stopped.
+    : [[{ text: "⏳ Waiting", callback_data: `a|wait|${key}` }, { text: "🚫 Block", callback_data: `a|blk|${key}` }]] });
 
 function accText(key, a) {
   const c = a.cust || {};
@@ -2125,14 +2127,14 @@ async function accountTap(db, q, act, key) {
   key = accKey(key);
   const docRef = db.collection("bbapp_accounts").doc(String(key));
   const by = [q.from && q.from.first_name, q.from && q.from.last_name].filter(Boolean).join(" ") || "staff";
-  const to = { ok: "approved", no: "declined", blk: "blocked", unb: "approved" }[act];
+  const to = { ok: "approved", no: "declined", blk: "blocked", unb: "approved", wait: "pending" }[act];
   const a = (await docRef.get()).data();
   if (!a || !to) {
     await tg("answerCallbackQuery", { callback_query_id: q.id, text: "Not found." });
     return;
   }
   await docRef.set({ status: to, ...(act === "ok" ? { approvedAt: Date.now(), approvedBy: by } : {}),
-    log: admin.firestore.FieldValue.arrayUnion({ a: { ok: "✅ approved", no: "❌ declined", blk: "🚫 blocked", unb: "↩️ unblocked" }[act], by, at: Date.now() }) },
+    log: admin.firestore.FieldValue.arrayUnion({ a: { ok: "✅ approved", no: "❌ declined", blk: "🚫 blocked", unb: "↩️ unblocked", wait: "⏳ put on waiting" }[act], by, at: Date.now() }) },
   { merge: true });
   await tg("answerCallbackQuery", { callback_query_id: q.id, text: `${to} — ${key}` });
   const fresh = (await docRef.get()).data() || {};
@@ -2335,20 +2337,29 @@ exports.accountSignup = onRequest(
     const known = tallyPincodes().has(pin6);
     const ps = (await db.collection("bbapp_settings").doc("pinsales").get()).data() || {};
     const pinSale = Number((ps.pins || {})[pin6] || 0);
+    // Owner 15-Oct: CITY-wise sales (pincode-wise was too narrow).
+    const ck = cityKey(cust.bookingPlace);
+    const destSale = Object.entries(ps.dests || {}).filter(([k]) => ck && k === ck)
+      .reduce((t, [, v]) => t + Number(v || 0), 0);
     // Owner 14-Oct 10:00: never auto-approve unverified places — GST or an
     // Aadhaar address must confirm the details (PAN has no address).
     const clean = !kyc.some((x) => String(x).startsWith("⚠️"));
-    const auto = india && (!known || pinSale < 500000) && clean && (doc === "gst" || doc === "aadhaar");
+    const auto = india && destSale < 500000 && clean && (doc === "gst" || doc === "aadhaar");
     const kycDocName = doc;
     const status = !india || auto ? "approved" : "pending";
-    await ref.set({ status, kind: india ? "new" : "foreign", cust, kyc, kycDoc: kycDocName, abroadDirect, pinSale: india ? pinSale : null,
+    await ref.set({ status, kind: india ? "new" : "foreign", cust, kyc, kycDoc: kycDocName, abroadDirect, pinSale: india ? pinSale : null, destSale: india ? destSale : null,
       kycPath, verifiedAt: Date.now(), at: Date.now(),
       ...(auto ? { approvedAt: Date.now(), approvedBy: "bot (new pincode)" } : {}),
       log: admin.firestore.FieldValue.arrayUnion({ a: india ? "🆕 signed up" : "🌍 signed up", by: "app", at: Date.now() },
-        ...(auto ? [{ a: known ? "✅ auto-approved — pincode sales under ₹5 lakh" : "✅ auto-approved — no customer on this pincode yet", by: "bot", at: Date.now() + 1 }] : [])) }, { merge: true });
+        ...(auto ? [{ a: `✅ auto-approved — ${String(cust.bookingPlace || "city").toUpperCase()} sales under ₹5 lakh`, by: "bot", at: Date.now() + 1 }] : [])) }, { merge: true });
     if (auto && kycPath) await admin.storage().bucket().file(kycPath).delete().catch(() => {});
     await accPost(db, key);
     const devKey = await giveDevKey(db, key, null);
+    if (india && (doc === "pan" || doc === "aadhaar" || doc === "gst")) {
+      const id = doc === "gst" ? String(cust.taxId).toUpperCase().slice(2, 12) : String(cust.taxId).toUpperCase().replace(/[^A-Z0-9]/g, "");
+      await db.collection("bbapp_idcheck").doc(key).set({ req: Date.now(), done: null,
+        pan: doc === "aadhaar" ? "" : id, aadhaar: doc === "aadhaar" ? id : "" });
+    }
     // Owner 14-Oct: an existing business without GST sends its shop card —
     // shown under the sign-up message in the group.
     if (card.length > 1000) {
@@ -2447,14 +2458,23 @@ async function kycCheck(db, cust, doc, text) {
     out.push(last4 && T.replace(/\D/g, "").includes(String(cust.taxId || "").replace(/\D/g, ""))
       ? "✅ Aadhaar number matches the photo"
       : (last4 && T.includes(last4) ? "✅ Aadhaar last 4 digits match the photo" : "⚠️ Aadhaar number NOT found on the photo"));
-    if (pin) out.push(T.replace(/\D/g, " ").split(/\s+/).includes(pin) ? "✅ Pincode matches the Aadhaar address" : `⚠️ Pincode ${pin} not on the Aadhaar`);
-    if (city) out.push(T.includes(city) ? `✅ City ${city} is on the Aadhaar` : `⚠️ City ${city} not on the Aadhaar`);
+    const f = cardFacts(text);
+    if (pin) {
+      out.push(T.replace(/\D/g, " ").split(/\s+/).includes(pin) ? "✅ Pincode matches the Aadhaar address"
+        : `⚠️ Pincode ${pin} not on the Aadhaar — Aadhaar shows ${f.pin || "no readable pincode"}`);
+    }
+    if (city) {
+      out.push(T.includes(city) ? `✅ City ${city} is on the Aadhaar`
+        : `⚠️ City ${city} not on the Aadhaar — Aadhaar address: ${f.addr || "not readable"}`);
+    }
   }
   if (cust.contact || doc === "pan") {
     const n = Math.max(nameHit(cust.contact) || 0, nameHit(cust.billName) || 0);
     out.push(n >= 0.5 ? "✅ Name matches the card" : "⚠️ Name on the card does not match the name typed");
   }
   if (doc === "pan") out.push("ℹ️ PAN has no address — place not checked");
+  const nm = cardFacts(text).name;
+  out.push(`🪪 Name on ${doc === "pan" ? "PAN" : "Aadhaar"}: ${nm || (doc === "pan" ? "not readable on the photo" : "not on this side of the card")}`);
   return out;
 }
 
@@ -2504,7 +2524,9 @@ exports.pinSalesUpload = onRequest(
     const pins = (req.body && req.body.pins) || {};
     const clean = {};
     for (const [k, v] of Object.entries(pins)) if (/^\d{6}$/.test(k)) clean[k] = Math.round(Number(v) || 0);
-    await admin.firestore().collection("bbapp_settings").doc("pinsales").set({ pins: clean,
+    const dests = {};
+    for (const [k, v] of Object.entries((req.body && req.body.dests) || {})) if (/^[A-Z0-9]{2,40}$/.test(k)) dests[k] = Math.round(Number(v) || 0);
+    await admin.firestore().collection("bbapp_settings").doc("pinsales").set({ pins: clean, dests,
       since: String((req.body && req.body.since) || ""), at: Date.now() });
     return res.json({ ok: true, pins: Object.keys(clean).length });
   },
@@ -2518,11 +2540,12 @@ function kycLines(a, c) {
   const warn = (a.kyc || []).filter((x) => String(x).startsWith("⚠️"));
   const doc = String(a.kycDoc || c.kycDoc || "").toUpperCase();
   if (a.kind !== "foreign") {
-    const noPhoto = (a.kyc || []).find((x) => String(x).startsWith("🪪"));
+    const info = (a.kyc || []).filter((x) => String(x).startsWith("🪪"));
     if (warn.length) out.push(...warn.map((x) => escH(x)));
-    else if (noPhoto) out.push(escH(noPhoto));
     else if (doc) out.push(`✅ ${doc === "AADHAAR" ? "Aadhaar" : doc} verified`);
-    if (a.pinSale != null) out.push(`${escH(String(c.bookingPlace || "").toUpperCase())} ${inr(a.pinSale)}`);
+    out.push(...info.map((x) => escH(x)));
+    if (a.destSale != null) out.push(`📊 ${escH(String(c.bookingPlace || "").toUpperCase())} sales last 6 months: ${inr(a.destSale)}`);
+    else if (a.pinSale != null) out.push(`📊 Pincode sales last 6 months: ${inr(a.pinSale)}`);
   }
   return out;
 }
@@ -2765,7 +2788,7 @@ exports.accountDelete = onRequest(
 /** Shop PC (tally_lookup.py, every few seconds): numbers waiting for a live
  *  Tally check; also its heartbeat (no heartbeat -> the cloud does not wait). */
 exports.lookupQueue = onRequest(
-  { region: "asia-south1", secrets: [PC_KEY], timeoutSeconds: 20, memory: "256MiB", maxInstances: 1, invoker: "public" },
+  { region: "asia-south1", secrets: [PC_KEY, TG_TOKEN], timeoutSeconds: 20, memory: "256MiB", maxInstances: 1, invoker: "public" },
   async (req, res) => {
     if (req.method !== "POST" || !pcOk(req)) return res.status(403).json({ ok: false });
     const db = admin.firestore();
@@ -2777,10 +2800,26 @@ exports.lookupQueue = onRequest(
         parties: (r.parties || []).slice(0, 10).map((x) => ({ name: String(x.name || ""), address: String(x.address || ""),
           dest: String(x.dest || ""), pincode: String(x.pincode || ""), gstin: String(x.gstin || ""), transport: String(x.transport || "") })) }, { merge: true });
     }
+    for (const r of (b.idres || []).slice(0, 20)) {
+      const key = accKey(r.key);
+      if (!key) continue;
+      await db.collection("bbapp_idcheck").doc(key).set({ done: Date.now(), hits: (r.hits || []).slice(0, 5) }, { merge: true });
+      if ((r.hits || []).length) {
+        const a = (await db.collection("bbapp_accounts").doc(key).get()).data() || {};
+        const chat = await approvalsChat(db);
+        if (chat) {
+          await tg("sendMessage", { chat_id: chat, ...(a.msg && a.msg.id ? { reply_to_message_id: a.msg.id } : {}),
+            text: `⚠️ ${(a.cust || {}).billName || key}: same ${r.what || "PAN / Aadhaar"} already in Tally — ${r.hits.join(", ")}` }).catch(() => {});
+        }
+      }
+    }
     await db.collection("bbapp_settings").doc("lookup").set({ at: Date.now() });
     const q = await db.collection("bbapp_lookup").where("done", "==", null).get();
     const keys = q.docs.filter((d) => Date.now() - (d.get("req") || 0) < 3 * 60e3).map((d) => d.id);
-    return res.json({ ok: true, keys });
+    const iq = await db.collection("bbapp_idcheck").where("done", "==", null).get();
+    const ids = iq.docs.filter((d) => Date.now() - (d.get("req") || 0) < 24 * 3600e3)
+      .map((d) => ({ key: d.id, pan: d.get("pan") || "", aadhaar: d.get("aadhaar") || "" }));
+    return res.json({ ok: true, keys, ids });
   },
 );
 
@@ -2813,3 +2852,43 @@ exports.accountDemo = onRequest(
       party: DEMO_PARTY.name, cust, devKey });
   },
 );
+
+
+/** Owner 15-Oct: what an Aadhaar / PAN photo actually says (phone OCR text):
+ *  the pincode, the address line with it, and the holder's name. */
+function cardFacts(text) {
+  const lines = String(text || "").split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const up = lines.map((l) => l.toUpperCase());
+  let pin = "", addr = "";
+  for (let i = up.length - 1; i >= 0 && !pin; i--) {
+    const m = up[i].replace(/(\d{4})\s(\d{4})\s(\d{4})/g, "").match(/(?<!\d)([1-9]\d{2}\s?\d{3})(?!\d)/);
+    if (m) {
+      pin = m[1].replace(/\s/g, "");
+      addr = [lines[i - 2], lines[i - 1], lines[i]].filter(Boolean).join(", ").replace(/^.*?ADDRESS\s*:?\s*/i, "").replace(/,\s*,/g, ",").slice(0, 160);
+    }
+  }
+  const skip = /GOVERNMENT|INDIA|INCOME|TAX|DEPARTMENT|AADHAAR|UNIQUE|AUTHORITY|PERMANENT|ACCOUNT|NUMBER|CARD|SIGNATURE|ADDRESS|DOB|BIRTH|MALE|FEMALE|^\d|VID|ENROL|HELP|WWW|@/;
+  const isName = (l) => /^[A-Z][A-Z .']{2,40}$/.test(l) && !skip.test(l) && l.split(" ").length <= 5;
+  let name = "";
+  const dob = up.findIndex((l) => /DOB|DATE OF BIRTH|YEAR OF BIRTH|\bMALE\b|\bFEMALE\b|जन्म/.test(l));
+  for (let i = dob - 1; dob > 0 && i >= Math.max(0, dob - 3) && !name; i--) if (isName(up[i])) name = up[i];
+  if (!name) {
+    const nIdx = up.findIndex((l) => /^NAME\b|\/ NAME$|^नाम/.test(l));
+    if (nIdx >= 0) for (let i = nIdx + 1; i < Math.min(up.length, nIdx + 3) && !name; i++) if (isName(up[i])) name = up[i];
+  }
+  if (!name) {
+    const to = up.findIndex((l) => /^TO\b/.test(l));
+    if (to >= 0 && isName(up[to + 1] || "")) name = up[to + 1];
+  }
+  if (!name) {
+    const so = up.findIndex((l) => /\b[SDWC]\/O\b/.test(l));
+    if (so > 0 && isName(up[so - 1])) name = up[so - 1];
+  }
+  return { pin, addr, name: name.replace(/\s+/g, " ").trim() };
+}
+
+
+/** Owner 15-Oct: city / destination key — same as the shop PC's city_key(). */
+function cityKey(x) {
+  return String(x || "").toUpperCase().replace(/\(.*?(\)|$)/g, " ").replace(/[^A-Z0-9]/g, "");
+}
