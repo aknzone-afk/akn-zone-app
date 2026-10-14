@@ -2229,11 +2229,26 @@ exports.accountSignup = onRequest(
     const doc = (cust.kycDoc || (/^\d{2}[A-Z]{5}\d{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/i.test(cust.taxId) ? "gst"
       : /^[A-Z]{5}\d{4}[A-Z]$/i.test(cust.taxId) ? "pan" : "aadhaar")).toLowerCase();
     const img = String((c.kycImage) || "");
-    // Owner 14-Oct 09:15: no photo needed — the number must be well-formed.
+    // Owner 14-Oct 10:00: PAN / Aadhaar = the card PHOTO (number read from it).
+    if (india && doc !== "gst" && img.length < 1000) {
+      return res.json({ ok: false, error: `Please add a photo of your ${doc === "pan" ? "PAN card" : "Aadhaar card"}.` });
+    }
+    const card = String(c.cardImage || "");
+    if (india && cust.businessType === "existing_business" && card.length < 1000) {
+      return res.json({ ok: false, error: "Please add a photo of your visiting card or shop board." });
+    }
     if (india && !idValid(doc, cust.taxId)) {
       return res.json({ ok: false, error: `This ${doc === "gst" ? "GST" : doc === "pan" ? "PAN" : "Aadhaar"} number is not valid — please check it.` });
     }
     const kyc = india ? await kycCheck(db, cust, doc, String(c.kycText || "")) : [];
+    if (india && cust.businessType === "existing_business") {
+      // Owner 14-Oct: the shop card / board must carry the bill name.
+      const CT = String(c.cardText || "").toUpperCase();
+      const bw = String(cust.billName || "").toUpperCase().split(/[^A-Z]+/).filter((w) => w.length >= 3 && !["THE", "AND", "SAREE", "SAREES"].includes(w));
+      const hit = bw.filter((w) => CT.includes(w)).length;
+      kyc.push(!CT.trim() ? "⚠️ Shop card / board photo could not be read — please look at it"
+        : hit >= Math.max(1, Math.ceil(bw.length / 2)) ? "✅ Bill name is on the shop card / board" : "⚠️ Bill name NOT found on the shop card / board");
+    }
     let kycPath = null;
     if (india && doc !== "gst" && img.length >= 1000) {
       kycPath = `kyc/${key}.jpg`;
@@ -2248,7 +2263,10 @@ exports.accountSignup = onRequest(
     const known = tallyPincodes().has(pin6);
     const ps = (await db.collection("bbapp_settings").doc("pinsales").get()).data() || {};
     const pinSale = Number((ps.pins || {})[pin6] || 0);
-    const auto = india && (!known || pinSale < 500000);
+    // Owner 14-Oct 10:00: never auto-approve unverified places — GST or an
+    // Aadhaar address must confirm the details (PAN has no address).
+    const clean = !kyc.some((x) => String(x).startsWith("⚠️"));
+    const auto = india && (!known || pinSale < 500000) && clean && (doc === "gst" || doc === "aadhaar");
     const kycDocName = doc;
     const status = !india || auto ? "approved" : "pending";
     await ref.set({ status, kind: india ? "new" : "foreign", cust, kyc, kycDoc: kycDocName, pinSale: india ? pinSale : null,
@@ -2260,7 +2278,6 @@ exports.accountSignup = onRequest(
     await accPost(db, key);
     // Owner 14-Oct: an existing business without GST sends its shop card —
     // shown under the sign-up message in the group.
-    const card = String(c.cardImage || "");
     if (card.length > 1000) {
       try {
         const path = `cards/${key}.jpg`;
@@ -2348,8 +2365,7 @@ async function kycCheck(db, cust, doc, text) {
     if (info.pin) out.push(String(info.pin) === pin ? "✅ Pincode matches the GST address" : `⚠️ Pincode ${pin} ≠ GST address ${info.pin}`);
     return out;
   }
-  if (!T) return [`🪪 ${doc === "pan" ? "PAN" : "Aadhaar"} number checked (no photo)`];
-  if (T.length < 20) return [`⚠️ The ${doc === "pan" ? "PAN" : "Aadhaar"} photo could not be read — please look at it`];
+  if (!T || T.length < 20) return [`⚠️ The ${doc === "pan" ? "PAN" : "Aadhaar"} photo could not be read — please look at it`];
   if (doc === "pan") {
     const pan = String(cust.taxId || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
     out.push(flat.includes(pan) ? "✅ PAN number matches the photo" : "⚠️ PAN number NOT found on the photo");
@@ -2361,8 +2377,11 @@ async function kycCheck(db, cust, doc, text) {
     if (pin) out.push(T.replace(/\D/g, " ").split(/\s+/).includes(pin) ? "✅ Pincode matches the Aadhaar address" : `⚠️ Pincode ${pin} not on the Aadhaar`);
     if (city) out.push(T.includes(city) ? `✅ City ${city} is on the Aadhaar` : `⚠️ City ${city} not on the Aadhaar`);
   }
-  const n = Math.max(nameHit(cust.contact) || 0, nameHit(cust.billName) || 0);
-  out.push(n >= 0.5 ? "✅ Name matches the card" : "⚠️ Name on the card does not match the name typed");
+  if (cust.contact || doc === "pan") {
+    const n = Math.max(nameHit(cust.contact) || 0, nameHit(cust.billName) || 0);
+    out.push(n >= 0.5 ? "✅ Name matches the card" : "⚠️ Name on the card does not match the name typed");
+  }
+  if (doc === "pan") out.push("ℹ️ PAN has no address — place not checked");
   return out;
 }
 

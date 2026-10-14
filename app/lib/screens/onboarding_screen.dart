@@ -959,7 +959,7 @@ class _SignupFormState extends State<_SignupForm> {
   _KycPhoto? _cardPhoto; // shop / visiting card (existing business, no GST)
 
   /// Owner 14-Oct: an existing saree business without GST shows its card.
-  bool get _needCard => _india && !_hasGst && _businessType == 'existing_business';
+  bool get _needCard => _india && _businessType == 'existing_business';
   bool _reading = false;
   String? _photoErr;
 
@@ -1174,8 +1174,10 @@ class _SignupFormState extends State<_SignupForm> {
           _cardPhoto = ph;
         } else if (aadhaar) {
           _aadhaarPhoto = ph;
+          _aadhaar.text = _readAadhaar(text);
         } else {
           _panPhoto = ph;
+          _pan.text = _readPan(text);
         }
       });
     } catch (_) {
@@ -1185,33 +1187,72 @@ class _SignupFormState extends State<_SignupForm> {
     }
   }
 
+  static String _readPan(String text) {
+    final up = text.toUpperCase();
+    final re = RegExp(r'[A-Z]{3}[PCHFATBLJG][A-Z]\d{4}[A-Z]');
+    for (final t in up.split(RegExp(r'\s+'))) {
+      final m = re.firstMatch(t.replaceAll(RegExp(r'[^A-Z0-9]'), ''));
+      if (m != null) return m.group(0)!;
+    }
+    for (final line in up.split('\n')) {
+      final m = re.firstMatch(line.replaceAll(RegExp(r'[^A-Z0-9]'), ''));
+      if (m != null) return m.group(0)!;
+    }
+    return '';
+  }
+
+  static String _readAadhaar(String text) {
+    for (final m in RegExp(r'(?<!\d)(\d{4})\s?(\d{4})\s?(\d{4})(?!\d)').allMatches(text)) {
+      final n = '${m.group(1)}${m.group(2)}${m.group(3)}';
+      if (aadhaarValid(n)) return n;
+    }
+    return '';
+  }
+
   /// A valid GST number is filled in (it may still be checking).
   bool get _hasGst => gstValid(_gst.text);
 
   /// Which ID this sign-up uses: GST, else PAN, else Aadhaar.
   String get _idUsed {
     if (_hasGst) return 'gst';
-    if (_norm(_pan.text).isNotEmpty) return 'pan';
-    if (_aadhaar.text.trim().isNotEmpty) return 'aadhaar';
+    if (_panPhoto != null && panValid(_pan.text)) return 'pan';
+    if (_aadhaarPhoto != null && aadhaarValid(_aadhaar.text)) return 'aadhaar';
+    if (_panPhoto != null) return 'pan';
+    if (_aadhaarPhoto != null) return 'aadhaar';
     return '';
   }
 
-  /// The box plus a photo button beside it (photo needed for PAN / Aadhaar
-  /// when that card is the ID used).
-  Widget _idRow(Widget field, {required bool aadhaar}) {
+  /// PAN / Aadhaar card photo; the number is read from it on the phone.
+  Widget _idPhoto({required bool aadhaar}) {
     final ph = aadhaar ? _aadhaarPhoto : _panPhoto;
-    final need = _idUsed == (aadhaar ? 'aadhaar' : 'pan');
-    // Owner 14-Oct 09:15: no ID photos — the number is checked instead.
-    final h = idHint(aadhaar ? 'aadhaar' : 'pan', aadhaar ? _aadhaar.text : _pan.text);
+    final num = aadhaar ? _aadhaar.text : _pan.text;
+    final ok = aadhaar ? aadhaarValid(num) : panValid(num);
+    final what = aadhaar ? 'Aadhaar card (side with your address)' : 'PAN card';
     return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-      field,
-      if (h != null && !(_hasGst && !aadhaar))
+      if (ph != null)
+        ClipRRect(
+          borderRadius: BorderRadius.circular(10),
+          child: Container(color: kLinen, height: 140, child: Image.memory(ph.jpg, fit: BoxFit.contain)),
+        ),
+      if (ph != null)
         Padding(
           padding: const EdgeInsets.only(top: 4, left: 4),
-          child: Text(h,
-              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5,
-                  color: h.startsWith('✓') ? _green : _red)),
+          child: Text(
+              ok
+                  ? '✓ ${aadhaar ? 'Aadhaar' : 'PAN'} number read: ${aadhaar ? 'XXXX XXXX ${num.substring(num.length - 4)}' : num}'
+                  : '✗ Could not read the ${aadhaar ? 'Aadhaar' : 'PAN'} number — take a clear, straight photo',
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5, color: ok ? _green : _red)),
         ),
+      const SizedBox(height: 6),
+      OutlinedButton.icon(
+        style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(50)),
+        onPressed: _reading ? null : () => _pickPhoto(aadhaar),
+        icon: _reading
+            ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+            : Icon(ph == null ? Icons.add_a_photo_rounded : Icons.cameraswitch_rounded),
+        label: Text(ph == null ? 'Add photo of your $what' : 'Change ${aadhaar ? 'Aadhaar' : 'PAN'} photo',
+            textAlign: TextAlign.center),
+      ),
     ]);
   }
 
@@ -1229,13 +1270,13 @@ class _SignupFormState extends State<_SignupForm> {
         if (!_gstOk) return 'This GST number could not be verified — correct it, or clear it and use PAN / Aadhaar.';
         return null;
       case 'pan':
-        if (!panValid(_pan.text)) return 'This PAN number is not valid — 5 letters, 4 digits, 1 letter.';
+        if (!panValid(_pan.text)) return 'Could not read the PAN number from the photo — please take a clear, straight photo of the PAN card.';
         return null;
       case 'aadhaar':
-        if (!aadhaarValid(_aadhaar.text)) return 'This Aadhaar number is not valid — please check the 12 digits.';
+        if (!aadhaarValid(_aadhaar.text)) return 'Could not read the Aadhaar number from the photo — please take a clear photo of the side with your address.';
         return null;
     }
-    return 'Please fill any one: GST, PAN or Aadhaar number.';
+    return 'Please type your GST number, or add a photo of your PAN card or Aadhaar card.';
   }
 
   Widget _cardBox() {
@@ -1243,7 +1284,7 @@ class _SignupFormState extends State<_SignupForm> {
     return Padding(
       padding: const EdgeInsets.only(bottom: 8),
       child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-        const Text('Your shop has a visiting card? Please add its photo.',
+        const Text('Existing shop: add a photo of your visiting card or your shop board *',
             style: TextStyle(fontWeight: FontWeight.w700)),
         if (ph != null)
           Padding(
@@ -1321,6 +1362,7 @@ class _SignupFormState extends State<_SignupForm> {
         if (photo != null) 'kycImage': base64Encode(photo.jpg),
         if (photo != null) 'kycText': photo.text,
         if (_needCard && _cardPhoto != null) 'cardImage': base64Encode(_cardPhoto!.jpg),
+        if (_needCard && _cardPhoto != null) 'cardText': _cardPhoto!.text,
       });
       if (!mounted) return;
       if (d == null) {
@@ -1413,7 +1455,7 @@ class _SignupFormState extends State<_SignupForm> {
                 const Text('Your ID — fill any one *',
                     style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: _dark)),
                 const SizedBox(height: 4),
-                const Text('GST fills your details by itself.',
+                const Text('GST number fills your details by itself. No GST? Add a PAN or Aadhaar card photo.',
                     style: TextStyle(fontSize: 12.5, color: Colors.black54)),
                 const SizedBox(height: 10),
                 TextField(
@@ -1437,29 +1479,21 @@ class _SignupFormState extends State<_SignupForm> {
                             color: _gstChecking ? Colors.black54 : (_gstOk ? _green : _red))),
                   ),
                 const SizedBox(height: 12),
-                _idRow(
-                  TextField(
-                    controller: _pan,
-                    textCapitalization: TextCapitalization.characters,
-                    inputFormatters: [LengthLimitingTextInputFormatter(12)],
-                    decoration: _dec(_hasGst ? 'PAN number (from GST)' : 'PAN number',
-                        hint: '10 characters, e.g. ABCDE1234F'),
+                if (!_hasGst) ...[
+                  const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 8),
+                    child: Text('No GST? Add a photo of ONE card:',
+                        style: TextStyle(fontWeight: FontWeight.w700)),
                   ),
-                  aadhaar: false,
-                ),
-                const SizedBox(height: 12),
-                _idRow(
-                  TextField(
-                    controller: _aadhaar,
-                    keyboardType: TextInputType.number,
-                    inputFormatters: [
-                      FilteringTextInputFormatter.digitsOnly,
-                      LengthLimitingTextInputFormatter(12),
-                    ],
-                    decoration: _dec('Aadhaar number (12 digits)'),
+                  _idPhoto(aadhaar: false),
+                  const SizedBox(height: 10),
+                  _idPhoto(aadhaar: true),
+                  const Padding(
+                    padding: EdgeInsets.only(top: 6),
+                    child: Text('Card photos are used only to verify you and are deleted after approval.',
+                        style: TextStyle(fontSize: 12.5, color: Colors.black54)),
                   ),
-                  aadhaar: true,
-                ),
+                ],
                 if (_photoErr != null)
                   Padding(
                     padding: const EdgeInsets.only(top: 8),
