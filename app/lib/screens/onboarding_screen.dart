@@ -175,7 +175,7 @@ class OnboardingFlow extends StatefulWidget {
   State<OnboardingFlow> createState() => _OnboardingFlowState();
 }
 
-enum _Step { phone, waiting, pick, form, pending }
+enum _Step { phone, waiting, mismatch, pick, form, pending }
 
 class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObserver {
   SharedPreferences? _prefs;
@@ -190,6 +190,8 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
   // 2. waiting for the WhatsApp message
   String? _code;
   String _typed = ''; // the number typed (normalized)
+  Map<String, dynamic>? _held; // verified, but from another number than typed
+  bool _mismatchOk = false;
   Timer? _poll;
   DateTime? _pollStart;
   bool _checking = false;
@@ -266,14 +268,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
 
   Future<void> _verify() async {
     FocusScope.of(context).unfocus();
-    final raw = _phone.text;
-    final m = _india ? OrderService.normalizeIndianMobile(raw) : OrderService.normalizeForeignMobile(raw);
-    if (m == null) {
-      setState(() => _phoneErr = _india
-          ? 'Enter a valid 10-digit mobile number starting with 6, 7, 8 or 9'
-          : 'Enter your full number with country code (7 to 15 digits)');
-      return;
-    }
+    const m = ''; // the number comes from WhatsApp itself
     final code = AccountService.newCode();
     setState(() {
       _phoneErr = null;
@@ -380,6 +375,11 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
     _vIndia = d['india'] != false;
     final a = ChatService.key(_typed), b = ChatService.key(_vMobile);
     _mismatch = a != null && b != null && a != b;
+    if (_mismatch && !_mismatchOk) {
+      _held = d;
+      if (mounted) setState(() => _step = _Step.mismatch);
+      return;
+    }
     final status = '${d['status'] ?? 'none'}';
     switch (status) {
       case 'approved':
@@ -575,6 +575,8 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
         return _phoneScreen();
       case _Step.waiting:
         return _waitingScreen();
+      case _Step.mismatch:
+        return _mismatchScreen();
       case _Step.pick:
         return _pickScreen();
       case _Step.form:
@@ -600,6 +602,49 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
     }
   }
 
+  /// Typed number != the number whose WhatsApp sent the code.
+  Widget _mismatchScreen() {
+    final sent = _shownMobile(_vMobile, _vIndia);
+    return _Page(children: [
+      const _Wordmark(),
+      const SizedBox(height: 26),
+      const Icon(Icons.phonelink_lock_rounded, size: 56, color: _red),
+      const SizedBox(height: 12),
+      const Text('Number does not match',
+          textAlign: TextAlign.center,
+          style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: _dark)),
+      const SizedBox(height: 10),
+      Text(
+        'You typed ${_shownMobile(_typed, _india)}, but the WhatsApp message was sent from $sent.\n\n'
+        'For safety the app opens only for the number whose WhatsApp sent the message.',
+        textAlign: TextAlign.center,
+        style: const TextStyle(fontSize: 15, height: 1.5),
+      ),
+      const SizedBox(height: 24),
+      _BigButton(
+        label: 'Continue as $sent',
+        icon: Icons.check_circle_rounded,
+        color: _green,
+        onPressed: () {
+          final d = _held;
+          if (d == null) return;
+          _mismatchOk = true;
+          // ignore: discarded_futures
+          _onVerified(d);
+        },
+      ),
+      const SizedBox(height: 12),
+      TextButton(
+        onPressed: () {
+          _held = null;
+          _mismatchOk = false;
+          _changeNumber();
+        },
+        child: const UText('Use another number'),
+      ),
+    ]);
+  }
+
   Widget _phoneScreen() {
     return _Page(children: [
       const _Wordmark(),
@@ -608,47 +653,11 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
           textAlign: TextAlign.center,
           style: TextStyle(fontSize: 22, fontWeight: FontWeight.w800, color: _dark)),
       const SizedBox(height: 8),
-      const Text('Verify your mobile number on WhatsApp to open the catalog.',
+      const Text('Log in with your WhatsApp — no number to type.',
           textAlign: TextAlign.center, style: TextStyle(fontSize: 15, height: 1.4)),
-      const SizedBox(height: 24),
-      DropdownButtonFormField<String>(
-        key: ValueKey('country-$_country'),
-        initialValue: _country,
-        isExpanded: true,
-        decoration: const InputDecoration(labelText: 'Country'),
-        items: [
-          for (final c in OrderService.countries) DropdownMenuItem(value: c, child: Text(c)),
-        ],
-        onChanged: (v) => setState(() {
-          _country = v ?? 'India';
-          _phone.clear();
-          _phoneErr = null;
-        }),
-      ),
-      const SizedBox(height: 14),
-      TextField(
-        key: ValueKey('phone-$_india'),
-        controller: _phone,
-        keyboardType: TextInputType.phone,
-        style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700, letterSpacing: 1),
-        inputFormatters: _india
-            ? [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(10)]
-            : [
-                FilteringTextInputFormatter.allow(RegExp(r'[0-9+ \-]')),
-                LengthLimitingTextInputFormatter(20),
-              ],
-        decoration: InputDecoration(
-          labelText: _india ? 'Mobile number (10 digits)' : 'Mobile number with country code',
-          hintText: _india ? '98765 43210' : 'e.g. 971 50 123 4567',
-          prefixText: _india ? '+91  ' : '+ ',
-          errorText: _phoneErr,
-          errorMaxLines: 3,
-        ),
-        onSubmitted: (_) => _verify(),
-      ),
       const SizedBox(height: 22),
       _BigButton(
-          label: 'Verify on WhatsApp', icon: Icons.chat_rounded, color: _green, onPressed: _verify),
+          label: 'Login with WhatsApp', icon: Icons.chat_rounded, color: _green, onPressed: _verify),
       const SizedBox(height: 12),
       const Text(
         'WhatsApp opens with a message ready — just tap SEND and come back to this app.',
@@ -683,6 +692,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
         style: const TextStyle(fontSize: 15, height: 1.45),
       ),
       const SizedBox(height: 8),
+      if (_typed.isNotEmpty)
       Text('Number: ${_shownMobile(_typed, _india)}',
           textAlign: TextAlign.center,
           style: const TextStyle(fontWeight: FontWeight.w700, color: Colors.black54)),

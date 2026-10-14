@@ -1,7 +1,7 @@
 name: catalog_app
 description: "B.B Synthetics fabric catalog — browse, filter, mark up and share via WhatsApp. Mirrors a public Google Drive folder."
 publish_to: 'none'
-version: 3.1.4+136
+version: 3.1.5+137
 
 environment:
   sdk: ^3.5.0
