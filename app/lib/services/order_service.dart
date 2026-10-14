@@ -74,12 +74,19 @@ class OrderService {
 
   /// Owner 13-Oct LIVE TEST: bill name "TEST …" → token ₹5, no minimum.
   /// Switched on by this TestFlight build only (remove before store release).
-  static bool liveTest(SharedPreferences p, String billName) =>
-      (p.getBool('live_test_v1') ?? false) && billName.trim().toUpperCase().startsWith('TEST');
+  /// Owner 14-Oct: the app is LIVE — test mode is gone for good.
+  static bool liveTest(SharedPreferences p, String billName) => false;
 
   /// 3.0.0 store release (owner 13-Oct): the ₹5 trial and the LIVE TEST
   /// switch are switched OFF on every phone and old trial orders removed.
   static Future<void> seedTrialOnce(SharedPreferences p) async {
+    // Owner 14-Oct: going LIVE — every test order made before today goes
+    // (the cloud's test orders were deleted and ORDER NO. restarts at 1).
+    if (p.getBool('release_clean_v2') != true) {
+      await p.setBool('release_clean_v2', true);
+      await p.setBool('live_test_v1', false);
+      await p.setString(_kOrdersKey, '[]');
+    }
     if (p.getBool('release_clean_v1') == true) return;
     await p.setBool('release_clean_v1', true);
     await p.setBool('live_test_v1', false);

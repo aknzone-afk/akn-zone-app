@@ -99,7 +99,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       c.close();
       // Owner's LIVE TEST (₹5 token, no minimum) — on/off from the website.
       final prefs = await SharedPreferences.getInstance();
-      await prefs.setBool('live_test_v1', j['live_test'] == true);
+      await prefs.setBool('live_test_v1', false); // owner 14-Oct: app is live
       final min = (j[Platform.isIOS ? 'min_build_ios' : 'min_build_android'] as num?)?.toInt() ?? 0;
       final mine = int.tryParse((await PackageInfo.fromPlatform()).buildNumber) ?? 0;
       return mine > 0 && mine < min;

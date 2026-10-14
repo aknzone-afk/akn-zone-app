@@ -57,7 +57,7 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
             'आपका सिलेक्शन ${OrderService.formatRupees(v.known)} का है। पहले ${MinOrderBar.minLabel} पूरा करें — और डिज़ाइन या पीस चुनें।')),
         actions: [
           // Owner's LIVE TEST (TestFlight only): bill name "TEST …", token ₹5.
-          if (ref.read(sharedPreferencesProvider).getBool('live_test_v1') ?? false)
+          if (false) // Owner 14-Oct: LIVE TEST removed — the app is live.
             TextButton(
               onPressed: () {
                 Navigator.pop(ctx);
