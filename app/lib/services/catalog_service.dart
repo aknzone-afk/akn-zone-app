@@ -4,7 +4,6 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config.dart';
 import '../models/photo.dart';
-import 'catalog_roots.dart';
 import 'drive_scraper.dart';
 import 'local_cache.dart';
 import 'ocr_service.dart';
@@ -240,22 +239,15 @@ class CatalogService {
   /// load).
   Future<bool> refreshSingleFolder(String folderName) async {
     try {
-      // 1. Find the folder's Drive ID: the app-config list, else the old root.
+      // 1. Find the folder's Drive ID by listing the catalog root.
+      final rootItems = await _scraper.listFolder(kDriveFolderId);
+      if (rootItems.isEmpty) return false;
       final target = folderName.trim().toLowerCase();
       String? folderId;
-      final roots = await CatalogRoots.load();
-      if (roots.isNotEmpty) {
-        for (final r in roots) {
-          if (r.name.trim().toLowerCase() == target) folderId = r.id;
-        }
-      } else {
-        final rootItems = await _scraper.listFolder(kDriveFolderId);
-        if (rootItems.isEmpty) return false;
-        for (final it in rootItems) {
-          if (it.isFolder && it.name.trim().toLowerCase() == target) {
-            folderId = it.id;
-            break;
-          }
+      for (final it in rootItems) {
+        if (it.isFolder && it.name.trim().toLowerCase() == target) {
+          folderId = it.id;
+          break;
         }
       }
       if (folderId == null) return false;
@@ -349,7 +341,6 @@ class CatalogService {
 
       final walkResult = await _scraper.walk(
         kDriveFolderId,
-        roots: await CatalogRoots.load(),
         onProgress: onProgress,
         onPhotoDiscovered: (dp) {
           discoveredPhotos.add(dp);

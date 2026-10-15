@@ -130,7 +130,6 @@ class DriveScraper {
   /// soon as possible.
   Future<({List<DrivePhoto> photos, bool complete})> walk(
     String rootFolderId, {
-    List<({String id, String name})> roots = const [],
     void Function(int folders, int photos)? onProgress,
     void Function(DrivePhoto photo)? onPhotoDiscovered,
   }) async {
@@ -164,14 +163,7 @@ class DriveScraper {
       }
     }
 
-    if (roots.isEmpty) {
-      await visit(rootFolderId, '');
-    } else {
-      // Owner 15-Oct: the category folders listed in app-config.json.
-      for (final r in roots) {
-        await visit(r.id, r.name);
-      }
-    }
+    await visit(rootFolderId, '');
     return (photos: out, complete: failedFolders == 0);
   }
 
