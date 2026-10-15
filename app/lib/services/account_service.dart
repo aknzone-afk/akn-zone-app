@@ -142,8 +142,8 @@ class AccountService {
   static Future<Map<String, dynamic>?> verify(String code) =>
       _post('accountVerify', {'code': code});
 
-  static Future<Map<String, dynamic>?> claim(String code, String party) =>
-      _post('accountClaim', {'code': code, 'party': party});
+  static Future<Map<String, dynamic>?> claim(String code, String party, {Map<String, dynamic>? loc}) =>
+      _post('accountClaim', {'code': code, 'party': party, if (loc != null) 'loc': loc});
 
   static Future<Map<String, dynamic>?> signup(String code, Map<String, dynamic> cust) =>
       _post('accountSignup', {'code': code, 'cust': cust}, secs: 110); // video post can take a while

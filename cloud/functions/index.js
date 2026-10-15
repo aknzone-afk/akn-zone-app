@@ -2146,6 +2146,8 @@ function accText(key, a) {
       `Mobile: ${key} ${a.abroadDirect ? "(outside India — typed, not verified)" : "(WhatsApp verified)"}`,
       ...kycLines(a, c));
   }
+  if (a.loc) lines.push(`📍 Location: shared (map below)${a.loc.acc ? " · ±" + a.loc.acc + " m" : ""}`);
+  else if (a.locIp !== undefined) lines.push(`📍 Location: NOT shared${a.locIp ? " · internet shows ~" + escH(a.locIp) : ""}`);
   const st = { approved: "✅ APPROVED", pending: "⏳ waiting for approval", declined: "❌ DECLINED", blocked: "🚫 BLOCKED" }[a.status] || a.status;
   lines.push("", `<b>${st}</b>`);
   // Owner 15-Oct: no times (Telegram shows them); a plain login needs no log line.
@@ -2162,6 +2164,10 @@ async function accPost(db, key, endLine = false) {
   const a = (await db.collection("bbapp_accounts").doc(key).get()).data() || {};
   const r = await tg("sendMessage", { chat_id: chat, text: accText(key, a), parse_mode: "HTML", reply_markup: accKeyboard(key, a.status) });
   if (r.ok) await db.collection("bbapp_accounts").doc(key).set({ msg: { chat, id: r.result.message_id } }, { merge: true });
+  if (r.ok && a.loc && a.locNew) {
+    await tg("sendLocation", { chat_id: chat, latitude: a.loc.lat, longitude: a.loc.lng, reply_to_message_id: r.result.message_id, disable_notification: true });
+    await db.collection("bbapp_accounts").doc(key).set({ locNew: false }, { merge: true });
+  }
   // Owner 15-Oct: dotted line between two app messages.
   if (endLine) await tg("sendMessage", { chat_id: chat, text: "• • • • • • • • • •", disable_notification: true });
 }
@@ -2307,12 +2313,14 @@ exports.accountClaim = onRequest(
     // Owner's decision stands: Waiting (held) or declined cannot self-approve.
     if (cur && (cur.held || cur.status === "declined")) {
       await ref.set({ kind: "existing", party: hit.name, log: admin.firestore.FieldValue.arrayUnion({ a: `📱 logged in again (${cur.held ? "on waiting" : "declined"})`, by: "app", at: Date.now() }) }, { merge: true });
+      await saveLoc(ref, req, req.body && req.body.loc);
       await accPost(db, key, true);
       return res.json({ ok: true, status: cur.held ? "pending" : "declined" });
     }
     await ref.set({ status: "approved", kind: "existing", party: hit.name, cust: { billName: hit.name, address: hit.address,
       pincode: hit.pincode, bookingPlace: hit.dest, transport: hit.transport, taxId: hit.gstin, mobile: key, country: "India", kind: "old" },
     verifiedAt: Date.now(), log: admin.firestore.FieldValue.arrayUnion({ a: "📱 logged in", by: "app", at: Date.now() }) }, { merge: true });
+    await saveLoc(ref, req, req.body && req.body.loc);
     await accPost(db, key, true);
     return res.json({ ok: true, status: "approved", devKey: await giveDevKey(db, key, null) });
   },
@@ -2423,7 +2431,7 @@ exports.accountSignup = onRequest(
     // Owner 14-Oct 10:00: never auto-approve unverified places — GST or an
     // Aadhaar address must confirm the details (PAN has no address).
     const clean = !kyc.some((x) => String(x).startsWith("⚠️"));
-    const auto = india && destSale < 500000 && clean && (doc === "gst" || doc === "aadhaar");
+    const auto = india && destSale < 500000 && clean && (doc === "gst" || doc === "aadhaar") && (c.loc === undefined || !!validLoc(c.loc));
     const kycDocName = doc;
     const status = !india || auto ? "approved" : "pending";
     await ref.set({ status, kind: india ? "new" : "foreign", cust, kyc, kycDoc: kycDocName, abroadDirect, pinSale: india ? pinSale : null, destSale: india ? destSale : null,
@@ -2432,6 +2440,7 @@ exports.accountSignup = onRequest(
       log: admin.firestore.FieldValue.arrayUnion({ a: india ? "🆕 signed up" : "🌍 signed up", by: "app", at: Date.now() },
         ...(auto ? [{ a: `✅ auto-approved — ${String(cust.bookingPlace || "city").toUpperCase()} sales under ₹5 lakh`, by: "bot", at: Date.now() + 1 }] : [])) }, { merge: true });
     if (auto && kycPath) await admin.storage().bucket().file(kycPath).delete().catch(() => {});
+    await saveLoc(ref, req, c.loc);
     await accPost(db, key);
     const devKey = await giveDevKey(db, key, null);
     if (india && (doc === "pan" || doc === "aadhaar" || doc === "gst")) {
@@ -2886,6 +2895,26 @@ function idValid(doc, id) {
   return doc === "gst" ? idGstOk(id) : doc === "pan" ? idPanOk(id) : idAadhaarOk(id);
 }
 
+
+/** Owner 15-Oct: the shop's location (phone GPS, optional). Not shared ->
+ *  the city the internet connection shows (approximate). */
+function validLoc(l) {
+  const lat = Number(l && l.lat), lng = Number(l && l.lng);
+  if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180 || (lat === 0 && lng === 0)) return null;
+  return { lat: Math.round(lat * 1e6) / 1e6, lng: Math.round(lng * 1e6) / 1e6, acc: Math.max(0, Math.min(99999, Math.round(Number(l.acc) || 0))) };
+}
+async function saveLoc(ref, req, raw) {
+  if (raw === undefined || raw === null) return; // older app: never asked
+  const loc = validLoc(raw);
+  if (loc) return ref.set({ loc: { ...loc, at: Date.now() }, locNew: true, locIp: admin.firestore.FieldValue.delete() }, { merge: true });
+  let city = "";
+  const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
+  try {
+    const j = await (await fetch(`https://ipwho.is/${encodeURIComponent(ip)}?fields=success,city,region`, { signal: AbortSignal.timeout(5000) })).json();
+    if (j && j.success) city = [j.city, j.region].filter(Boolean).join(", ");
+  } catch (e) { /* approximate only */ }
+  return ref.set({ loc: null, locNew: false, locIp: city.slice(0, 80) }, { merge: true });
+}
 
 /** Owner 14-Oct: is the caller's network in India? "IN" | "ABROAD" | null. */
 async function ipCountry(req) {

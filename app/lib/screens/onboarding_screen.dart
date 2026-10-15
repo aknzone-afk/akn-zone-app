@@ -17,6 +17,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../services/account_service.dart';
+import '../services/shop_location.dart';
 import '../services/chat_service.dart';
 import '../services/id_check.dart';
 import '../services/order_service.dart';
@@ -522,7 +523,9 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
       _pickErr = null;
     });
     try {
-      final d = await AccountService.claim(code, name);
+      final loc = await ShopLocation.ask(context);
+      if (!mounted) return;
+      final d = await AccountService.claim(code, name, loc: loc ?? {'denied': true});
       if (!mounted) return;
       if (d == null) {
         setState(() => _pickErr = 'No internet — please try again.');
@@ -1712,6 +1715,10 @@ class _SignupFormState extends State<_SignupForm> {
       'country': _india ? 'India' : _country,
       if (kycDoc.isNotEmpty) 'kycDoc': kycDoc,
     };
+    // Owner 15-Oct: shop location once (optional — no never blocks).
+    final loc = await ShopLocation.ask(context);
+    if (!mounted) return;
+    cust['loc'] = loc ?? {'denied': true};
     setState(() => _sending = true);
     try {
       final abroadMobile = widget.abroad ? (OrderService.normalizeForeignMobile(_mobileAbroad.text) ?? '') : '';
