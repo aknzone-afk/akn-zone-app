@@ -74,6 +74,8 @@
 	<string>Choose your payment screenshot to send to the shop.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>To record a short business-proof video with your voice when you sign up.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Used only once, when you sign up, to verify your shop's location for the shop. Never in the background. You can say no and still continue.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Used once when you sign up, to verify your shop's location for the shop. You can say no and still continue.</string>
 	<key>NSCameraUsageDescription</key>
