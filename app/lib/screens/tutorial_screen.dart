@@ -20,6 +20,11 @@ import '../providers/providers.dart';
 class Tutorial {
   static const _kIdKey = 'tutorial_id_v1';
   static const _kSeenKey = 'tutorial_seen_v1';
+  static const _kStartKey = 'tutorial_start_v1';
+
+  /// Owner 15-Oct: where the video starts (seconds) — app-config
+  /// "tutorial_start", so it can change without an app update.
+  static double startAt(SharedPreferences p) => (p.getInt(_kStartKey) ?? 0).toDouble();
 
   static String? videoId(SharedPreferences p) {
     final v = p.getString(_kIdKey);
@@ -54,6 +59,7 @@ class Tutorial {
       final j = jsonDecode('${res.data}') as Map<String, dynamic>;
       final id = parseId('${j['tutorial_youtube'] ?? ''}');
       await p.setString(_kIdKey, id ?? '');
+      await p.setInt(_kStartKey, (j['tutorial_start'] as num?)?.toInt() ?? 0);
     } catch (_) {}
   }
 }
@@ -82,6 +88,7 @@ class _TutorialScreenState extends ConsumerState<TutorialScreen> {
     }
     _ctrl = YoutubePlayerController.fromVideoId(
       videoId: id,
+      startSeconds: Tutorial.startAt(ref.read(sharedPreferencesProvider)),
       autoPlay: true,
       params: const YoutubePlayerParams(
         showFullscreenButton: true,
@@ -130,6 +137,15 @@ class _TutorialScreenState extends ConsumerState<TutorialScreen> {
           automaticallyImplyLeading: canGo,
           title: const UText('How to order',
               style: TextStyle(color: Colors.white)),
+          // Owner 15-Oct: a cross — whoever does not want the video skips it
+          // (counts as seen, so it is not shown again).
+          actions: [
+            IconButton(
+              tooltip: 'Skip',
+              icon: const Icon(Icons.close_rounded, size: 28),
+              onPressed: _continue,
+            ),
+          ],
         ),
         body: Column(
           children: [
