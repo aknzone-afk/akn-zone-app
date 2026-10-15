@@ -57,7 +57,9 @@ class Tutorial {
         options: Options(responseType: ResponseType.plain),
       );
       final j = jsonDecode('${res.data}') as Map<String, dynamic>;
-      final id = parseId('${j['tutorial_youtube'] ?? ''}');
+      // 3.1.26+: own key — old versions (forced, from 0:00, no cross) keep
+      // reading "tutorial_youtube", which stays empty.
+      final id = parseId('${j['tutorial_youtube_v2'] ?? ''}');
       await p.setString(_kIdKey, id ?? '');
       await p.setInt(_kStartKey, (j['tutorial_start'] as num?)?.toInt() ?? 0);
     } catch (_) {}
