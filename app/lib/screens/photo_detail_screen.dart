@@ -277,9 +277,16 @@ class _PhotoDetailScreenState extends ConsumerState<PhotoDetailScreen> {
                   imageProvider: RefreshableNetworkImage(fullUrl),
                   minScale: PhotoViewComputedScale.contained,
                   maxScale: PhotoViewComputedScale.covered * 8,
-                  errorBuilder: (_, __, ___) => const Center(
-                    child: Icon(Icons.broken_image_outlined,
-                        color: Colors.white, size: 56),
+                  // Drive sometimes times out (504) on the 2000-px photo ->
+                  // show the 600-px one (usually already on the phone).
+                  errorBuilder: (_, __, ___) => PhotoView(
+                    imageProvider: RefreshableNetworkImage(photo.thumbUrl()),
+                    minScale: PhotoViewComputedScale.contained,
+                    maxScale: PhotoViewComputedScale.covered * 4,
+                    backgroundDecoration: const BoxDecoration(color: Colors.black),
+                    errorBuilder: (_, __, ___) => const Center(
+                      child: Icon(Icons.broken_image_outlined, color: Colors.white, size: 56),
+                    ),
                   ),
                 );
               },

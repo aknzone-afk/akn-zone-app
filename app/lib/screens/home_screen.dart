@@ -24,7 +24,9 @@ class HomeScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     // Warm every folder's cover in the background (once per launch).
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      Future<void>.delayed(const Duration(seconds: 3), () => warmAllFolderCovers(ref));
+      Future<void>.delayed(const Duration(seconds: 3), () {
+        if (context.mounted) warmAllFolderCovers(ref); // screen may be gone by now
+      });
     });
     final catalogAsync = ref.watch(catalogProvider);
     final filter = ref.watch(filterProvider);
@@ -80,7 +82,10 @@ class HomeScreen extends ConsumerWidget {
               label: 'DAILY',
               sub: 'UPDATE',
               count: ref.watch(dailyTodayCountProvider),
-              onTap: () => context.push('/daily'),
+              onTap: () {
+                ref.invalidate(dailyFeedProvider); // always the latest days
+                context.push('/daily');
+              },
             ),
           ),
           const SizedBox(width: 6),

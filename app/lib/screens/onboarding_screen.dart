@@ -778,6 +778,7 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
                 if (c.mounted) Navigator.pop(c, true);
                 return;
               }
+              if (!c.mounted) return; // dialog closed while checking
               setD(() { busy = false; err = d == null ? 'No internet — please try again.' : '${d['error'] ?? 'Could not log in.'}'; });
             },
             child: const Text('Log in'),
