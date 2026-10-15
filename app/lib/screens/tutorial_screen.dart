@@ -20,15 +20,36 @@ import '../providers/providers.dart';
 class Tutorial {
   static const _kIdKey = 'tutorial_id_v1';
   static const _kSeenKey = 'tutorial_seen_v1';
-  static const _kStartKey = 'tutorial_start_v1';
+  static const _kSignupIdKey = 'signup_video_id_v1';
 
-  /// Owner 15-Oct: where the video starts (seconds) — app-config
-  /// "tutorial_start", so it can change without an app update.
-  static double startAt(SharedPreferences p) => (p.getInt(_kStartKey) ?? 0).toDouble();
+  /// Owner 15-Oct: from where to where each video plays — set online in
+  /// app-config.json (no app update): "tutorial_start" / "tutorial_end" for
+  /// the how-to-order video, "signup_youtube" / "signup_start" /
+  /// "signup_end" for the sign-up help video. Times: seconds or "m:ss".
+  static double startAt(SharedPreferences p, {bool signup = false}) =>
+      p.getDouble(signup ? 'signup_start_v1' : 'tutorial_start_v2') ?? 0;
+  static double? endAt(SharedPreferences p, {bool signup = false}) {
+    final v = p.getDouble(signup ? 'signup_end_v1' : 'tutorial_end_v1') ?? 0;
+    return v > 0 ? v : null;
+  }
 
-  static String? videoId(SharedPreferences p) {
-    final v = p.getString(_kIdKey);
+  static String? videoId(SharedPreferences p, {bool signup = false}) {
+    final v = p.getString(signup ? _kSignupIdKey : _kIdKey);
     return (v == null || v.isEmpty) ? null : v;
+  }
+
+  /// 199, "199", "3:19" -> seconds (0 = not set).
+  static double secs(Object? raw) {
+    if (raw is num) return raw.toDouble();
+    final t = '${raw ?? ''}'.trim();
+    if (t.contains(':')) {
+      var total = 0.0;
+      for (final part in t.split(':')) {
+        total = total * 60 + (double.tryParse(part.trim()) ?? 0);
+      }
+      return total;
+    }
+    return double.tryParse(t) ?? 0;
   }
 
   static bool mustWatch(SharedPreferences p) {
@@ -61,14 +82,21 @@ class Tutorial {
       // reading "tutorial_youtube", which stays empty.
       final id = parseId('${j['tutorial_youtube_v2'] ?? ''}');
       await p.setString(_kIdKey, id ?? '');
-      await p.setInt(_kStartKey, (j['tutorial_start'] as num?)?.toInt() ?? 0);
+      await p.setDouble('tutorial_start_v2', secs(j['tutorial_start']));
+      await p.setDouble('tutorial_end_v1', secs(j['tutorial_end']));
+      // Sign-up help video: its own link, else the same video.
+      final su = parseId('${j['signup_youtube'] ?? ''}') ?? id;
+      await p.setString(_kSignupIdKey, su ?? '');
+      await p.setDouble('signup_start_v1', secs(j['signup_start']));
+      await p.setDouble('signup_end_v1', secs(j['signup_end']));
     } catch (_) {}
   }
 }
 
 class TutorialScreen extends ConsumerStatefulWidget {
   final bool mustWatch;
-  const TutorialScreen({super.key, this.mustWatch = false});
+  final bool signup; // the sign-up help video (owner 15-Oct)
+  const TutorialScreen({super.key, this.mustWatch = false, this.signup = false});
 
   @override
   ConsumerState<TutorialScreen> createState() => _TutorialScreenState();
@@ -83,14 +111,16 @@ class _TutorialScreenState extends ConsumerState<TutorialScreen> {
   @override
   void initState() {
     super.initState();
-    final id = Tutorial.videoId(ref.read(sharedPreferencesProvider));
+    final prefs = ref.read(sharedPreferencesProvider);
+    final id = Tutorial.videoId(prefs, signup: widget.signup);
     if (id == null) {
       _failed = true;
       return;
     }
     _ctrl = YoutubePlayerController.fromVideoId(
       videoId: id,
-      startSeconds: Tutorial.startAt(ref.read(sharedPreferencesProvider)),
+      startSeconds: Tutorial.startAt(prefs, signup: widget.signup),
+      endSeconds: Tutorial.endAt(prefs, signup: widget.signup),
       autoPlay: true,
       params: const YoutubePlayerParams(
         showFullscreenButton: true,
@@ -115,6 +145,11 @@ class _TutorialScreenState extends ConsumerState<TutorialScreen> {
   }
 
   Future<void> _continue() async {
+    if (widget.signup) {
+      // Opened from the sign-up form (outside the app's router).
+      if (mounted) Navigator.of(context).maybePop();
+      return;
+    }
     await Tutorial.markSeen(ref.read(sharedPreferencesProvider));
     if (!mounted) return;
     if (context.canPop()) {
@@ -137,7 +172,7 @@ class _TutorialScreenState extends ConsumerState<TutorialScreen> {
           backgroundColor: Colors.black,
           foregroundColor: Colors.white,
           automaticallyImplyLeading: canGo,
-          title: const UText('How to order',
+          title: UText(widget.signup ? 'How to sign up' : 'How to order',
               style: TextStyle(color: Colors.white)),
           // Owner 15-Oct: a cross — whoever does not want the video skips it
           // (counts as seen, so it is not shown again).
@@ -151,12 +186,14 @@ class _TutorialScreenState extends ConsumerState<TutorialScreen> {
         ),
         body: Column(
           children: [
-            const Padding(
-              padding: EdgeInsets.fromLTRB(16, 8, 16, 14),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 14),
               child: Text(
-                'Watch this short video to learn how to select designs and place your order.',
+                widget.signup
+                    ? 'Watch this short video to learn how to fill in your details and sign up.'
+                    : 'Watch this short video to learn how to select designs and place your order.',
                 textAlign: TextAlign.center,
-                style: TextStyle(color: Colors.white70, fontSize: 15, height: 1.3),
+                style: const TextStyle(color: Colors.white70, fontSize: 15, height: 1.3),
               ),
             ),
             if (_ctrl != null)

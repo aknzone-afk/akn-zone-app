@@ -24,6 +24,7 @@ import '../services/order_service.dart';
 import '../services/push_service.dart';
 import '../services/transport_info.dart';
 import '../theme.dart';
+import 'tutorial_screen.dart';
 
 const _green = Color(0xFF1B8E3A);
 const _dark = Color(0xFF1B1A18);
@@ -1826,6 +1827,20 @@ class _SignupFormState extends State<_SignupForm> {
               const SizedBox(height: 6),
               const Text('New customer — please fill your details. B.B Synthetics will approve your account.',
                   style: TextStyle(fontSize: 14, height: 1.4)),
+              const SizedBox(height: 10),
+              // Owner 15-Oct: help video — how to fill the details.
+              OutlinedButton.icon(
+                style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(46)),
+                icon: const Icon(Icons.play_circle_fill_rounded, color: Colors.red),
+                label: const Text('WATCH VIDEO: HOW TO SIGN UP', style: TextStyle(fontWeight: FontWeight.w800)),
+                onPressed: () async {
+                  final p = await SharedPreferences.getInstance();
+                  await Tutorial.refresh(p, Dio());
+                  if (!context.mounted) return;
+                  await Navigator.of(context)
+                      .push(MaterialPageRoute<void>(builder: (_) => const TutorialScreen(signup: true)));
+                },
+              ),
               const SizedBox(height: 16),
               TextFormField(
                 controller: _bill,

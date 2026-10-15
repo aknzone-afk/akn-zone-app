@@ -68,7 +68,8 @@ final appRouter = GoRouter(
     GoRoute(
       path: '/tutorial',
       builder: (_, s) =>
-          TutorialScreen(mustWatch: s.uri.queryParameters['must'] == '1'),
+          TutorialScreen(mustWatch: s.uri.queryParameters['must'] == '1',
+              signup: s.uri.queryParameters['kind'] == 'signup'),
     ),
     GoRoute(
       path: '/pick/:id',
