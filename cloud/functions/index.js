@@ -2544,9 +2544,8 @@ exports.accountStatus = onRequest(
           ? { openDays: admin.firestore.FieldValue.increment(1), lastOpenDay: new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10) } : {}) },
       { merge: true });
     }
-    const mb = await minBuilds();
     return res.json({ ok: true, status: (a && a.status) || "none", kind: (a && a.kind) || null,
-      party: (a && a.party) || null, cust: (a && a.cust) || null, minBuildAndroid: mb.android, minBuildIos: mb.ios });
+      party: (a && a.party) || null, cust: (a && a.cust) || null });
   },
 );
 
@@ -2915,25 +2914,6 @@ async function saveLoc(ref, req, raw) {
     if (j && j.success) city = [j.city, j.region].filter(Boolean).join(", ");
   } catch (e) { /* approximate only */ }
   return ref.set({ loc: null, locNew: false, locIp: city.slice(0, 80) }, { merge: true });
-}
-
-/** Owner 15-Oct: force update through a 2nd channel (this cloud), so it
- *  works even if the data website ever moves. Source: app-config.json,
- *  overridden by Firestore bbapp_settings/minbuild {android, ios}. 5-min cache. */
-let MB = { at: 0, android: 0, ios: 0 };
-async function minBuilds() {
-  if (Date.now() - MB.at < 5 * 60e3) return MB;
-  let android = MB.android, ios = MB.ios;
-  try {
-    const j = await (await fetch("https://aknzone-afk.github.io/akn-zone-data/app/app-config.json?t=" + Math.floor(Date.now() / 300000), { signal: AbortSignal.timeout(5000) })).json();
-    android = Number(j.min_build_android) || 0; ios = Number(j.min_build_ios) || 0;
-  } catch (e) { /* keep the last values */ }
-  try {
-    const o = (await admin.firestore().collection("bbapp_settings").doc("minbuild").get()).data();
-    if (o) { android = Math.max(android, Number(o.android) || 0); ios = Math.max(ios, Number(o.ios) || 0); }
-  } catch (e) { /* ignore */ }
-  MB = { at: Date.now(), android, ios };
-  return MB;
 }
 
 /** Owner 14-Oct: is the caller's network in India? "IN" | "ABROAD" | null. */
