@@ -146,7 +146,7 @@ class AccountService {
       _post('accountClaim', {'code': code, 'party': party});
 
   static Future<Map<String, dynamic>?> signup(String code, Map<String, dynamic> cust) =>
-      _post('accountSignup', {'code': code, 'cust': cust}, secs: 60);
+      _post('accountSignup', {'code': code, 'cust': cust}, secs: 110); // video post can take a while
 
   /// Owner 14-Oct: customer abroad — no WhatsApp code; the cloud checks the
   /// network is outside India and the number is not Indian.

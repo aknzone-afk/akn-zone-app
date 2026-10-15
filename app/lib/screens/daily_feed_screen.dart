@@ -61,11 +61,18 @@ List<Photo> _photosFor(WidgetRef ref, List<String> ids) {
   return [for (final i in ids) if (byId[i] != null) byId[i]!];
 }
 
-class DailyFeedScreen extends ConsumerWidget {
+class DailyFeedScreen extends ConsumerStatefulWidget {
   const DailyFeedScreen({super.key});
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<DailyFeedScreen> createState() => _DailyFeedScreenState();
+}
+
+class _DailyFeedScreenState extends ConsumerState<DailyFeedScreen> {
+  bool _synced = false; // one catalogue sync per visit when photos are missing
+
+  @override
+  Widget build(BuildContext context) {
     final feed = ref.watch(dailyFeedProvider);
     return Scaffold(
       appBar: AppBar(title: const UText('DAILY UPDATE')),
@@ -79,7 +86,14 @@ class DailyFeedScreen extends ConsumerWidget {
         ),
         data: (days) {
           final shown = [for (final d in days) (d, _photosFor(ref, d.ids))].where((x) => x.$2.isNotEmpty).toList();
-          if (shown.isEmpty) return const Center(child: Text('No new designs yet.'));
+          final missing = days.fold(0, (t, d) => t + d.ids.length) - shown.fold(0, (t, x) => t + x.$2.length);
+          if (missing > 0 && !_synced) {
+            _synced = true; // the newest photos are not on this phone yet -> sync the catalogue once
+            WidgetsBinding.instance.addPostFrameCallback((_) => ref.invalidate(catalogProvider));
+          }
+          if (shown.isEmpty) {
+            return Center(child: Text(missing > 0 ? 'Loading today\'s new designs…' : 'No new designs yet.'));
+          }
           // Chat style: newest at the bottom, list starts at the bottom.
           return ListView.builder(
             reverse: true,
@@ -121,7 +135,7 @@ class _DayBubble extends StatelessWidget {
             child: Padding(
               padding: const EdgeInsets.all(10),
               child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
-                Text('🆕 ${photos.length} new design${photos.length == 1 ? '' : 's'}',
+                Text('🆕 ${day.ids.length} new design${day.ids.length == 1 ? '' : 's'}',
                     style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
                 const SizedBox(height: 8),
                 Row(children: [

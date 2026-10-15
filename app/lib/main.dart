@@ -14,6 +14,7 @@ import 'config.dart';
 import 'providers/providers.dart';
 import 'services/background_refresh.dart';
 import 'services/notification_service.dart';
+import 'screens/daily_feed_screen.dart' show dailyFeedProvider;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -113,19 +114,10 @@ void _openDailyUpdate(String payload) {
     return;
   }
   // Owner 15-Oct: the 9 PM push opens the DAILY UPDATE history (day bubbles).
+  // Today's photos may sit in any folder -> fresh feed + a full catalogue sync.
   appRouter.push('/daily');
   final c = _rootContainer;
   if (c == null) return;
-  // FAST PATH: refresh ONLY this one folder from Drive (1–2 requests) and
-  // surface it right away — instead of waiting for a full catalog re-walk,
-  // which is why the folder used to keep showing yesterday's designs until the
-  // whole slow scrape finished. Invalidating the catalog afterwards also kicks
-  // off price-OCR for the new designs + a full background sync via the cache
-  // path, so removals and prices catch up on their own.
-  // ignore: discarded_futures
-  c
-      .read(catalogServiceProvider)
-      .refreshSingleFolder(payload)
-      .then((_) => c.invalidate(catalogProvider))
-      .catchError((_) => c.invalidate(catalogProvider));
+  c.invalidate(dailyFeedProvider);
+  c.invalidate(catalogProvider);
 }

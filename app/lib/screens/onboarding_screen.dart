@@ -410,8 +410,9 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
         return;
       }
       if (manual) {
-        setState(() => _waitMsg =
-            'Not received yet. In WhatsApp, tap SEND on the "AKN LOGIN $code" message, then come back.');
+        setState(() => _waitMsg = d['checking'] == true
+            ? 'Message received — checking your number with our records, one moment…'
+            : 'Not received yet. In WhatsApp, tap SEND on the "AKN LOGIN $code" message, then come back.');
       }
     } catch (_) {
     } finally {
@@ -1149,8 +1150,11 @@ class _SignupFormState extends State<_SignupForm> {
       final v = await ImagePicker().pickVideo(source: src, maxDuration: const Duration(seconds: 60));
       if (v == null) return;
       final n = await v.length();
-      if (n > 45 * 1024 * 1024) {
-        if (mounted) setState(() => _bizErr = 'This video is too big — please keep it under 1 minute.');
+      if (n > 48 * 1024 * 1024) {
+        if (mounted) {
+          setState(() => _bizErr =
+              'This video is too big (${(n / 1048576).round()} MB). Please record a shorter one — 20–30 seconds is enough.');
+        }
         return;
       }
       if (mounted) {

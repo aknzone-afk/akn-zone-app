@@ -1335,8 +1335,12 @@ exports.newParties = onRequest(
     // are not sent again (no "already in Tally" note for every first order).
     const accAll = await db.collection("bbapp_accounts").get();
     const hasLedger = new Set(accAll.docs.filter((x) => x.get("kind") === "existing" || x.get("partyQueuedAt")).map((x) => x.id));
+    // Owner 15-Oct: the optional PAN (and Aadhaar) from sign-up go into the ledger too.
+    const accCust = new Map(accAll.docs.map((x) => [x.id, x.get("cust") || {}]));
     const out = snap.docs.map((x) => ({ ref: x.id, ...x.data() }))
       .filter((o) => o.cust && !o.addOnTo && !o.partyQueuedAt && !hasLedger.has(accKey(o.mobile)))
+      .map((o) => { const ac = accCust.get(accKey(o.mobile)) || {}; return { ...o, cust: { ...o.cust,
+        ...(!o.cust.pan && ac.pan ? { pan: ac.pan } : {}), ...(!o.cust.taxId && ac.taxId ? { taxId: ac.taxId } : {}) } }; })
       .sort((a, b) => (a.serial || 0) - (b.serial || 0)) // oldest first
       .map((o) => ({ ref: o.ref, serial: o.serial || null, cust: o.cust,
         advance: o.advanceAmt ? { paid: o.advanceAmt, utr: o.advanceUtr || null } : null }));
@@ -2135,7 +2139,7 @@ async function accountTap(db, q, act, key) {
     await tg("answerCallbackQuery", { callback_query_id: q.id, text: "Not found." });
     return;
   }
-  await docRef.set({ status: to, ...(act === "ok" ? { approvedAt: Date.now(), approvedBy: by } : {}),
+  await docRef.set({ status: to, held: act === "wait", ...(act === "ok" ? { approvedAt: Date.now(), approvedBy: by } : {}),
     log: admin.firestore.FieldValue.arrayUnion({ a: { ok: "✅ approved", no: "❌ declined", blk: "🚫 blocked", unb: "↩️ unblocked", wait: "⏳ put on waiting" }[act], by, at: Date.now() }) },
   { merge: true });
   await tg("answerCallbackQuery", { callback_query_id: q.id, text: `${to} — ${key}` });
@@ -2239,7 +2243,8 @@ exports.accountVerify = onRequest(
           a = { ...a, status: "none" };
         }
       }
-      if (live && a && a.status === "pending" && live.length) a = { ...a, status: "none" };
+      // A customer the owner put on Waiting / declined stays there.
+      if (live && a && a.status === "pending" && live.length && !a.held) a = { ...a, status: "none" };
     }
     const devKey = a ? await giveDevKey(db, key, a) : null; // new numbers get it at sign-up
     return res.json({ ok: true, verified: true, mobile: key, india, devKey, status: (a && a.status) || "none",
@@ -2262,6 +2267,12 @@ exports.accountClaim = onRequest(
     const ref = db.collection("bbapp_accounts").doc(key);
     const cur = (await ref.get()).data();
     if (cur && cur.status === "blocked") return res.json({ ok: true, status: "blocked" });
+    // Owner's decision stands: Waiting (held) or declined cannot self-approve.
+    if (cur && (cur.held || cur.status === "declined")) {
+      await ref.set({ kind: "existing", party: hit.name, log: admin.firestore.FieldValue.arrayUnion({ a: `📱 logged in again (${cur.held ? "on waiting" : "declined"})`, by: "app", at: Date.now() }) }, { merge: true });
+      await accPost(db, key);
+      return res.json({ ok: true, status: cur.held ? "pending" : "declined" });
+    }
     await ref.set({ status: "approved", kind: "existing", party: hit.name, cust: { billName: hit.name, address: hit.address,
       pincode: hit.pincode, bookingPlace: hit.dest, transport: hit.transport, taxId: hit.gstin, mobile: key, country: "India", kind: "old" },
     verifiedAt: Date.now(), log: admin.firestore.FieldValue.arrayUnion({ a: "📱 logged in", by: "app", at: Date.now() }) }, { merge: true });
@@ -2373,7 +2384,7 @@ exports.accountSignup = onRequest(
     const status = !india || auto ? "approved" : "pending";
     await ref.set({ status, kind: india ? "new" : "foreign", cust, kyc, kycDoc: kycDocName, abroadDirect, pinSale: india ? pinSale : null, destSale: india ? destSale : null,
       kycPath, verifiedAt: Date.now(), at: Date.now(),
-      ...(auto ? { approvedAt: Date.now(), approvedBy: "bot (new pincode)" } : {}),
+      ...(auto ? { approvedAt: Date.now(), approvedBy: "bot (city sales under ₹5 lakh)" } : {}),
       log: admin.firestore.FieldValue.arrayUnion({ a: india ? "🆕 signed up" : "🌍 signed up", by: "app", at: Date.now() },
         ...(auto ? [{ a: `✅ auto-approved — ${String(cust.bookingPlace || "city").toUpperCase()} sales under ₹5 lakh`, by: "bot", at: Date.now() + 1 }] : [])) }, { merge: true });
     if (auto && kycPath) await admin.storage().bucket().file(kycPath).delete().catch(() => {});
@@ -2404,7 +2415,7 @@ exports.accountSignup = onRequest(
     }
     // Owner 15-Oct: ID photos into the group too (Aadhaar / PAN).
     for (const [b64, label] of [[img, doc === "pan" ? "PAN" : "Aadhaar"], [String(c.panImage || ""), "PAN"]]) {
-      if (!india || b64.length < 1000) continue;
+      if (!india || auto || b64.length < 1000) continue; // auto-approved: nothing to decide
       try {
         const m = ((await ref.get()).data() || {}).msg;
         if (!m || !m.chat) continue;
@@ -2430,8 +2441,22 @@ exports.accountSignup = onRequest(
           fd.append("reply_to_message_id", String(m.id));
           fd.append("caption", `🎥 Business proof — ${cust.billName}${cust.bizNote ? "\n" + cust.bizNote : ""}`);
           fd.append("video", new Blob([buf], { type: "video/mp4" }), "proof.mp4");
-          const r = await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/sendVideo`, { method: "POST", body: fd });
-          if (!r.ok) logger.warn("proof video tg", { status: r.status, body: (await r.text()).slice(0, 200) });
+          let r = await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/sendVideo`, { method: "POST", body: fd });
+          if (!r.ok) {
+            // iPhone records .mov — if Telegram refuses it as a video, send it as a file.
+            logger.warn("proof video tg", { status: r.status, body: (await r.text()).slice(0, 200) });
+            const fd2 = new FormData();
+            fd2.append("chat_id", String(m.chat));
+            fd2.append("reply_to_message_id", String(m.id));
+            fd2.append("caption", `🎥 Business proof (video file) — ${cust.billName}`);
+            fd2.append("document", new Blob([buf], { type: "video/quicktime" }), "proof.mov");
+            r = await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/sendDocument`, { method: "POST", body: fd2 });
+            if (!r.ok) logger.warn("proof video tg doc", { status: r.status, body: (await r.text()).slice(0, 200) });
+          }
+          if (auto) { // nobody will tap approve -> the cloud copy goes now
+            await admin.storage().bucket().file(proofVideo).delete().catch(() => {});
+            await ref.set({ proofVideo: null }, { merge: true });
+          }
         }
       } catch (e) { logger.warn("proof video", { key, error: e.message }); }
     }
