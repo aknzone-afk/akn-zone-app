@@ -1133,6 +1133,7 @@ class _SignupFormState extends State<_SignupForm> {
 
   _KycPhoto? _panPhoto;
   _KycPhoto? _aadhaarPhoto;
+  _KycPhoto? _aadhaarPhoto2; // the other side (owner 15-Oct: front + back)
   _KycPhoto? _cardPhoto; // shop / visiting card (existing business, no GST)
 
   /// Owner 14-Oct: an existing saree business without GST shows its card.
@@ -1334,7 +1335,7 @@ class _SignupFormState extends State<_SignupForm> {
 
   // ───────────────────────── ID photo ─────────────────────────
 
-  Future<void> _pickPhoto(bool aadhaar, {bool card = false}) async {
+  Future<void> _pickPhoto(bool aadhaar, {bool card = false, bool second = false}) async {
     FocusScope.of(context).unfocus();
     final src = await showModalBottomSheet<ImageSource>(
       context: context,
@@ -1381,8 +1382,13 @@ class _SignupFormState extends State<_SignupForm> {
         if (card) {
           _cardPhoto = ph;
         } else if (aadhaar) {
-          _aadhaarPhoto = ph;
-          _aadhaar.text = _readAadhaar(text);
+          if (second) {
+            _aadhaarPhoto2 = ph;
+          } else {
+            _aadhaarPhoto = ph;
+          }
+          final n = _readAadhaar(_aadhaarPhoto?.text ?? '');
+          _aadhaar.text = n.isNotEmpty ? n : _readAadhaar(_aadhaarPhoto2?.text ?? '');
         } else {
           _panPhoto = ph;
           _pan.text = _readPan(text);
@@ -1415,6 +1421,84 @@ class _SignupFormState extends State<_SignupForm> {
       if (aadhaarValid(n)) return n;
     }
     return '';
+  }
+
+  /// Aadhaar FRONT: name / photo side (DOB, gender).
+  static bool _aadhaarFront(String t) =>
+      RegExp(r'\bDOB\b|D\.O\.B|Date of Birth|Year of Birth|\bYOB\b|\bMale\b|\bFemale\b|Transgender', caseSensitive: false)
+          .hasMatch(t);
+
+  /// Aadhaar BACK: the address side (6-digit pincode or "Address").
+  static bool _aadhaarBack(String t) =>
+      RegExp(r'(?<!\d)[1-9]\d{5}(?!\d)').hasMatch(t) || RegExp(r'address', caseSensitive: false).hasMatch(t);
+
+  /// Both sides received: two photos (one with the address), or one photo
+  /// that shows front and back together.
+  bool get _aadhaarBothSides {
+    final a = _aadhaarPhoto, b = _aadhaarPhoto2;
+    if (a == null) return false;
+    if (b != null) return _aadhaarBack(a.text) || _aadhaarBack(b.text);
+    return _aadhaarFront(a.text) && _aadhaarBack(a.text);
+  }
+
+  /// Which side the customer still has to add (single photo only).
+  String get _aadhaarMissingSide {
+    final a = _aadhaarPhoto;
+    if (a == null || _aadhaarPhoto2 != null || _aadhaarBothSides) return '';
+    return _aadhaarBack(a.text) ? 'FRONT side (with your photo)' : 'BACK side (with your address)';
+  }
+
+  /// Aadhaar: front + back (2 photos), or one photo showing both sides.
+  Widget _aadhaarPhotos() {
+    final a = _aadhaarPhoto, b = _aadhaarPhoto2;
+    final num = _aadhaar.text;
+    final numOk = aadhaarValid(num);
+    final missing = _aadhaarMissingSide;
+    Widget pic(_KycPhoto p) => Expanded(
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(10),
+            child: Container(color: kLinen, height: 130, child: Image.memory(p.jpg, fit: BoxFit.contain)),
+          ),
+        );
+    Widget btn(String label, IconData icon, VoidCallback f) => OutlinedButton.icon(
+          style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(50)),
+          onPressed: _reading ? null : f,
+          icon: _reading
+              ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+              : Icon(icon),
+          label: Text(label, textAlign: TextAlign.center),
+        );
+    String? line;
+    var good = false;
+    if (a != null) {
+      if (!numOk) {
+        line = '✗ Could not read the Aadhaar number — take a clear, straight photo';
+      } else if (_aadhaarBothSides) {
+        good = true;
+        line = '✓ Aadhaar front + back received (number XXXX XXXX ${num.substring(num.length - 4)})';
+      } else if (b != null) {
+        line = '✗ Could not read the address — take a clearer photo of the BACK side';
+      } else {
+        line = '✓ One side received — now add the $missing too';
+      }
+    }
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      if (a != null) Row(children: [pic(a), if (b != null) ...[const SizedBox(width: 6), pic(b)]]),
+      if (line != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 4, left: 4),
+          child: Text(line,
+              style: TextStyle(fontWeight: FontWeight.w700, fontSize: 12.5, color: good ? _green : (missing.isNotEmpty && numOk ? Colors.orange.shade800 : _red))),
+        ),
+      const SizedBox(height: 6),
+      btn(a == null ? 'Add photo of your Aadhaar card — FRONT and BACK *' : 'Change Aadhaar photo',
+          a == null ? Icons.add_a_photo_rounded : Icons.cameraswitch_rounded, () => _pickPhoto(true)),
+      if (a != null && (b != null || !_aadhaarBothSides)) ...[
+        const SizedBox(height: 6),
+        btn(b == null ? 'Add Aadhaar ${missing.isEmpty ? 'other side' : missing} *' : 'Change 2nd Aadhaar photo',
+            b == null ? Icons.add_a_photo_rounded : Icons.cameraswitch_rounded, () => _pickPhoto(true, second: true)),
+      ],
+    ]);
   }
 
   /// A valid GST number is filled in (it may still be checking).
@@ -1474,8 +1558,13 @@ class _SignupFormState extends State<_SignupForm> {
         if (!_gstOk) return 'This GST number could not be verified — correct it, or clear it and use PAN / Aadhaar.';
         return null;
       case 'aadhaar':
-        if (_aadhaarPhoto == null) return 'No GST? Please add a photo of your Aadhaar card (side with your address).';
-        if (!aadhaarValid(_aadhaar.text)) return 'Could not read the Aadhaar number from the photo — please take a clear photo of the side with your address.';
+        if (_aadhaarPhoto == null) return 'No GST? Please add photos of your Aadhaar card — front and back.';
+        if (!aadhaarValid(_aadhaar.text)) return 'Could not read the Aadhaar number from the photo — please take a clear, straight photo.';
+        if (!_aadhaarBothSides) {
+          return _aadhaarPhoto2 == null
+              ? 'Please add the Aadhaar $_aadhaarMissingSide too — we need both sides.'
+              : 'Could not read the address on the Aadhaar — please take a clearer photo of the BACK side.';
+        }
         if (_panPhoto != null && !panValid(_pan.text)) return 'Could not read the PAN card — take a clear photo, or remove it (PAN is optional).';
         return null;
     }
@@ -1644,7 +1733,8 @@ class _SignupFormState extends State<_SignupForm> {
         if (videoPath != null) 'proofVideo': videoPath,
         ...cust,
         if (photo != null) 'kycImage': base64Encode(photo.jpg),
-        if (photo != null) 'kycText': photo.text,
+        if (photo != null) 'kycText': [photo.text, if (kycDoc == 'aadhaar' && _aadhaarPhoto2 != null) _aadhaarPhoto2!.text].join('\n'),
+        if (kycDoc == 'aadhaar' && _aadhaarPhoto2 != null) 'kycImage2': base64Encode(_aadhaarPhoto2!.jpg),
         // Owner 15-Oct: the optional PAN photo goes to the group too.
         if (_india && !_hasGst && _panPhoto != null && panValid(_pan.text)) 'panImage': base64Encode(_panPhoto!.jpg),
         if (_needCard && _proofKind == 'existing' && _cardPhoto != null) 'cardImage': base64Encode(_cardPhoto!.jpg),
@@ -1769,10 +1859,10 @@ class _SignupFormState extends State<_SignupForm> {
                 if (!_hasGst) ...[
                   const Padding(
                     padding: EdgeInsets.symmetric(vertical: 8),
-                    child: Text('No GST? Aadhaar card photo is compulsory (PAN is optional):',
+                    child: Text('No GST? Aadhaar card FRONT and BACK photos are compulsory (PAN is optional):',
                         style: TextStyle(fontWeight: FontWeight.w700)),
                   ),
-                  _idPhoto(aadhaar: true),
+                  _aadhaarPhotos(),
                   const SizedBox(height: 10),
                   _idPhoto(aadhaar: false),
                   const Padding(

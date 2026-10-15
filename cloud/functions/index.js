@@ -2148,7 +2148,7 @@ async function accountTap(db, q, act, key) {
     await tg("editMessageText", { chat_id: q.message.chat.id, message_id: q.message.message_id,
       text: accText(key, fresh), parse_mode: "HTML", reply_markup: accKeyboard(key, fresh.status) });
   }
-  if (act === "ok") await pushTo(db, key, "✅ Your B.B Synthetics account is approved — open the app and start ordering.");
+  if (act === "ok") await pushTo(db, key, "✅ Your B.B Synthetics account is approved — now you can open the app and start ordering.");
   // Owner 14-Oct: the PAN / Aadhaar photo is only kept until the decision.
   if ((act === "ok" || act === "no") && fresh.kycPath) {
     await admin.storage().bucket().file(fresh.kycPath).delete().catch(() => {});
@@ -2347,6 +2347,13 @@ exports.accountSignup = onRequest(
       return res.json({ ok: false, error: `This ${doc === "gst" ? "GST" : doc === "pan" ? "PAN" : "Aadhaar"} number is not valid — please check it.` });
     }
     const kyc = india ? await kycCheck(db, cust, doc, String(c.kycText || "")) : [];
+    if (india && doc === "aadhaar") {
+      // Owner 15-Oct: the BACK of the Aadhaar has the address — both sides needed.
+      const AT = String(c.kycText || "");
+      if (!/(?<!\d)[1-9]\d{5}(?!\d)/.test(AT) && !/address/i.test(AT)) {
+        kyc.push("⚠️ Aadhaar BACK side (address) not received — ask the customer for it");
+      }
+    }
     if (india && doc !== "gst" && card.length < 1000 && videoOk) {
       kyc.push("🎥 Business proof is a video — please watch it");
     }
@@ -2414,7 +2421,7 @@ exports.accountSignup = onRequest(
       } catch (e) { logger.warn("card photo", { key, error: e.message }); }
     }
     // Owner 15-Oct: ID photos into the group too (Aadhaar / PAN).
-    for (const [b64, label] of [[img, doc === "pan" ? "PAN" : "Aadhaar"], [String(c.panImage || ""), "PAN"]]) {
+    for (const [b64, label] of [[img, doc === "pan" ? "PAN" : "Aadhaar"], [String(c.kycImage2 || ""), "Aadhaar (other side)"], [String(c.panImage || ""), "PAN"]]) {
       if (!india || auto || b64.length < 1000) continue; // auto-approved: nothing to decide
       try {
         const m = ((await ref.get()).data() || {}).msg;
@@ -2460,6 +2467,17 @@ exports.accountSignup = onRequest(
         }
       } catch (e) { logger.warn("proof video", { key, error: e.message }); }
     }
+    // Owner 15-Oct: a dotted line after the last photo / video — this
+    // customer's sign-up ends here; the next one starts below.
+    try {
+      const m = ((await ref.get()).data() || {}).msg;
+      if (m && m.chat) {
+        await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/sendMessage`, {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: m.chat, text: `• • • • • • • • • •  end of ${cust.billName}`, disable_notification: true }),
+        });
+      }
+    } catch (e) { logger.warn("signup end line", { key, error: e.message }); }
     return res.json({ ok: true, status, devKey });
   },
 );
