@@ -2097,10 +2097,41 @@ const accKeyboard = (key, status) => ({ inline_keyboard: status === "pending"
     // "waiting for approval" screen — they never see that they were stopped.
     : [[{ text: "⏳ Waiting", callback_data: `a|wait|${key}` }, { text: "🚫 Block", callback_data: `a|blk|${key}` }]] });
 
+const GST_STATES = { "01": "Jammu & Kashmir", "02": "Himachal Pradesh", "03": "Punjab", "04": "Chandigarh", "05": "Uttarakhand",
+  "06": "Haryana", "07": "Delhi", "08": "Rajasthan", "09": "Uttar Pradesh", "10": "Bihar", "11": "Sikkim", "12": "Arunachal Pradesh",
+  "13": "Nagaland", "14": "Manipur", "15": "Mizoram", "16": "Tripura", "17": "Meghalaya", "18": "Assam", "19": "West Bengal",
+  "20": "Jharkhand", "21": "Odisha", "22": "Chhattisgarh", "23": "Madhya Pradesh", "24": "Gujarat", "26": "Dadra & Nagar Haveli and Daman & Diu",
+  "27": "Maharashtra", "29": "Karnataka", "30": "Goa", "31": "Lakshadweep", "32": "Kerala", "33": "Tamil Nadu", "34": "Puducherry",
+  "35": "Andaman & Nicobar", "36": "Telangana", "37": "Andhra Pradesh", "38": "Ladakh" };
+// Pincode first 2 digits -> state (when there is no GSTIN).
+const PIN_STATES = [[11, 11, "Delhi"], [12, 13, "Haryana"], [14, 16, "Punjab"], [17, 17, "Himachal Pradesh"], [18, 19, "Jammu & Kashmir"],
+  [20, 28, "Uttar Pradesh"], [30, 34, "Rajasthan"], [36, 39, "Gujarat"], [40, 44, "Maharashtra"], [45, 48, "Madhya Pradesh"],
+  [49, 49, "Chhattisgarh"], [50, 50, "Telangana"], [51, 53, "Andhra Pradesh"], [56, 59, "Karnataka"], [60, 64, "Tamil Nadu"],
+  [67, 69, "Kerala"], [70, 74, "West Bengal"], [75, 77, "Odisha"], [78, 78, "Assam"], [79, 79, "North East"], [80, 82, "Bihar"],
+  [83, 83, "Jharkhand"], [84, 85, "Bihar"]];
+function stateOf(c) {
+  const g = String(c.taxId || "").toUpperCase();
+  if (/^\d{2}[A-Z]{5}\d{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/.test(g) && GST_STATES[g.slice(0, 2)]) return GST_STATES[g.slice(0, 2)];
+  const p = String(c.pincode || "");
+  if (/^[1-9]\d{5}$/.test(p)) {
+    if (p.startsWith("403")) return "Goa";
+    if (p.startsWith("396") && /^3962[01]/.test(p)) return "Dadra & Nagar Haveli and Daman & Diu";
+    const n = Number(p.slice(0, 2));
+    const r = PIN_STATES.find(([a, b]) => n >= a && n <= b);
+    if (r) return r[2];
+  }
+  return "";
+}
+
 function accText(key, a) {
   const c = a.cust || {};
   const lines = [];
-  if (a.kind === "existing") lines.push(`📱 LOGIN — ${escH(a.party || "-")}`, `Mobile: ${key} (WhatsApp verified)`);
+  if (a.kind === "existing") {
+    // Owner 15-Oct: LOGIN, then billing name, destination, mobile, state.
+    const st = stateOf(c);
+    lines.push("📱 <b>LOGIN</b>", `Billing: ${escH(a.party || c.billName || "-")}`,
+      `Destination: ${escH(c.bookingPlace || "-")}`, `Mobile: ${key}`, ...(st ? [`State: ${escH(st)}`] : []));
+  }
   else {
     lines.push(...(a.kind === "foreign" ? ["🌍 Outside India"] : []),
       ...(c.contact ? [`Name: ${escH(c.contact)}`] : []), `Bill name: ${escH(c.billName || "-")}`,
@@ -2117,16 +2148,22 @@ function accText(key, a) {
   }
   const st = { approved: "✅ APPROVED", pending: "⏳ waiting for approval", declined: "❌ DECLINED", blocked: "🚫 BLOCKED" }[a.status] || a.status;
   lines.push("", `<b>${st}</b>`);
-  for (const e of (a.log || []).slice(-4)) lines.push(`${e.a} — ${escH(e.by)} · ${hhmm(e.at)}`);
+  // Owner 15-Oct: no times (Telegram shows them); a plain login needs no log line.
+  for (const e of (a.log || []).slice(-4)) {
+    if (a.kind === "existing" && /logged in$/.test(e.a)) continue;
+    lines.push(e.by && e.by !== "app" ? `${e.a} — ${escH(e.by)}` : e.a);
+  }
   return lines.join("\n");
 }
 
-async function accPost(db, key) {
+async function accPost(db, key, endLine = false) {
   const chat = await approvalsChat(db);
   if (!chat) return;
   const a = (await db.collection("bbapp_accounts").doc(key).get()).data() || {};
   const r = await tg("sendMessage", { chat_id: chat, text: accText(key, a), parse_mode: "HTML", reply_markup: accKeyboard(key, a.status) });
   if (r.ok) await db.collection("bbapp_accounts").doc(key).set({ msg: { chat, id: r.result.message_id } }, { merge: true });
+  // Owner 15-Oct: dotted line between two app messages.
+  if (endLine) await tg("sendMessage", { chat_id: chat, text: "• • • • • • • • • •", disable_notification: true });
 }
 
 async function accountTap(db, q, act, key) {
@@ -2270,13 +2307,13 @@ exports.accountClaim = onRequest(
     // Owner's decision stands: Waiting (held) or declined cannot self-approve.
     if (cur && (cur.held || cur.status === "declined")) {
       await ref.set({ kind: "existing", party: hit.name, log: admin.firestore.FieldValue.arrayUnion({ a: `📱 logged in again (${cur.held ? "on waiting" : "declined"})`, by: "app", at: Date.now() }) }, { merge: true });
-      await accPost(db, key);
+      await accPost(db, key, true);
       return res.json({ ok: true, status: cur.held ? "pending" : "declined" });
     }
     await ref.set({ status: "approved", kind: "existing", party: hit.name, cust: { billName: hit.name, address: hit.address,
       pincode: hit.pincode, bookingPlace: hit.dest, transport: hit.transport, taxId: hit.gstin, mobile: key, country: "India", kind: "old" },
     verifiedAt: Date.now(), log: admin.firestore.FieldValue.arrayUnion({ a: "📱 logged in", by: "app", at: Date.now() }) }, { merge: true });
-    await accPost(db, key);
+    await accPost(db, key, true);
     return res.json({ ok: true, status: "approved", devKey: await giveDevKey(db, key, null) });
   },
 );
@@ -2474,7 +2511,7 @@ exports.accountSignup = onRequest(
       if (m && m.chat) {
         await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/sendMessage`, {
           method: "POST", headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ chat_id: m.chat, text: `• • • • • • • • • •  end of ${cust.billName}`, disable_notification: true }),
+          body: JSON.stringify({ chat_id: m.chat, text: "• • • • • • • • • •", disable_notification: true }),
         });
       }
     } catch (e) { logger.warn("signup end line", { key, error: e.message }); }
