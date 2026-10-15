@@ -57,7 +57,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   String _phone = '';
   bool _resolving = false;
   bool _checkedForceUpdate = false;
-  DateTime? _minBuildAt; // owner 15-Oct: re-asked on resume too (every 10 min)
+  bool _checkedMinBuild = false;
   bool _preloaded = false;
 
   @override
@@ -181,9 +181,8 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   }
 
   Future<void> _resolve({bool silent = false}) async {
-    // An app left open in the background must also hear "update now".
-    if (_minBuildAt == null || DateTime.now().difference(_minBuildAt!) > const Duration(minutes: 10)) {
-      _minBuildAt = DateTime.now();
+    if (!_checkedMinBuild) {
+      _checkedMinBuild = true;
       if (await _belowMinBuild()) {
         if (mounted) setState(() => _state = _Gate.forceUpdate);
         return;
