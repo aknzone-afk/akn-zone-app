@@ -576,9 +576,9 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       isScrollControlled: true,
       builder: (ctx) => StatefulBuilder(builder: (ctx, setSt) {
         final q = ctrl.text.trim().toUpperCase();
-        final opts = q.isEmpty
-            ? _transports.take(30).toList()
-            : _transports.where((o) => q.split(RegExp(r'\s+')).every(o.contains)).take(30).toList();
+        final all = _tInfo?.choices(_transports) ?? _transports;
+        final opts = TransportInfo.search(all, q, max: 30);
+        final canSave = ctrl.text.trim().length >= 2 && (_tInfo?.allowed(ctrl.text) ?? true);
         return Padding(
           padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(ctx).viewInsets.bottom + 16),
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -588,7 +588,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
               controller: ctrl,
               autofocus: true,
               textCapitalization: TextCapitalization.characters,
-              decoration: _dec('Transport name', hint: 'Search or type your own'),
+              decoration: _dec('Transport name', hint: 'Type and choose from the list'),
               onChanged: (_) => setSt(() {}),
             ),
             const SizedBox(height: 6),
@@ -596,12 +596,17 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
               constraints: const BoxConstraints(maxHeight: 260),
               child: ListView(shrinkWrap: true, children: [
                 for (final o in opts) ListTile(dense: true, title: Text(o), onTap: () => Navigator.pop(ctx, o)),
+                if (opts.isEmpty)
+                  const Padding(
+                    padding: EdgeInsets.all(12),
+                    child: Text('Not found — try another spelling. You can only choose a transport from our list.'),
+                  ),
               ]),
             ),
             const SizedBox(height: 8),
             FilledButton(
-              onPressed: () => Navigator.pop(ctx, ctrl.text.trim().toUpperCase()),
-              child: const Text('SAVE TRANSPORT'),
+              onPressed: canSave ? () => Navigator.pop(ctx, ctrl.text.trim().toUpperCase()) : null,
+              child: Text(canSave ? 'SAVE TRANSPORT' : 'CHOOSE FROM THE LIST'),
             ),
           ]),
         );
@@ -1382,11 +1387,11 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                     info: _tInfo,
                     place: _bookingPlace.text,
                     decoration: _dec(t('Transport Name', 'ट्रांसपोर्ट का नाम'),
-                        hint: t('Search or type your own', 'खोजें या खुद लिखें'),
+                        hint: t('Type and choose from the list', 'लिखें और लिस्ट में से चुनें'),
                         suffix: const Icon(Icons.local_shipping_outlined)),
                     validator: (v) => (v ?? '').trim().length < 2
-                        ? 'Enter transport name'
-                        : null,
+                        ? 'Choose your transport'
+                        : ((_tInfo?.allowed(v ?? '') ?? true) ? null : 'Please choose your transport from the list'),
                   ),
                   if (_india)
                   _TransportHelp(
@@ -1664,18 +1669,15 @@ class _TransportField extends StatelessWidget {
       focusNode: focusNode,
       optionsBuilder: (v) {
         final q = v.text.trim().toUpperCase();
+        // Owner 16-Oct: pick-only list (GST transporters + COURIER + TRAVELS).
+        final options = info?.choices(this.options) ?? this.options;
         if (q.isEmpty) {
           // Transports the shop's parties use for this place come first.
           final usual = [for (final e in info?.forPlace(place) ?? const <(String, int)>[]) e.$1];
-          return [...usual, ...options.where((o) => !usual.contains(o))].take(40);
+          final ok = usual.where(options.contains).toList();
+          return [...ok, ...options.where((o) => !ok.contains(o))].take(40);
         }
-        final words = q.split(RegExp(r'\s+'));
-        final starts = <String>[], has = <String>[];
-        for (final o in options) {
-          if (!words.every(o.contains)) continue;
-          (o.startsWith(q) ? starts : has).add(o);
-        }
-        return [...starts, ...has].take(40);
+        return TransportInfo.search(options, q);
       },
       fieldViewBuilder: (context, ctrl, focus, onSubmit) => TextFormField(
         controller: ctrl,

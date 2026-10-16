@@ -1971,9 +1971,10 @@ class _SignupFormState extends State<_SignupForm> {
                   info: _tInfo,
                   place: _place.text,
                   decoration: _dec('Transport name *',
-                      hint: 'Search or type your own',
+                      hint: 'Type and choose from the list',
                       suffix: const Icon(Icons.local_shipping_outlined)),
-                  validator: (v) => _need(v, 2, 'Enter transport name'),
+                  validator: (v) => _need(v, 2, 'Choose your transport') ??
+                      ((_tInfo?.allowed(v ?? '') ?? true) ? null : 'Please choose your transport from the list'),
                 ),
                 if (tGst != null)
                   Padding(
@@ -2085,17 +2086,14 @@ class _TransportBox extends StatelessWidget {
       focusNode: focusNode,
       optionsBuilder: (v) {
         final q = v.text.trim().toUpperCase();
+        // Owner 16-Oct: pick-only list (GST transporters + COURIER + TRAVELS).
+        final options = info?.choices(this.options) ?? this.options;
         if (q.isEmpty) {
           final usual = [for (final e in info?.forPlace(place) ?? const <(String, int)>[]) e.$1];
-          return [...usual, ...options.where((o) => !usual.contains(o))].take(40);
+          final ok = usual.where(options.contains).toList();
+          return [...ok, ...options.where((o) => !ok.contains(o))].take(40);
         }
-        final words = q.split(RegExp(r'\s+'));
-        final starts = <String>[], has = <String>[];
-        for (final o in options) {
-          if (!words.every(o.contains)) continue;
-          (o.startsWith(q) ? starts : has).add(o);
-        }
-        return [...starts, ...has].take(40);
+        return TransportInfo.search(options, q);
       },
       fieldViewBuilder: (context, ctrl, focus, onSubmit) => TextFormField(
         controller: ctrl,

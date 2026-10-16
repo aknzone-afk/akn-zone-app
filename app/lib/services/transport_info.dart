@@ -14,7 +14,59 @@ class TransportInfo {
   final Map<String, String> gst;
   final Map<String, List<(String, int)>> dest;
   final Map<String, List<(String, int)>> to;
-  TransportInfo(this.gst, this.dest, this.to);
+  /// Owner 16-Oct: the ONLY transports a customer may choose (pick-only):
+  /// Tally transporters with a GST number + COURIER + "... TRAVELS".
+  final List<String> pick;
+  TransportInfo(this.gst, this.dest, this.to, [this.pick = const []]);
+
+  /// Is [t] one of the allowed transports? (no list yet = old behaviour)
+  bool allowed(String t) => pick.isEmpty || pick.contains(_n(t));
+
+  /// The list the transport box offers: [pick] when published, else [fallback].
+  List<String> choices(List<String> fallback) => pick.isNotEmpty ? pick : fallback;
+
+  /// Search with spelling slips: "KARTARA" still finds KATARIA TRANSPORT.
+  static List<String> search(List<String> opts, String query, {int max = 40}) {
+    final q = _n(query);
+    if (q.isEmpty) return opts.take(max).toList();
+    final words = q.split(' ');
+    final starts = <String>[], has = <String>[];
+    for (final o in opts) {
+      if (!words.every(o.contains)) continue;
+      (o.startsWith(q) ? starts : has).add(o);
+    }
+    final near = <(String, int)>[];
+    final w0 = words.first;
+    if (w0.length >= 3) {
+      final lim = w0.length <= 4 ? 1 : 2;
+      for (final o in opts) {
+        if (starts.contains(o) || has.contains(o)) continue;
+        var best = 99;
+        for (final w in o.split(RegExp(r'[^A-Z0-9]+'))) {
+          if (w.length < 3) continue;
+          final d = _lev(w0, w.length > w0.length + 2 ? w.substring(0, w0.length) : w);
+          if (d < best) best = d;
+        }
+        if (best <= lim) near.add((o, best));
+      }
+      near.sort((a, b) => a.$2.compareTo(b.$2));
+    }
+    return [...starts, ...has, ...near.map((e) => e.$1)].take(max).toList();
+  }
+
+  static int _lev(String a, String b) {
+    var prev = List<int>.generate(b.length + 1, (i) => i);
+    for (var i = 1; i <= a.length; i++) {
+      final cur = List<int>.filled(b.length + 1, 0)..[0] = i;
+      for (var j = 1; j <= b.length; j++) {
+        final c = a[i - 1] == b[j - 1] ? 0 : 1;
+        final x = prev[j] + 1, y = cur[j - 1] + 1, z = prev[j - 1] + c;
+        cur[j] = x < y ? (x < z ? x : z) : (y < z ? y : z);
+      }
+      prev = cur;
+    }
+    return prev[b.length];
+  }
 
   static TransportInfo? _mem;
 
@@ -27,6 +79,7 @@ class TransportInfo {
         {for (final e in (j['gst'] as Map).entries) '${e.key}': '${e.value}'},
         {for (final e in (j['dest'] as Map).entries) '${e.key}': pairs(e.value)},
         {for (final e in (j['to'] as Map).entries) '${e.key}': pairs(e.value)},
+        [for (final x in (j['pick'] as List? ?? const [])) '$x'],
       );
     } catch (_) {
       return null;
