@@ -1235,6 +1235,24 @@ exports.chatSend = onRequest(
     // Tester 13-Oct: the bytes go along too — a failed Telegram send must not
     // lose the screenshot (it is still kept in Storage / AKN Chat).
     await addChat(db, ref, { from: "party", text, fileId, bytes: img, mime: img ? "image/jpeg" : null });
+    // Owner 16-Oct: every payment screenshot also goes to the payment group,
+    // with the party name and destination under it.
+    if (img) {
+      try {
+        const rg = (await db.collection("bbapp_settings").doc("receipts").get()).data();
+        if (rg && rg.chat) {
+          const acc = (await db.collection("bbapp_accounts").doc(accKey(d.mobile) || "-").get()).data() || {};
+          const party = String(d.ledgerName || (acc.kind === "existing" && acc.party) || d.billName || "?").toUpperCase();
+          const dest = String((d.cust && d.cust.bookingPlace) || (acc.cust && acc.cust.bookingPlace) || "").toUpperCase();
+          const fd = new FormData();
+          fd.append("chat_id", String(rg.chat));
+          fd.append("caption", `${party}\n📍 ${dest || "-"}\n💰 Payment screenshot from the app${d.serial ? " · ORDER NO. " + d.serial : ""}${text ? "\n" + text : ""}`.slice(0, 1000));
+          fd.append("photo", new Blob([img], { type: "image/jpeg" }), "payment.jpg");
+          const x = await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/sendPhoto`, { method: "POST", body: fd }).then((y) => y.json());
+          if (!x.ok) logger.warn("payment group photo", { ref, desc: x.description });
+        }
+      } catch (e) { logger.warn("payment group photo", { ref, error: e.message }); }
+    }
     let paid = false;
     if (img && (d.status || "received") === "bill_sent") paid = await checkPayment(db, ref, img);
     return res.json({ ok: true, paid });
@@ -2130,7 +2148,9 @@ function accText(key, a) {
     // Owner 15-Oct: LOGIN, then billing name, destination, mobile, state.
     const st = stateOf(c);
     lines.push("📱 <b>LOGIN</b>", `Billing: ${escH(a.party || c.billName || "-")}`,
-      `Destination: ${escH(c.bookingPlace || "-")}`, `Mobile: ${key}`, ...(st ? [`State: ${escH(st)}`] : []));
+      `Destination: ${escH(c.bookingPlace || "-")}`, `Mobile: ${key}`,
+      ...(a.partySale != null ? [`📊 Last 6 months: ${inr(a.partySale)}`] : []),
+      ...(st ? [`State: ${escH(st)}`] : []));
   }
   else {
     lines.push(...(a.kind === "foreign" ? ["🌍 Outside India"] : []),
@@ -2141,7 +2161,7 @@ function accText(key, a) {
       `Address: ${escH(c.address || "-")}`,
       ...(c.pincode ? [`Pincode: ${escH(c.pincode)}`] : []),
       `Destination: ${escH(c.bookingPlace || "-")}${c.country && c.country !== "India" ? " · " + escH(c.country) : ""}`,
-      ...(c.transport ? [`Transport: ${escH(c.transport)}`] : []),
+      ...(c.transport ? [`Transport: ${escH(c.transport)}${c.transportTyped ? ` (typed: ${escH(c.transportTyped)})` : ""}`] : []),
       ...(c.taxId ? [`${(c.kycDoc || "ID").toUpperCase()}: ${escH(c.kycDoc === "aadhaar" ? "XXXX XXXX " + String(c.taxId).slice(-4) : c.taxId)}`] : []),
       `Mobile: ${key} ${a.abroadDirect ? "(outside India — typed, not verified)" : "(WhatsApp verified)"}`,
       ...kycLines(a, c));
@@ -2272,8 +2292,12 @@ exports.accountVerify = onRequest(
       } else if (!lk.done && pcUp && Date.now() - lk.req < 12e3) {
         return res.json({ ok: true, verified: false, checking: true });
       }
-      const live = lk.done && lk.ok && fresh ? (lk.parties || []) : null;
-      parties = live || partiesSaved(key);
+      let live = lk.done && lk.ok && fresh ? (lk.parties || []) : null;
+      // Owner 16-Oct: a busy / company-less Tally answers "nothing" — never let
+      // an empty live answer hide a party the saved list knows (Renu Sharma).
+      const saved = partiesSaved(key);
+      if (live && !live.length && saved.length) live = null;
+      parties = live || saved;
       if (live && a && a.status === "approved") {
         const linked = a.kind === "existing" && live.some((p) => p.name === a.party);
         if (a.kind === "existing" && !linked) {
@@ -2312,11 +2336,13 @@ exports.accountClaim = onRequest(
     if (cur && cur.status === "blocked") return res.json({ ok: true, status: "blocked" });
     // Owner's decision stands: Waiting (held) or declined cannot self-approve.
     if (cur && (cur.held || cur.status === "declined")) {
+      await ref.set({ partySale: await partySale(db, hit.name) }, { merge: true });
       await ref.set({ kind: "existing", party: hit.name, log: admin.firestore.FieldValue.arrayUnion({ a: `📱 logged in again (${cur.held ? "on waiting" : "declined"})`, by: "app", at: Date.now() }) }, { merge: true });
       await saveLoc(ref, req, req.body && req.body.loc);
       await accPost(db, key, true);
       return res.json({ ok: true, status: cur.held ? "pending" : "declined" });
     }
+    await ref.set({ partySale: await partySale(db, hit.name) }, { merge: true });
     await ref.set({ status: "approved", kind: "existing", party: hit.name, cust: { billName: hit.name, address: hit.address,
       pincode: hit.pincode, bookingPlace: hit.dest, transport: hit.transport, taxId: hit.gstin, mobile: key, country: "India", kind: "old" },
     verifiedAt: Date.now(), log: admin.firestore.FieldValue.arrayUnion({ a: "📱 logged in", by: "app", at: Date.now() }) }, { merge: true });
@@ -2362,6 +2388,22 @@ exports.accountSignup = onRequest(
     if (india && (!cust.pincode || !cust.transport || !cust.taxId)) {
       return res.json({ ok: false, error: "Please fill pincode, transport and GST / PAN / Aadhaar." });
     }
+    // Owner 16-Oct: "MOHIT" -> our transporter "MOHIT TRANSPORT CORPORATION".
+    let trWarn = null;
+    if (india) {
+      try { if (!NPCHECK) NPCHECK = require("./newparty_check.json"); } catch (e) { /* no list */ }
+      const list = (NPCHECK && NPCHECK.transports) || [];
+      const T = npNorm(cust.transport);
+      if (list.includes(T)) cust.transport = T;
+      else if (list.length) {
+        const hit = list.filter((x) => x.startsWith(T + " ") || x.split(" ")[0] === T);
+        if (hit.length === 1) { cust.transportTyped = T; cust.transport = hit[0]; }
+        else {
+          const sug = nearest(T, list, 3);
+          trWarn = `⚠️ Transport "${T}" is not in our list${sug.length ? " — maybe " + sug.join(" / ") : ""}`;
+        }
+      }
+    }
     const ref = db.collection("bbapp_accounts").doc(key);
     const cur = (await ref.get()).data();
     if (abroadDirect && cur) return res.json({ ok: false, error: "This number already has an account — please log in with WhatsApp." });
@@ -2392,6 +2434,7 @@ exports.accountSignup = onRequest(
       return res.json({ ok: false, error: `This ${doc === "gst" ? "GST" : doc === "pan" ? "PAN" : "Aadhaar"} number is not valid — please check it.` });
     }
     const kyc = india ? await kycCheck(db, cust, doc, String(c.kycText || "")) : [];
+    if (trWarn) kyc.push(trWarn);
     if (india && doc === "aadhaar") {
       // Owner 15-Oct: the BACK of the Aadhaar has the address — both sides needed.
       const AT = String(c.kycText || "");
@@ -2674,6 +2717,16 @@ exports.pinSalesUpload = onRequest(
     for (const [k, v] of Object.entries((req.body && req.body.dests) || {})) if (/^[A-Z0-9]{2,40}$/.test(k)) dests[k] = Math.round(Number(v) || 0);
     await admin.firestore().collection("bbapp_settings").doc("pinsales").set({ pins: clean, dests,
       since: String((req.body && req.body.since) || ""), at: Date.now() });
+    // Owner 15-Oct: party-wise 6-month sales (shown on the LOGIN message).
+    const parties = {};
+    for (const [k, v] of Object.entries((req.body && req.body.parties) || {})) {
+      const name = String(k).trim().toUpperCase().slice(0, 200);
+      if (name) parties[name] = Math.round(Number(v) || 0);
+    }
+    if (Object.keys(parties).length) {
+      await admin.firestore().collection("bbapp_settings").doc("partysales").set({ sales: parties,
+        since: String((req.body && req.body.since) || ""), at: Date.now() });
+    }
     return res.json({ ok: true, pins: Object.keys(clean).length });
   },
 );
@@ -2896,6 +2949,15 @@ function idValid(doc, id) {
 }
 
 
+/** Owner 15-Oct: the party's sales over the last 6 months (PC upload, daily). */
+async function partySale(db, name) {
+  try {
+    const d = (await db.collection("bbapp_settings").doc("partysales").get()).data();
+    if (!d || !d.sales) return null;
+    return Number(d.sales[String(name || "").trim().toUpperCase()] || 0);
+  } catch (e) { return null; }
+}
+
 /** Owner 15-Oct: the shop's location (phone GPS, optional). Not shared ->
  *  the city the internet connection shows (approximate). */
 function validLoc(l) {
@@ -2980,6 +3042,35 @@ exports.lookupQueue = onRequest(
       const key = accKey(r.key);
       if (!key) continue;
       await db.collection("bbapp_idcheck").doc(key).set({ done: Date.now(), hits: (r.hits || []).slice(0, 5) }, { merge: true });
+      // Owner 16-Oct: same PAN / Aadhaar / GST on ONE Tally customer ledger ->
+      // it IS that party: link the account to it (no new ledger), approve.
+      if ((r.hits || []).length === 1) {
+        try {
+          const ref = db.collection("bbapp_accounts").doc(key);
+          const a = (await ref.get()).data() || {};
+          if (a.kind === "new" && a.status !== "blocked" && a.status !== "declined" && !a.held) {
+            const name = String(r.hits[0]);
+            let h = null;
+            try {
+              if (!PARTIES) PARTIES = require("./parties.json");
+              for (const lst of Object.values(PARTIES)) { h = (lst || []).find((x) => x.name === name); if (h) break; }
+            } catch (e) { /* saved list missing */ }
+            const c = a.cust || {};
+            const wasPending = a.status !== "approved";
+            await ref.set({ kind: "existing", party: name, status: "approved", ...(wasPending ? { approvedAt: Date.now(), approvedBy: "bot (same ID in Tally)" } : {}),
+              cust: { ...c, billName: name, ...(h ? { address: h.address || c.address, pincode: h.pincode || c.pincode,
+                bookingPlace: h.dest || c.bookingPlace, transport: h.transport || c.transport, taxId: h.gstin || c.taxId } : {}), kind: "old" },
+              log: admin.firestore.FieldValue.arrayUnion({ a: `🔗 linked to Tally party ${name} (same ${r.what || "ID"})`, by: "bot", at: Date.now() }) }, { merge: true });
+            const fresh = (await ref.get()).data() || {};
+            if (fresh.msg && fresh.msg.id) {
+              await tg("editMessageText", { chat_id: fresh.msg.chat, message_id: fresh.msg.id, text: accText(key, fresh),
+                parse_mode: "HTML", reply_markup: accKeyboard(key, fresh.status) }).catch(() => {});
+            }
+            if (wasPending) await pushTo(db, key, "✅ Your B.B Synthetics account is approved — now you can open the app and start ordering.");
+            continue; // no "same PAN" warning: it is handled
+          }
+        } catch (e) { logger.warn("idcheck link", { key, error: e.message }); }
+      }
       if ((r.hits || []).length) {
         const a = (await db.collection("bbapp_accounts").doc(key).get()).data() || {};
         const chat = await approvalsChat(db);
