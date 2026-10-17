@@ -307,6 +307,14 @@ const STEPS = [
 const ORDER = ["received", ...STEPS.map((x) => x.status)];
 const STATUSES = Object.fromEntries(STEPS.map((x) => [x.k, x.status]));
 
+// Owner 17-Oct: hold / party-does-not-want lines in the STATUS section.
+const FLAG_LINES = {
+  hold: "⏸ Kept on hold",
+  resume: "▶️ Hold removed",
+  cancel: "🚫 Party does not want the goods",
+  uncancel: "↩️ Order back on (party wants the goods)",
+};
+
 function hhmm(ms) {
   return new Date(ms).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit" });
 }
@@ -319,6 +327,7 @@ function statusText(d, fallbackPlain) {
   const log = (d && d.log) || [];
   if (!log.length) return base;
   const lines = log.map((e) => {
+    if (FLAG_LINES[e.a]) return `${FLAG_LINES[e.a]} — by ${escH(e.by)} · ${hhmm(e.at)}`;
     const st = STEPS.find((x) => x.k === e.k);
     const name = st ? st.label : e.k;
     return e.a === "undo"
@@ -344,24 +353,79 @@ function statusKeyboard(ref, d) {
   const ci = ORDER.indexOf(cur);
   const log = (d && d.log) || [];
   const rows = [];
-  const last = log[log.length - 1];
-  const curStep = STEPS.find((x) => x.status === cur);
-  if (curStep) {
-    const done = [...log].reverse().find((e) => e.a === "do" && e.k === curStep.k);
-    const icon = String(curStep.label).split(" ")[0];
+  // Owner 16-Oct: every finished step stays on the message (who + when).
+  // Only the LATEST hand-tapped step can be undone; automatic steps (bill,
+  // dispatch, bilty) are facts — tapping them does nothing.
+  for (const st of STEPS) {
+    const si = ORDER.indexOf(st.status);
+    if (si > ci) break;
+    const done = [...log].reverse().find((e) => e.a === "do" && e.k === st.k);
+    const icon = String(st.label).split(" ")[0];
     const who = done ? `${firstName(done.by)} ${hhmm(done.at)}` : "";
-    rows.push([{ text: `${icon} ✅ ${who}`.trim().slice(0, 60), callback_data: `u|${curStep.k}|${ref}`.slice(0, 64) }]);
+    const undoable = si === ci && !st.auto;
+    rows.push([{ text: `${icon} ✅ ${who}`.trim().slice(0, 60), callback_data: undoable ? `u|${st.k}|${ref}`.slice(0, 64) : "n" }]);
   }
-  if (last && last.a === "undo") {
-    rows.push([{ text: `↩️ Undone ${firstName(last.by)} ${hhmm(last.at)}`.slice(0, 60), callback_data: "n" }]);
+  // Owner 17-Oct: party does not want the goods -> only that line (tap = undo).
+  if (d && d.cancelled) {
+    return { inline_keyboard: [[{ text: `🚫 Party does not want — ${firstName(d.cancelledBy)} ${hhmm(d.cancelledAt || 0)}`.slice(0, 60),
+      callback_data: `x|x|${ref}`.slice(0, 64) }]] };
+  }
+  const before = ci < ORDER.indexOf("dispatched");
+  if (d && d.hold) {
+    rows.push([{ text: `⏸ ON HOLD — ${firstName(d.holdBy)} ${hhmm(d.holdAt || 0)} · tap to resume`.slice(0, 60), callback_data: `h|x|${ref}`.slice(0, 64) }]);
+    if (before) rows.push([{ text: "🚫 Party does not want the goods", callback_data: `x|x|${ref}`.slice(0, 64) }]);
+    return { inline_keyboard: rows };
   }
   const next = STEPS.find((x) => ORDER.indexOf(x.status) === ci + 1);
+  const extra = before ? [[{ text: "⏸ Keep on hold", callback_data: `h|x|${ref}`.slice(0, 64) }],
+    [{ text: "🚫 Party does not want the goods", callback_data: `x|x|${ref}`.slice(0, 64) }]] : [];
   if (next && next.auto) {
     rows.push([{ text: next.wait || "⏳ Waiting", callback_data: "n" }]);
   } else if (next) {
     rows.push([{ text: next.label, callback_data: `s|${next.k}|${ref}`.slice(0, 64) }]);
   }
+  rows.push(...extra);
   return { inline_keyboard: rows };
+}
+
+/** Owner 17-Oct: ⏸ hold (toggle) and 🚫 party does not want the goods
+ *  (undo only by the same person). Both written to the STATUS log. */
+async function holdCancelTap(db, q, tag, ref) {
+  const docRef = db.collection("bbapp_orders").doc(ref);
+  const name = [q.from && q.from.first_name, q.from && q.from.last_name].filter(Boolean).join(" ")
+    || (q.from && q.from.username) || "staff";
+  const uid = (q.from && q.from.id) || 0;
+  const del = admin.firestore.FieldValue.delete();
+  const verdict = await db.runTransaction(async (tx) => {
+    const s0 = await tx.get(docRef);
+    if (!s0.exists) return { ok: false, msg: "Order not found." };
+    const d = s0.data();
+    const at = Date.now();
+    if (tag === "h") {
+      if (d.cancelled) return { ok: false, msg: "Party does not want this order." };
+      const on = !d.hold;
+      tx.set(docRef, on ? { hold: true, holdBy: name, holdAt: at } : { hold: del, holdBy: del, holdAt: del,
+        log: admin.firestore.FieldValue.arrayUnion({ a: "resume", by: name, at, uid }) }, { merge: true });
+      if (on) tx.set(docRef, { log: admin.firestore.FieldValue.arrayUnion({ a: "hold", by: name, at, uid }) }, { merge: true });
+      return { ok: true, msg: on ? "⏸ Order kept on hold" : "▶️ Hold removed" };
+    }
+    if (!d.cancelled) {
+      tx.set(docRef, { cancelled: true, cancelledBy: name, cancelledAt: at, cancelledUid: uid, hold: del, holdBy: del, holdAt: del,
+        log: admin.firestore.FieldValue.arrayUnion({ a: "cancel", by: name, at, uid }) }, { merge: true });
+      return { ok: true, msg: "🚫 Marked: party does not want the goods" };
+    }
+    if (d.cancelledUid && d.cancelledUid !== uid) return { ok: false, msg: `Only ${d.cancelledBy} can undo this.` };
+    tx.set(docRef, { cancelled: del, cancelledBy: del, cancelledAt: del, cancelledUid: del,
+      log: admin.firestore.FieldValue.arrayUnion({ a: "uncancel", by: name, at, uid }) }, { merge: true });
+    return { ok: true, msg: "↩️ Order back on" };
+  });
+  await tg("answerCallbackQuery", { callback_query_id: q.id, text: verdict.msg, show_alert: !verdict.ok });
+  if (verdict.ok && q.message) {
+    const fresh = (await docRef.get()).data() || {};
+    await tg("editMessageText", { chat_id: q.message.chat.id, message_id: q.message.message_id,
+      text: statusText(fresh, q.message.text), parse_mode: "HTML", disable_web_page_preview: true,
+      reply_markup: statusKeyboard(ref, fresh) });
+  }
 }
 
 async function tg(method, body) {
@@ -430,6 +494,10 @@ exports.tgWebhook = onRequest(
           await moneyReceivedTap(db, q, ref);
           return res.status(200).send("ok");
         }
+        if ((tag === "h" || tag === "x") && ref) {
+          await holdCancelTap(db, q, tag, ref);
+          return res.status(200).send("ok");
+        }
         // Tester 13-Oct: "s" = DO, "u" = UNDO. Buttons already in the group
         // carry "s" on the done step too — that tap is now "Already done" (no
         // write) and the buttons are redrawn, so the next tap is a real undo.
@@ -444,6 +512,8 @@ exports.tgWebhook = onRequest(
             const del = admin.firestore.FieldValue.delete();
             if (tag === "u") {
               if (ni > ci) return { ok: false, msg: "Nothing to undo.", redraw: true };
+              // Owner 16-Oct: a sent bill (and other automatic steps) stays.
+              if (step.auto) return { ok: false, msg: "Already done — this cannot be undone.", redraw: true };
               if (ni < ci) return { ok: false, msg: "Undo the later step first." };
               // Undo the latest step — only by the person who tapped it
               // (an automatic step, uid 0, by anyone).
@@ -476,6 +546,8 @@ exports.tgWebhook = onRequest(
               return { ok: true, msg: `Undone: ${step.label}` };
             }
             if (ni <= ci) return { ok: false, msg: "Already done.", redraw: true };
+            if (d.get("cancelled")) return { ok: false, msg: "Party does not want this order." };
+            if (d.get("hold")) return { ok: false, msg: "⏸ Order is on hold — resume it first." };
             if (step.auto) return { ok: false, msg: "This step ticks by itself." };
             if (ni !== ci + 1) return { ok: false, msg: "Not yet — do the steps in order." };
             tx.set(docRef, { status: step.status, [step.by]: name,
@@ -644,6 +716,12 @@ exports.registerOrder = onRequest(
     }
     await docRef.set({ msg, chat, mobile, billName, serial, addOnTo, ...(text ? { text } : {}), ...(cust ? { cust } : {}), ...tokenFields,
       ...(d.exists && d.get("status") ? {} : { status: "received", statusAt: admin.firestore.FieldValue.serverTimestamp() }) }, { merge: true });
+    // Owner 17-Oct: the app posts only "Maal nikalna chalu" — the cloud adds
+    // ⏸ Keep on hold + 🚫 Party does not want the goods at once.
+    if (!(d.exists && d.get("status")) && msg && chat) {
+      await tg("editMessageReplyMarkup", { chat_id: chat, message_id: msg,
+        reply_markup: statusKeyboard(ref, (await docRef.get()).data() || {}) }).catch(() => {});
+    }
     if (newAdv) {
       // Owner 12-Oct: the advance screenshot is the FIRST message of the
       // customer's chat (and goes to the new-party group with the ledger).
@@ -847,12 +925,16 @@ async function handleBillPhoto(db, m) {
     if (nm && on && nm.length >= 6 && on.length >= 6 && (on.includes(nm) || nm.includes(on))) return 1;
     return 0;
   };
-  const scored = snap.docs.map((x) => ({ id: x.id, ...x.data() })).map((o) => ({ ...o, _s: score(o) })).filter((o) => o._s > 0);
+  const scored = snap.docs.map((x) => ({ id: x.id, ...x.data() })).filter((o) => !o.cancelled)
+    .map((o) => ({ ...o, _s: score(o) })).filter((o) => o._s > 0);
   const best = scored.reduce((t, o) => Math.max(t, o._s), 0);
   const all = scored.filter((o) => o._s === best);
   if (best === 1 && new Set(all.map((o) => o.mobile || o.billName)).size > 1) {
     const names = [...new Set(all.map((o) => `${o.billName}${o.serial ? " (ORDER NO. " + o.serial + ")" : ""}`))].join(", ");
     return reply(`❓ "${b.buyerName || "?"}" could be ${names}. Bill not sent — please put the party's mobile number on the bill, or send it again with the exact name.`);
+  }
+  if (all.length && all.every((o) => o.hold)) {
+    return reply(`⏸ ${all[0].billName}${all[0].serial ? " — ORDER NO. " + all[0].serial : ""} is ON HOLD. Bill not sent — remove the hold first, then send the bill again.`);
   }
   if (!all.length) {
     return reply(`❓ No open app order found for ${b.buyerName || "this party"}${mob ? " (" + mob + ")" : ""}. Bill not sent.`);
