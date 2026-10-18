@@ -332,6 +332,7 @@ function statusText(d, fallbackPlain) {
     const name = st ? st.label : e.k;
     return e.a === "undo"
       ? `↩️ Undone ${escH(name)} — by ${escH(e.by)} · ${hhmm(e.at)}`
+      : (e.k === "d" || e.k === "l") ? `✔ ${escH(name)} — ${escH(e.by)}`   // owner 18-Oct: date / bilty no. only
       : `✔ ${escH(name)} — by ${escH(e.by)} · ${hhmm(e.at)}`;
   });
   const tail = `\n\n<b>STATUS</b>\n${lines.join("\n")}`;
@@ -361,7 +362,7 @@ function statusKeyboard(ref, d) {
     if (si > ci) break;
     const done = [...log].reverse().find((e) => e.a === "do" && e.k === st.k);
     const icon = String(st.label).split(" ")[0];
-    const who = done ? `${firstName(done.by)} ${hhmm(done.at)}` : "";
+    const who = done ? ((st.k === "d" || st.k === "l") ? String(done.by) : `${firstName(done.by)} ${hhmm(done.at)}`) : "";
     const undoable = si === ci && !st.auto;
     rows.push([{ text: `${icon} ✅ ${who}`.trim().slice(0, 60), callback_data: undoable ? `u|${st.k}|${ref}`.slice(0, 64) : "n" }]);
   }
@@ -1109,6 +1110,8 @@ exports.paymentProof = onRequest(
  * shows a parcel date ticks Dispatched; a bilty no. ticks Bilty.
  */
 const normBill = (x) => String(x || "").toUpperCase().replace(/\s+/g, "");
+// "17-10-2026" -> "17/10/26" (owner 18-Oct)
+const dmy = (x) => { const m = /^(\d{2})-(\d{2})-(\d{4})$/.exec(String(x || "")); return m ? `${m[1]}/${m[2]}/${m[3].slice(2)}` : String(x || ""); };
 exports.syncDispatch = onRequest(
   { region: "asia-south1", secrets: [PC_KEY, TG_TOKEN], timeoutSeconds: 120, memory: "256MiB", maxInstances: 1, invoker: "public" },
   async (req, res) => {
@@ -1138,14 +1141,15 @@ exports.syncDispatch = onRequest(
       const r = (d.billNo && byBill.get(normBill(d.billNo))) || (d.tallyBillNo && byBill.get(normBill(d.tallyBillNo))) || partyRow(d);
       if (!r) continue;
       if (r.parcelDate && d.status === "payment_received") {
-        await autoStep(db, doc.id, "d", `Daily Parcels · sent ${r.parcelDate}`, { parcelDate: String(r.parcelDate),
-          tallyBillNo: String(r.billNo || ""), lr: `Goods dispatched on ${r.parcelDate}` });
+        await autoStep(db, doc.id, "d", dmy(r.parcelDate), { parcelDate: String(r.parcelDate),
+          tallyBillNo: String(r.billNo || ""), lr: `Dispatched ${dmy(r.parcelDate)}` });
         disp++;
       }
       if (r.bilty) {
         const cur = ((await doc.ref.get()).data() || {}).status;
         if (cur === "dispatched") {
-          await autoStep(db, doc.id, "l", `Bilty no. ${r.bilty}`, { lr: `Bilty ${r.bilty}${r.parcelDate ? " · dispatched " + r.parcelDate : ""}`,
+          const pd = dmy(r.parcelDate || d.parcelDate);
+          await autoStep(db, doc.id, "l", String(r.bilty), { lr: `${pd ? "Dispatched " + pd + " · " : ""}Bilty ${r.bilty}`,
             bilty: String(r.bilty), tallyBillNo: String(r.billNo || "") });
           bil++;
         }
