@@ -320,6 +320,14 @@ const FLAG_LINES = {
 function hhmm(ms) {
   return new Date(ms).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit" });
 }
+// Owner 18-Oct: "16/10/26 3:32 pm" — the date beside every time.
+function dmyOf(ms) {
+  const p = new Intl.DateTimeFormat("en-GB", { timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "2-digit" }).formatToParts(new Date(ms));
+  const g = (t) => (p.find((x) => x.type === t) || {}).value || "";
+  return `${g("day")}/${g("month")}/${g("year")}`;
+}
+const dhm = (ms) => `${dmyOf(ms)} ${hhmm(ms)}`;
+const todayDmy = () => dmyOf(Date.now());
 const escH = (x) => String(x).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 /** The order message = original details + a STATUS section with every tap
@@ -329,16 +337,16 @@ function statusText(d, fallbackPlain) {
   const log = (d && d.log) || [];
   if (!log.length) return base;
   const lines = log.map((e) => {
-    if (FLAG_LINES[e.a]) return `${FLAG_LINES[e.a]} — by ${escH(e.by)} · ${hhmm(e.at)}`;
+    if (FLAG_LINES[e.a]) return `${FLAG_LINES[e.a]} — by ${escH(e.by)} · ${dhm(e.at)}`;
     const st = STEPS.find((x) => x.k === e.k);
     const name = st ? st.label : e.k;
     return e.a === "undo"
-      ? `↩️ Undone ${escH(name)} — by ${escH(e.by)} · ${hhmm(e.at)}`
-      : (e.k === "d" || e.k === "l") ? `✔ ${escH(name)} — ${escH(e.by)}`   // owner 18-Oct: date / bilty no. only
-      : `✔ ${escH(name)} — by ${escH(e.by)} · ${hhmm(e.at)}`;
+      ? `↩️ Undone ${escH(name)} — by ${escH(e.by)} · ${dhm(e.at)}`
+      : (e.k === "d" || e.k === "l") ? `✔ ${escH(name)} — ${escH(e.by)}`   // owner 18-Oct: date / bilty no. + date
+      : `✔ ${escH(name)} — by ${escH(e.by)} · ${dhm(e.at)}`;
   });
   // Owner 18-Oct: the party closing balance in Tally (from the payment check).
-  if (d && d.payBal != null && d.payChk) lines.push(`💼 Closing balance: ${inr(d.payBal)} · ${hhmm(d.payChk)}`);
+  if (d && d.payBal != null && d.payChk) lines.push(`💼 Closing balance: ${inr(d.payBal)} · ${dhm(d.payChk)}`);
   const tail = `\n\n<b>STATUS</b>\n${lines.join("\n")}`;
   // Telegram edits fail above 4096 chars — trim the details, keep the status.
   return (base.length + tail.length > 4000 ? cutAt(base, 4000 - tail.length) : base) + tail;
@@ -366,7 +374,7 @@ function statusKeyboard(ref, d) {
     if (si > ci) break;
     const done = [...log].reverse().find((e) => e.a === "do" && e.k === st.k);
     const icon = String(st.label).split(" ")[0];
-    const who = done ? ((st.k === "d" || st.k === "l") ? String(done.by) : `${firstName(done.by)} ${hhmm(done.at)}`) : "";
+    const who = done ? ((st.k === "d" || st.k === "l") ? String(done.by) : `${firstName(done.by)} ${dhm(done.at)}`) : "";
     const undoable = si === ci && !st.auto;
     rows.push([{ text: `${icon} ✅ ${who}`.trim().slice(0, 60), callback_data: undoable ? `u|${st.k}|${ref}`.slice(0, 64) : "n" }]);
   }
@@ -377,7 +385,7 @@ function statusKeyboard(ref, d) {
   }
   const before = ci < ORDER.indexOf("dispatched");
   if (d && d.hold) {
-    rows.push([{ text: `⏸ ON HOLD — ${firstName(d.holdBy)} ${hhmm(d.holdAt || 0)} · tap to resume`.slice(0, 60), callback_data: `h|x|${ref}`.slice(0, 64) }]);
+    rows.push([{ text: `⏸ ON HOLD — ${firstName(d.holdBy)} ${dhm(d.holdAt || 0)} · tap to resume`.slice(0, 60), callback_data: `h|x|${ref}`.slice(0, 64) }]);
     if (before) rows.push([{ text: "🚫 Party does not want the goods", callback_data: `x|x|${ref}`.slice(0, 64) }]);
     return { inline_keyboard: rows };
   }
@@ -741,6 +749,21 @@ exports.registerOrder = onRequest(
   },
 );
 
+/** Owner 18-Oct: one short text per done step for the customer's My Orders
+ *  ("16/10/26 3:32 pm", "17/10/26", "45120 · 18/10/26"). */
+function stepTexts(d) {
+  const out = {};
+  for (const e of (d && d.log) || []) {
+    if (e.a !== "do") continue;
+    out[e.k] = (e.k === "d" || e.k === "l") ? String(e.by) : dhm(e.at);
+  }
+  for (const e of (d && d.log) || []) if (e.a === "undo" && out[e.k] && e.at > 0) {
+    const last = [...d.log].reverse().find((x) => x.k === e.k);
+    if (last && last.a === "undo") delete out[e.k];
+  }
+  return out;
+}
+
 /** My Orders: statuses for this phone's orders. */
 exports.orderStatus = onRequest(
   { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
@@ -768,6 +791,7 @@ exports.orderStatus = onRequest(
     const out = {};
     for (const s of snaps) {
       if (s.exists) out[s.id] = { status: s.get("status") || null, lr: s.get("lr") || null,
+        steps: stepTexts(s.data()), bal: s.get("payBal") != null && s.get("payChk") ? `${inr(s.get("payBal"))} · ${dmyOf(s.get("payChk"))}` : null,
         bill: !!s.get("billFileId"), billNo: s.get("billNo") || null, billTotal: s.get("billTotal") || null,
         adv: s.get("advanceAmt") || null, tokenRecv: !!s.get("tokenRecvAt"),
         tokenMiss: !s.get("tokenRecvAt") && !!s.get("tokenMissAt"), tokenDue: s.get("tokenDue") || null,
@@ -1155,7 +1179,7 @@ exports.syncDispatch = onRequest(
         const cur = ((await doc.ref.get()).data() || {}).status;
         if (cur === "dispatched") {
           const pd = dmy(r.parcelDate || d.parcelDate);
-          await autoStep(db, doc.id, "l", String(r.bilty), { lr: `${pd ? "Dispatched " + pd + " · " : ""}Bilty ${r.bilty}`,
+          await autoStep(db, doc.id, "l", `${r.bilty} · ${todayDmy()}`, { lr: `${pd ? "Dispatched " + pd + " · " : ""}Bilty ${r.bilty} · ${todayDmy()}`,
             bilty: String(r.bilty), tallyBillNo: String(r.billNo || "") });
           bil++;
         }

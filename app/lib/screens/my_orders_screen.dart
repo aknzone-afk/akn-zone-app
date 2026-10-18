@@ -32,7 +32,7 @@ class MyOrdersScreen extends ConsumerStatefulWidget {
 
 class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
   String? _busy;
-  Map<String, ({String? status, String? lr, bool bill, int? adv, bool tokenRecv, bool tokenMiss, int? tokenDue, String? tokenMethod})> _st = {};
+  Map<String, ({String? status, String? lr, bool bill, int? adv, bool tokenRecv, bool tokenMiss, int? tokenDue, String? tokenMethod, Map<String, String> steps, String? bal})> _st = {};
 
   @override
   void initState() {
@@ -254,7 +254,9 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
                               tokenRecv: _st[o.number]?.tokenRecv ?? false,
                               tokenMiss: _st[o.number]?.tokenMiss ?? false,
                               tokenDue: _st[o.number]?.tokenDue,
-                              tokenMethod: _st[o.number]?.tokenMethod)
+                              tokenMethod: _st[o.number]?.tokenMethod,
+                              stepText: _st[o.number]?.steps ?? const {},
+                              bal: _st[o.number]?.bal)
                         else if (o.awaitingAdvance)
                           Padding(
                             padding: const EdgeInsets.only(top: 4),
@@ -375,7 +377,19 @@ class _Steps extends StatelessWidget {
   final bool tokenMiss; // not in the bank by the deadline
   final int? tokenDue; // ms — 12:00 the day after payment
   final String? tokenMethod; // upi (auto bank check) / bank / kotak (checked by hand)
-  const _Steps({required this.status, this.adv, this.tokenRecv = false, this.tokenMiss = false, this.tokenDue, this.tokenMethod});
+  final Map<String, String> stepText; // owner 18-Oct: "16/10/26 3:32 pm" per done step
+  final String? bal; // party's closing balance while payment is awaited
+  const _Steps({required this.status, this.adv, this.tokenRecv = false, this.tokenMiss = false, this.tokenDue, this.tokenMethod,
+      this.stepText = const {}, this.bal});
+
+  static const _stepKey = {1: 'g', 2: 'b', 3: 'y', 4: 'd', 5: 'l'};
+  String _label(int i, bool done) {
+    final k = _stepKey[i];
+    final t = k == null ? null : stepText[k];
+    if (done && t != null && t.isNotEmpty) return '${_names[i]} — $t';
+    if (!done && k == 'y' && bal != null) return '${_names[i]} — closing balance $bal';
+    return _names[i];
+  }
 
   static const _keys = ['received', 'getting_ready', 'bill_sent', 'payment_received', 'dispatched', 'bilty'];
   static const _names = ['Sent to shop', 'Getting order ready', 'Bill sent for payment', 'Payment received', 'Dispatched', 'Bilty'];
@@ -405,7 +419,7 @@ class _Steps extends StatelessWidget {
         (tokenRecv ? 'Money received' : (tokenMiss ? '✗ Money not received — please contact us' : due()), tokenRecv),
       ] else
         (_names[0], true),
-      for (var i = 1; i < _keys.length; i++) (_names[i], i <= at),
+      for (var i = 1; i < _keys.length; i++) (_label(i, i <= at), i <= at),
     ];
     final lastDone = steps.lastIndexWhere((s) => s.$2);
     final shown = steps.take((lastDone + 2).clamp(1, steps.length)).toList();
