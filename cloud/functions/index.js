@@ -1116,21 +1116,37 @@ exports.syncDispatch = onRequest(
     const rows = (req.body && req.body.rows) || [];
     const byBill = new Map();
     for (const r of rows) if (r && r.billNo) byBill.set(normBill(r.billNo), r);
+    const byParty = new Map();
+    for (const r of rows) {
+      const k = normName(r && r.party);
+      if (!k) continue;
+      if (!byParty.has(k)) byParty.set(k, []);
+      byParty.get(k).push(r);
+    }
+    // The first parcel-report bill of this party dated on/after the order day.
+    const partyRow = (d) => {
+      const list = byParty.get(normName(d.ledgerName || d.billName)) || [];
+      const at = d.at && d.at.toDate ? d.at.toDate() : new Date(d.at || 0);
+      const from = new Date(at.getTime() - 24 * 3600e3).toISOString().slice(0, 10);
+      return list.filter((r) => r.billDate && r.billDate >= from).sort((a, b) => a.billDate.localeCompare(b.billDate))[0] || null;
+    };
     const db = admin.firestore();
     const snap = await db.collection("bbapp_orders").where("status", "in", ["bill_sent", "payment_received", "dispatched"]).get();
     let disp = 0, bil = 0;
     for (const doc of snap.docs) {
       const d = doc.data();
-      const r = d.billNo && byBill.get(normBill(d.billNo));
+      const r = (d.billNo && byBill.get(normBill(d.billNo))) || (d.tallyBillNo && byBill.get(normBill(d.tallyBillNo))) || partyRow(d);
       if (!r) continue;
       if (r.parcelDate && d.status === "payment_received") {
-        await autoStep(db, doc.id, "d", `Daily Parcels (${r.parcelDate})`, { parcelDate: String(r.parcelDate) });
+        await autoStep(db, doc.id, "d", `Daily Parcels · sent ${r.parcelDate}`, { parcelDate: String(r.parcelDate),
+          tallyBillNo: String(r.billNo || ""), lr: `Goods dispatched on ${r.parcelDate}` });
         disp++;
       }
       if (r.bilty) {
         const cur = ((await doc.ref.get()).data() || {}).status;
         if (cur === "dispatched") {
-          await autoStep(db, doc.id, "l", "Bilty entry", { lr: `Bilty ${r.bilty}`, bilty: String(r.bilty) });
+          await autoStep(db, doc.id, "l", `Bilty no. ${r.bilty}`, { lr: `Bilty ${r.bilty}${r.parcelDate ? " · dispatched " + r.parcelDate : ""}`,
+            bilty: String(r.bilty), tallyBillNo: String(r.billNo || "") });
           bil++;
         }
       }
