@@ -386,12 +386,10 @@ function statusKeyboard(ref, d) {
   const before = ci < ORDER.indexOf("dispatched");
   if (d && d.hold) {
     rows.push([{ text: `⏸ ON HOLD — ${firstName(d.holdBy)} ${dhm(d.holdAt || 0)} · tap to resume`.slice(0, 60), callback_data: `h|x|${ref}`.slice(0, 64) }]);
-    if (before) rows.push([{ text: "🚫 Party does not want the goods", callback_data: `x|x|${ref}`.slice(0, 64) }]);
     return { inline_keyboard: rows };
   }
   const next = STEPS.find((x) => ORDER.indexOf(x.status) === ci + 1);
-  const extra = before ? [[{ text: "⏸ Keep on hold", callback_data: `h|x|${ref}`.slice(0, 64) }],
-    [{ text: "🚫 Party does not want the goods", callback_data: `x|x|${ref}`.slice(0, 64) }]] : [];
+  const extra = before ? [[{ text: "⏸ Keep on hold", callback_data: `h|x|${ref}`.slice(0, 64) }]] : [];
   if (next && next.auto) {
     const wait = next.k === "y" && d && d.payBal != null ? `💰 Closing balance ${inr(d.payBal)} · ${dmyOf(d.payChk || Date.now())}` : (next.wait || "⏳ Waiting");
     rows.push([{ text: wait, callback_data: "n" }]);
@@ -3239,13 +3237,15 @@ exports.lookupQueue = onRequest(
     try {
       const h = Number(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata", hour: "numeric", hour12: false }));
       const mi = Number(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata", minute: "numeric" }));
-      const day = (h > 10 || (h === 10 && mi >= 30)) && (h < 20 || (h === 20 && mi <= 30)); // no Tally reads at night
+      // Owner 18-Oct: once a day, 8:00-8:30 pm (one light read per open bill).
+      const day = h === 20 && mi <= 30;
+      const today = dmyOf(Date.now());
       if (day) {
         const bs = await db.collection("bbapp_orders").where("status", "==", "bill_sent").get();
         for (const doc of bs.docs) {
           const d = doc.data();
           if (d.cancelled || d.hold) continue;
-          if (Date.now() - Number(d.payChk || 0) < 15 * 60e3) continue;
+          if (d.payChk && dmyOf(d.payChk) === today) continue; // already refreshed today
           const acc = (await db.collection("bbapp_accounts").doc(accKey(d.mobile) || "-").get()).data() || {};
           const party = String(d.ledgerName || (acc.kind === "existing" && acc.party) || d.billName || "").trim();
           if (!party) continue;
