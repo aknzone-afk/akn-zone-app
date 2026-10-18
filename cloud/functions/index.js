@@ -2530,7 +2530,9 @@ exports.accountSignup = onRequest(
         if (hit.length === 1) { cust.transportTyped = T; cust.transport = hit[0]; }
         else {
           const sug = nearest(T, list, 3);
-          trWarn = `⚠️ Transport "${T}" is not in our list${sug.length ? " — maybe " + sug.join(" / ") : ""}`;
+          // Owner 18-Oct: compulsory pick from the list — the app shows the
+          // nearest names; the customer chooses one and sends again.
+          return res.json({ ok: false, error: `Please choose your transport from the list${sug.length ? " — did you mean: " + sug.join(" / ") : ""}` });
         }
       }
     }

@@ -22,6 +22,15 @@ class TransportInfo {
   /// Is [t] one of the allowed transports? (no list yet = old behaviour)
   bool allowed(String t) => pick.isEmpty || pick.contains(_n(t));
 
+  /// Owner 18-Oct: COMPULSORY pick — [t] must be in the online list, or in
+  /// the bundled list while the online one has not loaded yet.
+  static bool ok(TransportInfo? info, List<String> bundled, String t) {
+    final n = _n(t);
+    if (n.isEmpty) return false;
+    final list = (info != null && info.pick.isNotEmpty) ? info.pick : bundled;
+    return list.map(_n).contains(n);
+  }
+
   /// The list the transport box offers: [pick] when published, else [fallback].
   List<String> choices(List<String> fallback) => pick.isNotEmpty ? pick : fallback;
 

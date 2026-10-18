@@ -1974,7 +1974,7 @@ class _SignupFormState extends State<_SignupForm> {
                       hint: 'Type and choose from the list',
                       suffix: const Icon(Icons.local_shipping_outlined)),
                   validator: (v) => _need(v, 2, 'Choose your transport') ??
-                      ((_tInfo?.allowed(v ?? '') ?? true) ? null : 'Please choose your transport from the list'),
+                      (TransportInfo.ok(_tInfo, _transports, v ?? '') ? null : 'Please choose your transport from the list'),
                 ),
                 if (tGst != null)
                   Padding(

@@ -578,7 +578,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         final q = ctrl.text.trim().toUpperCase();
         final all = _tInfo?.choices(_transports) ?? _transports;
         final opts = TransportInfo.search(all, q, max: 30);
-        final canSave = ctrl.text.trim().length >= 2 && (_tInfo?.allowed(ctrl.text) ?? true);
+        final canSave = TransportInfo.ok(_tInfo, _transports, ctrl.text);
         return Padding(
           padding: EdgeInsets.fromLTRB(16, 16, 16, MediaQuery.of(ctx).viewInsets.bottom + 16),
           child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.stretch, children: [
@@ -1391,7 +1391,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                         suffix: const Icon(Icons.local_shipping_outlined)),
                     validator: (v) => (v ?? '').trim().length < 2
                         ? 'Choose your transport'
-                        : ((_tInfo?.allowed(v ?? '') ?? true) ? null : 'Please choose your transport from the list'),
+                        : (TransportInfo.ok(_tInfo, _transports, v ?? '') ? null : 'Please choose your transport from the list'),
                   ),
                   if (_india)
                   _TransportHelp(
