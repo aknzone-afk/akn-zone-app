@@ -337,6 +337,8 @@ function statusText(d, fallbackPlain) {
       : (e.k === "d" || e.k === "l") ? `✔ ${escH(name)} — ${escH(e.by)}`   // owner 18-Oct: date / bilty no. only
       : `✔ ${escH(name)} — by ${escH(e.by)} · ${hhmm(e.at)}`;
   });
+  // Owner 18-Oct: the party closing balance in Tally (from the payment check).
+  if (d && d.payBal != null && d.payChk) lines.push(`💼 Closing balance: ${inr(d.payBal)} · ${hhmm(d.payChk)}`);
   const tail = `\n\n<b>STATUS</b>\n${lines.join("\n")}`;
   // Telegram edits fail above 4096 chars — trim the details, keep the status.
   return (base.length + tail.length > 4000 ? cutAt(base, 4000 - tail.length) : base) + tail;
@@ -383,7 +385,8 @@ function statusKeyboard(ref, d) {
   const extra = before ? [[{ text: "⏸ Keep on hold", callback_data: `h|x|${ref}`.slice(0, 64) }],
     [{ text: "🚫 Party does not want the goods", callback_data: `x|x|${ref}`.slice(0, 64) }]] : [];
   if (next && next.auto) {
-    rows.push([{ text: next.wait || "⏳ Waiting", callback_data: "n" }]);
+    const wait = next.k === "y" && d && d.payBal != null ? `⏳ Payment · closing balance ${inr(d.payBal)}` : (next.wait || "⏳ Waiting");
+    rows.push([{ text: wait, callback_data: "n" }]);
   } else if (next) {
     rows.push([{ text: next.label, callback_data: `s|${next.k}|${ref}`.slice(0, 64) }]);
   }
@@ -3190,10 +3193,15 @@ exports.lookupQueue = onRequest(
       const ref = String(r.key || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
       if (!ref) continue;
       const oref = db.collection("bbapp_orders").doc(ref);
-      await oref.set({ payChk: Date.now(), payOk: !!r.ok, payOpen: (r.open || []).slice(0, 10).map(String) }, { merge: true });
-      if (r.ok && r.paid) {
-        const d = (await oref.get()).data() || {};
-        if (d.status === "bill_sent" && !d.cancelled) await autoStep(db, ref, "y", "Tally (bill settled)", { paidTally: Date.now() });
+      await oref.set({ payChk: Date.now(), payOk: !!r.ok, payOpen: (r.open || []).slice(0, 10).map(String),
+        ...(r.ok && r.balance != null ? { payBal: Math.round(Number(r.balance) || 0) } : {}) }, { merge: true });
+      const d = (await oref.get()).data() || {};
+      if (r.ok && r.paid && d.status === "bill_sent" && !d.cancelled) {
+        await autoStep(db, ref, "y", "Tally (bill settled)", { paidTally: Date.now() });
+      } else if (r.ok && d.chat && d.msg) {
+        // redraw: the closing balance line / wait button
+        await tg("editMessageText", { chat_id: d.chat, message_id: d.msg, text: statusText(d, ""), parse_mode: "HTML",
+          disable_web_page_preview: true, reply_markup: statusKeyboard(ref, d) }).catch(() => {});
       }
     }
     await db.collection("bbapp_settings").doc("lookup").set({ at: Date.now() });
