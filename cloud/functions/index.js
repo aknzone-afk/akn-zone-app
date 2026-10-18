@@ -298,7 +298,9 @@ const STEPS = [
   { k: "b", status: "bill_sent", label: "🧾 Bill sent for payment", by: "billBy", at: "billAt", auto: true,
     wait: "⏳ Waiting for bill (post it in the Bill group)",
     clear: ["billFileId", "billMime", "billNo", "billTotal", "billSentAt", "billGroup"] },
-  { k: "y", status: "payment_received", label: "💰 Payment received", by: "paidBy", at: "paidAt" },
+  // Owner 18-Oct: payment ticks from Tally (bill settled) — no hand button.
+  { k: "y", status: "payment_received", label: "💰 Payment received", by: "paidBy", at: "paidAt", auto: true,
+    wait: "⏳ Payment ticks when the bill is settled in Tally" },
   { k: "d", status: "dispatched", label: "🚚 Dispatched", by: "dispatchedBy", at: "dispatchedAt", auto: true,
     wait: "⏳ Dispatched ticks when the parcel date is in Daily Parcels", clear: ["parcelDate"] },
   { k: "l", status: "bilty", label: "📄 Bilty", by: "biltyBy", at: "biltyAt", auto: true,
@@ -1053,11 +1055,10 @@ async function checkPayment(db, ref, img) {
     await staff(`💰 ${head}: +${inr(p.amount)} → ${inr(r.total)} / ${inr(bill)} · balance ${inr(due)}`);
     return false;
   }
-  await say(`✅ Full payment received — ${inr(r.total)} for bill ${inr(bill)}. Thank you sir 🙏`);
-  await staff(`💰✅ ${head}: FULL payment ${inr(r.total)} / ${inr(bill)}${due < -1 ? " (extra " + inr(-due) + ")" : ""}`);
-  const linked = await db.collection("bbapp_orders").where("billGroup", "==", mainRef).get();
-  const refs = new Set([mainRef, ...linked.docs.map((x) => x.id)]);
-  for (const id of refs) await autoStep(db, id, "y", "Payment check (screenshots)", {});
+  await say(`✅ Payment screenshot received — ${inr(r.total)} for bill ${inr(bill)}. Thank you sir 🙏 We will confirm once it is credited.`);
+  // Owner 18-Oct: a screenshot never ticks the step — only Tally (bill settled) does.
+  await staff(`💰 ${head}: FULL payment screenshot ${inr(r.total)} / ${inr(bill)}${due < -1 ? " (extra " + inr(-due) + ")" : ""} — ticks when the bill is settled in Tally`);
+  await mainDoc.set({ payShot: Date.now() }, { merge: true });
   return true;
 }
 
@@ -1140,6 +1141,8 @@ exports.syncDispatch = onRequest(
       const d = doc.data();
       const r = (d.billNo && byBill.get(normBill(d.billNo))) || (d.tallyBillNo && byBill.get(normBill(d.tallyBillNo))) || partyRow(d);
       if (!r) continue;
+      // Owner 18-Oct: the Tally bill no. lets the payment check find the bill.
+      if (!d.tallyBillNo && r.billNo) await doc.ref.set({ tallyBillNo: String(r.billNo) }, { merge: true });
       if (r.parcelDate && d.status === "payment_received") {
         await autoStep(db, doc.id, "d", dmy(r.parcelDate), { parcelDate: String(r.parcelDate),
           tallyBillNo: String(r.billNo || ""), lr: `Dispatched ${dmy(r.parcelDate)}` });
@@ -3182,13 +3185,44 @@ exports.lookupQueue = onRequest(
         }
       }
     }
+    // Owner 18-Oct: bill settled in Tally -> 💰 Payment received by itself.
+    for (const r of (b.payres || []).slice(0, 10)) {
+      const ref = String(r.key || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
+      if (!ref) continue;
+      const oref = db.collection("bbapp_orders").doc(ref);
+      await oref.set({ payChk: Date.now(), payOk: !!r.ok, payOpen: (r.open || []).slice(0, 10).map(String) }, { merge: true });
+      if (r.ok && r.paid) {
+        const d = (await oref.get()).data() || {};
+        if (d.status === "bill_sent" && !d.cancelled) await autoStep(db, ref, "y", "Tally (bill settled)", { paidTally: Date.now() });
+      }
+    }
     await db.collection("bbapp_settings").doc("lookup").set({ at: Date.now() });
     const q = await db.collection("bbapp_lookup").where("done", "==", null).get();
     const keys = q.docs.filter((d) => Date.now() - (d.get("req") || 0) < 3 * 60e3).map((d) => d.id);
     const iq = await db.collection("bbapp_idcheck").where("done", "==", null).get();
     const ids = iq.docs.filter((d) => Date.now() - (d.get("req") || 0) < 24 * 3600e3)
       .map((d) => ({ key: d.id, pan: d.get("pan") || "", aadhaar: d.get("aadhaar") || "" }));
-    return res.json({ ok: true, keys, ids });
+    const pay = [];
+    try {
+      const h = Number(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata", hour: "numeric", hour12: false }));
+      const mi = Number(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata", minute: "numeric" }));
+      const day = (h > 10 || (h === 10 && mi >= 30)) && (h < 20 || (h === 20 && mi <= 30)); // no Tally reads at night
+      if (day) {
+        const bs = await db.collection("bbapp_orders").where("status", "==", "bill_sent").get();
+        for (const doc of bs.docs) {
+          const d = doc.data();
+          if (!d.tallyBillNo || d.cancelled || d.hold) continue;
+          if (Date.now() - Number(d.payChk || 0) < 15 * 60e3) continue;
+          const acc = (await db.collection("bbapp_accounts").doc(accKey(d.mobile) || "-").get()).data() || {};
+          const party = String(d.ledgerName || (acc.kind === "existing" && acc.party) || d.billName || "").trim();
+          if (!party) continue;
+          await doc.ref.set({ payChk: Date.now() }, { merge: true });
+          pay.push({ key: doc.id, party, bill: String(d.tallyBillNo) });
+          if (pay.length >= 3) break;
+        }
+      }
+    } catch (e) { logger.warn("pay queue", { error: e.message }); }
+    return res.json({ ok: true, keys, ids, pay });
   },
 );
 
