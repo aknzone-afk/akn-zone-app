@@ -300,7 +300,7 @@ const STEPS = [
     clear: ["billFileId", "billMime", "billNo", "billTotal", "billSentAt", "billGroup"] },
   // Owner 18-Oct: payment ticks from Tally (bill settled) — no hand button.
   { k: "y", status: "payment_received", label: "💰 Payment received", by: "paidBy", at: "paidAt", auto: true,
-    wait: "⏳ Payment ticks when the bill is settled in Tally" },
+    wait: "⏳ Closing balance comes from Tally" },
   { k: "d", status: "dispatched", label: "🚚 Dispatched", by: "dispatchedBy", at: "dispatchedAt", auto: true,
     wait: "⏳ Dispatched ticks when the parcel date is in Daily Parcels", clear: ["parcelDate"] },
   { k: "l", status: "bilty", label: "📄 Bilty", by: "biltyBy", at: "biltyAt", auto: true,
@@ -342,11 +342,11 @@ function statusText(d, fallbackPlain) {
     const name = st ? st.label : e.k;
     return e.a === "undo"
       ? `↩️ Undone ${escH(name)} — by ${escH(e.by)} · ${dhm(e.at)}`
-      : (e.k === "d" || e.k === "l") ? `✔ ${escH(name)} — ${escH(e.by)}`   // owner 18-Oct: date / bilty no. + date
+      : (e.k === "d" || e.k === "l" || (e.k === "y" && /^closing balance/i.test(String(e.by)))) ? `✔ ${escH(name)} — ${escH(e.by)}`   // owner 18-Oct: date / bilty no. + date / closing balance
       : `✔ ${escH(name)} — by ${escH(e.by)} · ${dhm(e.at)}`;
   });
   // Owner 18-Oct: the party closing balance in Tally (from the payment check).
-  if (d && d.payBal != null && d.payChk) lines.push(`💼 Closing balance: ${inr(d.payBal)} · ${dhm(d.payChk)}`);
+  if (d && d.status === "bill_sent" && d.payBal != null && d.payChk) lines.push(`💰 Closing balance: ${inr(d.payBal)} · ${dhm(d.payChk)}`);
   const tail = `\n\n<b>STATUS</b>\n${lines.join("\n")}`;
   // Telegram edits fail above 4096 chars — trim the details, keep the status.
   return (base.length + tail.length > 4000 ? cutAt(base, 4000 - tail.length) : base) + tail;
@@ -374,7 +374,7 @@ function statusKeyboard(ref, d) {
     if (si > ci) break;
     const done = [...log].reverse().find((e) => e.a === "do" && e.k === st.k);
     const icon = String(st.label).split(" ")[0];
-    const who = done ? ((st.k === "d" || st.k === "l") ? String(done.by) : `${firstName(done.by)} ${dhm(done.at)}`) : "";
+    const who = done ? ((st.k === "d" || st.k === "l" || (st.k === "y" && /^closing balance/i.test(String(done.by)))) ? String(done.by) : `${firstName(done.by)} ${dhm(done.at)}`) : "";
     const undoable = si === ci && !st.auto;
     rows.push([{ text: `${icon} ✅ ${who}`.trim().slice(0, 60), callback_data: undoable ? `u|${st.k}|${ref}`.slice(0, 64) : "n" }]);
   }
@@ -393,7 +393,7 @@ function statusKeyboard(ref, d) {
   const extra = before ? [[{ text: "⏸ Keep on hold", callback_data: `h|x|${ref}`.slice(0, 64) }],
     [{ text: "🚫 Party does not want the goods", callback_data: `x|x|${ref}`.slice(0, 64) }]] : [];
   if (next && next.auto) {
-    const wait = next.k === "y" && d && d.payBal != null ? `⏳ Payment · closing balance ${inr(d.payBal)}` : (next.wait || "⏳ Waiting");
+    const wait = next.k === "y" && d && d.payBal != null ? `💰 Closing balance ${inr(d.payBal)} · ${dmyOf(d.payChk || Date.now())}` : (next.wait || "⏳ Waiting");
     rows.push([{ text: wait, callback_data: "n" }]);
   } else if (next) {
     rows.push([{ text: next.label, callback_data: `s|${next.k}|${ref}`.slice(0, 64) }]);
@@ -755,7 +755,7 @@ function stepTexts(d) {
   const out = {};
   for (const e of (d && d.log) || []) {
     if (e.a !== "do") continue;
-    out[e.k] = (e.k === "d" || e.k === "l") ? String(e.by) : dhm(e.at);
+    out[e.k] = (e.k === "d" || e.k === "l" || (e.k === "y" && /^closing balance/i.test(String(e.by)))) ? String(e.by) : dhm(e.at);
   }
   for (const e of (d && d.log) || []) if (e.a === "undo" && out[e.k] && e.at > 0) {
     const last = [...d.log].reverse().find((x) => x.k === e.k);
@@ -3220,8 +3220,9 @@ exports.lookupQueue = onRequest(
       await oref.set({ payChk: Date.now(), payOk: !!r.ok, payOpen: (r.open || []).slice(0, 10).map(String),
         ...(r.ok && r.balance != null ? { payBal: Math.round(Number(r.balance) || 0) } : {}) }, { merge: true });
       const d = (await oref.get()).data() || {};
-      if (r.ok && r.paid && d.status === "bill_sent" && !d.cancelled) {
-        await autoStep(db, ref, "y", "Tally (bill settled)", { paidTally: Date.now() });
+      const zero = r.ok && r.balance != null && Number(r.balance) <= 0;
+      if (zero && d.status === "bill_sent" && !d.cancelled) {
+        await autoStep(db, ref, "y", `closing balance ${inr(0)} · ${dhm(Date.now())}`, { paidTally: Date.now() });
       } else if (r.ok && d.chat && d.msg) {
         // redraw: the closing balance line / wait button
         await tg("editMessageText", { chat_id: d.chat, message_id: d.msg, text: statusText(d, ""), parse_mode: "HTML",
@@ -3243,13 +3244,13 @@ exports.lookupQueue = onRequest(
         const bs = await db.collection("bbapp_orders").where("status", "==", "bill_sent").get();
         for (const doc of bs.docs) {
           const d = doc.data();
-          if (!d.tallyBillNo || d.cancelled || d.hold) continue;
+          if (d.cancelled || d.hold) continue;
           if (Date.now() - Number(d.payChk || 0) < 15 * 60e3) continue;
           const acc = (await db.collection("bbapp_accounts").doc(accKey(d.mobile) || "-").get()).data() || {};
           const party = String(d.ledgerName || (acc.kind === "existing" && acc.party) || d.billName || "").trim();
           if (!party) continue;
           await doc.ref.set({ payChk: Date.now() }, { merge: true });
-          pay.push({ key: doc.id, party, bill: String(d.tallyBillNo) });
+          pay.push({ key: doc.id, party, bill: String(d.tallyBillNo || d.billNo || "-") });
           if (pay.length >= 3) break;
         }
       }
