@@ -676,6 +676,12 @@ class _PickScreenState extends ConsumerState<PickScreen> {
                   SizedBox(
                     width: iw,
                     height: ih,
+                    // Owner 20-Oct: two-finger pinch = zoom in / out (taps and
+                    // long-press still mark sarees at the right spot).
+                    child: InteractiveViewer(
+                        minScale: 1,
+                        maxScale: 5,
+                        clipBehavior: Clip.hardEdge,
                         child: LayoutBuilder(builder: (context, c) {
                           final w = c.maxWidth, h = c.maxHeight;
                           final r = math.min(w, h) * 0.06;
@@ -744,7 +750,7 @@ class _PickScreenState extends ConsumerState<PickScreen> {
                               ],
                             ),
                           );
-                        }),
+                        })),
                   ),
                   Padding(
                     padding: const EdgeInsets.fromLTRB(12, 10, 12, 4),

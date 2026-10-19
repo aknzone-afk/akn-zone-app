@@ -50,11 +50,12 @@ class OrderPhotosMissing implements Exception {
 /// and posts each order to the shop's Telegram group — all the photos first,
 /// then one message with the customer's details, closed by a divider line.
 ///
-/// The bot token + group id are NOT compiled into the app: they are read from
-/// [kOrderConfigUrl] on the shop's website, so the bot can be changed or its
-/// token replaced at any time without shipping a new app. If that file isn't
-/// reachable (or not set up yet) the order is kept on the phone and sent
-/// automatically on the next app open — the customer never loses an order.
+/// 19-Oct-2026 (security): the app never sees the bot token. Every send goes
+/// to the cloud relay [kOrderRelayUrl] (it holds the token + group id and
+/// accepts only the order shape). [kOrderConfigUrl] still carries `enabled`
+/// (the shop's on/off switch). If the relay isn't reachable the order is kept
+/// on the phone and sent automatically on the next app open — the customer
+/// never loses an order.
 class OrderService {
   OrderService._();
 
@@ -753,8 +754,12 @@ class OrderService {
     return o;
   }
 
-  static Future<({String token, String chatId})?> _config(
-      SharedPreferences prefs, Dio dio) async {
+  static const kOrderRelayUrl =
+      'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net/orderRelay';
+
+  /// The shop's on/off switch (order-config `enabled`); true when unreadable
+  /// and never cached, so an outage never blocks a send.
+  static Future<bool> _enabled(SharedPreferences prefs, Dio dio) async {
     Map<String, dynamic>? cfg;
     try {
       final res = await dio.get<dynamic>(
@@ -774,11 +779,7 @@ class OrderService {
         } catch (_) {}
       }
     }
-    if (cfg == null || cfg['enabled'] == false) return null;
-    final token = '${cfg['bot_token'] ?? ''}'.trim();
-    final chat = '${cfg['chat_id'] ?? ''}'.trim();
-    if (token.isEmpty || chat.isEmpty) return null;
-    return (token: token, chatId: chat);
+    return cfg == null || cfg['enabled'] != false;
   }
 
   /// Orders being sent right now. A resume (retryPending) while an upload is
@@ -799,35 +800,15 @@ class OrderService {
   static Future<bool> _trySendNow(SharedPreferences prefs, Dio dio, Order order,
       {void Function(String step)? onStep}) async {
     try {
-      final cfg = await _config(prefs, dio);
-      if (cfg == null) {
+      if (!await _enabled(prefs, dio)) {
         order.lastError = 'Waiting for connection to the shop';
         await _saveOrder(prefs, order);
         return false;
       }
-      final api = 'https://api.telegram.org/bot${cfg.token}';
       final dir = await _orderDir(order.number);
 
-      // 1. Photos, 10 per album (Telegram's limit), each with its caption.
-      final items = <(int, OrderItem)>[];
-      for (var i = 0; i < order.items.length; i++) {
-        if (File(p.join(dir.path, '$i.jpg')).existsSync()) {
-          items.add((i, order.items[i]));
-        }
-      }
-      final chunks = <List<(int, OrderItem)>>[];
-      for (var i = 0; i < items.length; i += 10) {
-        chunks.add(items.sublist(i, min(i + 10, items.length)));
-      }
-      for (var c = order.photoChunksSent; c < chunks.length; c++) {
-        onStep?.call('Sending photos… ${c + 1}/${chunks.length}');
-        order.tgExtraIds.addAll(await _sendAlbum(dio, api, cfg.chatId, dir, chunks[c], order));
-        order.photoChunksSent = c + 1;
-        await _saveOrder(prefs, order);
-      }
-
-      // 2. The customer's details, closed with the divider line.
-      // Serial ORDER NO. from the shared cloud counter (same number on retry).
+      // 0. Serial ORDER NO. from the shared cloud counter FIRST (same number
+      // on retry) — the relay sends only for an order that has its number.
       // Owner 11-Oct: an add-on order gets the NEXT serial too (ORDER NO. 3, 4…).
       if (order.serial == null) {
         final res = await dio.post<dynamic>(
@@ -845,25 +826,38 @@ class OrderService {
         order.serial = no;
         await _saveOrder(prefs, order);
       }
+
+      // 1. Photos, 10 per album (Telegram's limit), each with its caption.
+      final items = <(int, OrderItem)>[];
+      for (var i = 0; i < order.items.length; i++) {
+        if (File(p.join(dir.path, '$i.jpg')).existsSync()) {
+          items.add((i, order.items[i]));
+        }
+      }
+      final chunks = <List<(int, OrderItem)>>[];
+      for (var i = 0; i < items.length; i += 10) {
+        chunks.add(items.sublist(i, min(i + 10, items.length)));
+      }
+      for (var c = order.photoChunksSent; c < chunks.length; c++) {
+        onStep?.call('Sending photos… ${c + 1}/${chunks.length}');
+        order.tgExtraIds.addAll(await _sendAlbum(dio, dir, chunks[c], order));
+        order.photoChunksSent = c + 1;
+        await _saveOrder(prefs, order);
+      }
+
+      // 2. The customer's details, closed with the divider line.
       if (!order.detailsSent) {
         onStep?.call('Sending details…');
-        final sent = await _post(dio, '$api/sendMessage', {
-          'chat_id': cfg.chatId,
-          // One button at a time (owner): the shop's next steps appear as
-          // each one is done (cloud tgWebhook / packTimer).
-          'reply_markup': jsonEncode({
-            'inline_keyboard': [
-              [
-                {'text': '🧺 Maal nikalna chalu', 'callback_data': 's|g|${order.number}'}
-              ],
-            ]
-          }),
+        // The relay adds the 🧺 Maal nikalna chalu button (one button at a
+        // time, owner: next steps appear as each one is done — cloud
+        // tgWebhook / packTimer).
+        final sent = await _post(dio, kOrderRelayUrl, {
+          'ref': order.number,
+          'kind': 'details',
           'text': await _details(prefs, order),
-          'parse_mode': 'HTML',
-          'disable_web_page_preview': 'true',
         });
         order.detailsSent = true;
-        order.tgChat = cfg.chatId;
+        order.tgChat = _chatOf(sent) ?? '-5370195204'; // the order group
         order.tgMsgId = _msgId(sent);
         order.registered = false;
         await _saveOrder(prefs, order);
@@ -873,21 +867,14 @@ class OrderService {
       }
       // Owner 11-Oct: photos → details → "ORDER NO. N" on its own → two dots.
       if (!order.noSent) {
-        final sent = await _post(dio, '$api/sendMessage', {
-          'chat_id': cfg.chatId,
-          'text': '<b>ORDER NO. ${order.serial ?? '-'}</b>',
-          'parse_mode': 'HTML',
-        });
+        final sent = await _post(dio, kOrderRelayUrl, {'ref': order.number, 'kind': 'no'});
         order.noSent = true;
         _remember(order, _msgId(sent));
         await _saveOrder(prefs, order);
       }
       // Separate message with two dots — closes this order in the group.
       if (!order.dotsSent) {
-        final sent = await _post(dio, '$api/sendMessage', {
-          'chat_id': cfg.chatId,
-          'text': '.' + String.fromCharCode(10) + '.',
-        });
+        final sent = await _post(dio, kOrderRelayUrl, {'ref': order.number, 'kind': 'dots'});
         order.dotsSent = true;
         _remember(order, _msgId(sent));
       }
@@ -924,55 +911,31 @@ class OrderService {
     return folder.isEmpty ? parts.join(' · ') : '${parts.join(' · ')}\n$folder';
   }
 
-  /// Sends one album (≤10 photos); returns the Telegram message ids.
-  static Future<List<int>> _sendAlbum(Dio dio, String api, String chatId,
-      Directory dir, List<(int, OrderItem)> chunk, Order order) async {
+  /// Sends one album (≤10 photos) through the relay; returns the Telegram
+  /// message ids.
+  static Future<List<int>> _sendAlbum(
+      Dio dio, Directory dir, List<(int, OrderItem)> chunk, Order order) async {
+    final photos = [
+      for (final (i, _) in chunk)
+        base64Encode(await File(p.join(dir.path, '$i.jpg')).readAsBytes()),
+    ];
+    final sent = await _post(
+        dio, kOrderRelayUrl, {'ref': order.number, 'kind': 'album', 'photos': photos});
     if (chunk.length == 1) {
-      final (i, _) = chunk.first;
-      final sent = await _post(
-        dio,
-        '$api/sendPhoto',
-        FormData.fromMap({
-          'chat_id': chatId,
-          'photo': await MultipartFile.fromFile(p.join(dir.path, '$i.jpg'),
-              filename: '$i.jpg'),
-        }),
-      );
       final id = _msgId(sent);
       return id == null ? const [] : [id];
     }
-    final media = <Map<String, String>>[];
-    final form = FormData();
-    form.fields.add(MapEntry('chat_id', chatId));
-    for (final (i, it) in chunk) {
-      media.add({
-        'type': 'photo',
-        'media': 'attach://p$i',
-      });
-      form.files.add(MapEntry(
-        'p$i',
-        await MultipartFile.fromFile(p.join(dir.path, '$i.jpg'),
-            filename: '$i.jpg'),
-      ));
-    }
-    form.fields.add(MapEntry('media', jsonEncode(media)));
-    final sent = await _post(dio, '$api/sendMediaGroup', form, rebuild: () async {
-      final f = FormData();
-      f.fields.addAll(form.fields);
-      for (final (i, _) in chunk) {
-        f.files.add(MapEntry(
-          'p$i',
-          await MultipartFile.fromFile(p.join(dir.path, '$i.jpg'),
-              filename: '$i.jpg'),
-        ));
-      }
-      return f;
-    });
     return [
       if (sent is Map && sent['result'] is List)
         for (final m in sent['result'] as List)
           if (m is Map && m['message_id'] is num) (m['message_id'] as num).toInt(),
     ];
+  }
+
+  /// The group's chat id from a relay (Telegram) reply.
+  static String? _chatOf(dynamic sent) {
+    final c = sent is Map && sent['result'] is Map ? sent['result']['chat'] : null;
+    return c is Map && c['id'] != null ? '${c['id']}' : null;
   }
 
   /// Telegram's own error text from a refused request (or the status code).
@@ -1067,7 +1030,8 @@ class OrderService {
     }
   }
 
-  /// POST with Telegram's flood-control handling (429 → wait retry_after).
+  /// POST to the order relay with Telegram's flood-control handling
+  /// (429 → wait retry_after).
   static Future<dynamic> _post(Dio dio, String url, Object data,
       {Future<Object> Function()? rebuild}) async {
     var body = data;
@@ -1078,10 +1042,9 @@ class OrderService {
           data: body,
           options: Options(
             sendTimeout: const Duration(seconds: 90),
-            receiveTimeout: const Duration(seconds: 60),
-            contentType: body is FormData
-                ? null
-                : Headers.formUrlEncodedContentType,
+            receiveTimeout: const Duration(seconds: 90),
+            headers: {'x-app-key': 'akn-zone-app-v3'},
+            contentType: body is FormData ? null : Headers.jsonContentType,
           ),
         );
         return res.data is String ? jsonDecode(res.data as String) : res.data;
