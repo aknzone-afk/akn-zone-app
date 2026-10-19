@@ -1017,10 +1017,12 @@ async function checkPayment(db, ref, img) {
   const mainDoc = db.collection("bbapp_orders").doc(mainRef);
   const m = (await mainDoc.get()).data() || {};
   const staff = async (text) => {
-    if (!m.chat) return;
-    const r = await tg("sendMessage", { chat_id: m.chat, reply_to_message_id: m.msg || undefined, text });
+    // Owner 19-Oct: payment notes only in the auto-receipts group.
+    const rg = (await db.collection("bbapp_settings").doc("receipts").get()).data();
+    if (!rg || !rg.chat) return;
+    const r = await tg("sendMessage", { chat_id: rg.chat, text });
     const mid = r && r.result && r.result.message_id; // staff can REPLY to this note → customer's chat
-    if (mid) await db.collection("bbapp_msgmap").doc(`${m.chat}_${mid}`).set({ ref: mainRef });
+    if (mid) await db.collection("bbapp_msgmap").doc(`${rg.chat}_${mid}`).set({ ref: mainRef });
   };
   const say = (text) => addChat(db, mainRef, { from: "shop", text });
   const head = `${m.billName || "Party"}${m.serial ? " · ORDER NO. " + m.serial : ""}`;
@@ -1348,8 +1350,8 @@ exports.chatSend = onRequest(
       await addChat(db, ref, { from: "party", text, bytes: img, mime: img ? "image/jpeg" : null });
       return res.json({ ok: true, paid: false });
     }
-    let sent;
-    if (img) {
+    let sent = null;
+    if (false) { // owner 19-Oct: payment screenshots never go to the Party order group
       const fd = new FormData();
       fd.append("chat_id", String(d.chat));
       if (d.msg) fd.append("reply_to_message_id", String(d.msg));
@@ -1376,10 +1378,14 @@ exports.chatSend = onRequest(
           const dest = String((d.cust && d.cust.bookingPlace) || (acc.cust && acc.cust.bookingPlace) || "").toUpperCase();
           const fd = new FormData();
           fd.append("chat_id", String(rg.chat));
-          fd.append("caption", `${party}\n📍 ${dest || "-"}\n💰 Payment screenshot from the app${d.serial ? " · ORDER NO. " + d.serial : ""}${text ? "\n" + text : ""}`.slice(0, 1000));
+          const billNo = d.tallyBillNo || d.billNo || "";
+          const bal = d.payBal != null && d.payChk ? `${inr(d.payBal)} (${dhm(d.payChk)})` : "checking…";
+          fd.append("caption", `${party}\n📍 ${dest || "-"}\n💰 Payment screenshot${d.serial ? " · ORDER NO. " + d.serial : ""}${billNo ? " · Bill " + billNo : ""}\n💼 Closing balance: ${bal}${text ? "\n" + text : ""}`.slice(0, 1000));
           fd.append("photo", new Blob([img], { type: "image/jpeg" }), "payment.jpg");
           const x = await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/sendPhoto`, { method: "POST", body: fd }).then((y) => y.json());
           if (!x.ok) logger.warn("payment group photo", { ref, desc: x.description });
+          // a fresh closing balance from Tally right away (daytime only)
+          await db.collection("bbapp_orders").doc(ref).set({ payNow: Date.now() }, { merge: true });
         }
       } catch (e) { logger.warn("payment group photo", { ref, error: e.message }); }
     }
@@ -3229,6 +3235,14 @@ exports.lookupQueue = onRequest(
         ...(r.ok && r.balance != null ? { payBal: Math.round(Number(r.balance) || 0) } : {}) }, { merge: true });
       const d = (await oref.get()).data() || {};
       const zero = r.ok && r.balance != null && Number(r.balance) <= 0;
+      if (d.payNow && r.ok && r.balance != null) {
+        const rg = (await db.collection("bbapp_settings").doc("receipts").get()).data();
+        if (rg && rg.chat) {
+          await tg("sendMessage", { chat_id: rg.chat, text: `💼 ${String(d.ledgerName || d.billName || "").toUpperCase()}${d.serial ? " · ORDER NO. " + d.serial : ""}${(d.tallyBillNo || d.billNo) ? " · Bill " + (d.tallyBillNo || d.billNo) : ""}` +
+            `\nClosing balance now: ${inr(r.balance)} (${dhm(Date.now())})` });
+        }
+        await oref.set({ payNow: admin.firestore.FieldValue.delete() }, { merge: true });
+      }
       if (zero && d.status === "bill_sent" && !d.cancelled) {
         await autoStep(db, ref, "y", `closing balance ${inr(0)} · ${dhm(Date.now())}`, { paidTally: Date.now() });
       } else if (r.ok && d.chat && d.msg) {
@@ -3250,6 +3264,19 @@ exports.lookupQueue = onRequest(
       // Owner 18-Oct: once a day, 8:00-8:30 pm (one light read per open bill).
       const day = h === 20 && mi <= 30;
       const today = dmyOf(Date.now());
+      const daytime = (h > 10 || (h === 10 && mi >= 30)) && (h < 20 || (h === 20 && mi <= 30));
+      if (daytime) {
+        const now = await db.collection("bbapp_orders").where("payNow", ">", 0).get();
+        for (const doc of now.docs) {
+          const d = doc.data();
+          if (Number(d.payChk || 0) > Number(d.payNow || 0) || pay.length >= 3) continue;
+          const acc = (await db.collection("bbapp_accounts").doc(accKey(d.mobile) || "-").get()).data() || {};
+          const party = String(d.ledgerName || (acc.kind === "existing" && acc.party) || d.billName || "").trim();
+          if (!party) continue;
+          await doc.ref.set({ payChk: Date.now() }, { merge: true });
+          pay.push({ key: doc.id, party, bill: String(d.tallyBillNo || d.billNo || "-") });
+        }
+      }
       if (day) {
         const bs = await db.collection("bbapp_orders").where("status", "==", "bill_sent").get();
         for (const doc of bs.docs) {
@@ -3353,5 +3380,126 @@ exports.proofUploadUrl = onRequest(
     const [url] = await admin.storage().bucket().file(path).getSignedUrl({
       version: "v4", action: "write", expires: Date.now() + 15 * 60e3, contentType: "video/mp4" });
     return res.json({ ok: true, url, path });
+  },
+);
+
+/* ───────────── ORDER RELAY (19-Oct-2026, security) ─────────────
+ * The orders bot token used to sit in the public order-config files and the
+ * app posted to Telegram itself — anyone could post as the bot. Now the app
+ * sends the order HERE and only this function holds the token (secret
+ * BBAPP_TG_TOKEN) and the group id. It accepts only the order shape:
+ *   {ref, kind:"album", photos:[base64 JPEG, 1-10]}   → sendPhoto / sendMediaGroup
+ *   {ref, kind:"details", text}                       → details + 🧺 button (built here)
+ *   {ref, kind:"no"}  /  {ref, kind:"dots"}           → texts built here
+ * The ref must already have its ORDER NO. (nextOrderNo, ≤ 14 days old); each
+ * ref has a send budget; per-IP hourly limit. The reply is Telegram's own
+ * JSON (same status code), so the app reads message ids as before.
+ * Shop PC (x-pc-key) may add dry:true (validate only, getChat check, nothing
+ * posted) or testChat (send to that chat instead of the order group).
+ */
+const RELAY_PER_IP_PER_HOUR = 60;
+const RELAY_MAX_PHOTOS = 300; // per order
+const RELAY_MAX_MSGS = 9; // details / no / dots, with retries
+exports.orderRelay = onRequest(
+  { region: "asia-south1", secrets: [TG_TOKEN, PC_KEY], timeoutSeconds: 120, memory: "512MiB", maxInstances: 3, invoker: "public" },
+  async (req, res) => {
+    if (req.method !== "POST") return res.status(405).json({ ok: false });
+    if (!appOk(req)) return res.status(403).json({ ok: false });
+    const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
+    if (limited("r:" + ip, RELAY_PER_IP_PER_HOUR)) return res.status(429).json({ ok: false, description: "Too many requests" });
+    const b = req.body || {};
+    const bad = (why) => res.status(400).json({ ok: false, description: why });
+    const ref = String(b.ref || "");
+    if (!/^[A-Z0-9-]{4,40}$/i.test(ref)) return bad("bad ref");
+    const kind = String(b.kind || "");
+    if (!["album", "details", "no", "dots"].includes(kind)) return bad("bad kind");
+    const pc = pcOk(req);
+    const dry = pc && b.dry === true;
+    const chat = pc && /^-?\d{5,16}$/.test(String(b.testChat || "")) ? String(b.testChat) : String(ORDER_GROUP);
+
+    let photos = [];
+    if (kind === "album") {
+      if (!Array.isArray(b.photos) || b.photos.length < 1 || b.photos.length > 10) return bad("1-10 photos");
+      for (const s of b.photos) {
+        if (typeof s !== "string" || s.length > MAX_BYTES * 1.4) return bad("photo too big");
+        const buf = Buffer.from(s, "base64");
+        if (buf.length < 1000 || buf.length > MAX_BYTES || buf[0] !== 0xff || buf[1] !== 0xd8) return bad("not a JPEG");
+        photos.push(buf);
+      }
+    }
+    let text = "";
+    if (kind === "details") {
+      text = String(b.text || "");
+      if (text.length < 10 || text.length > 4096) return bad("bad text");
+    }
+
+    // The ref must be a real order (number given by nextOrderNo) + budget.
+    const db = admin.firestore();
+    const doc = db.collection("bbapp_orders").doc(ref);
+    let no = null;
+    try {
+      no = await db.runTransaction(async (tx) => {
+        const o = await tx.get(doc);
+        if (!o.exists) { if (dry) return null; throw new Error("404"); }
+        const at = o.get("at");
+        if (!pc && at && at.toMillis && Date.now() - at.toMillis() > 14 * 86400e3) throw new Error("410");
+        const r = o.get("relay") || {};
+        const ph = (r.photos || 0) + photos.length;
+        const ms = (r.msgs || 0) + (kind === "album" ? 0 : 1);
+        if (!pc && (ph > RELAY_MAX_PHOTOS || ms > RELAY_MAX_MSGS)) throw new Error("429");
+        if (!dry) tx.set(doc, { relay: { photos: ph, msgs: ms, ip, last: Date.now() } }, { merge: true });
+        return o.get("no");
+      });
+    } catch (e) {
+      const code = Number(e.message) || 500;
+      if (code === 500) logger.warn("orderRelay ref", { ref, error: e.message });
+      return res.status(code).json({ ok: false, description: code === 404 ? "unknown order" : code === 410 ? "order too old" : code === 429 ? "order send budget used" : "server busy" });
+    }
+
+    let method; let body;
+    if (kind === "details") {
+      method = "sendMessage";
+      body = {
+        chat_id: chat, text, parse_mode: "HTML", disable_web_page_preview: true,
+        reply_markup: { inline_keyboard: [[{ text: STEPS[0].label, callback_data: `s|g|${ref}` }]] },
+      };
+    } else if (kind === "no") {
+      method = "sendMessage";
+      body = { chat_id: chat, text: `<b>ORDER NO. ${no == null ? "-" : no}</b>`, parse_mode: "HTML" };
+    } else if (kind === "dots") {
+      method = "sendMessage";
+      body = { chat_id: chat, text: ".\n." };
+    } else {
+      method = photos.length === 1 ? "sendPhoto" : "sendMediaGroup";
+    }
+    if (dry) {
+      const g = await tg("getChat", { chat_id: chat });
+      return res.json({ ok: true, dry: true, method, photos: photos.length, chatOk: !!g.ok, chatTitle: g.ok ? g.result.title : g.description, body: body || null });
+    }
+    try {
+      let r;
+      const api = `https://api.telegram.org/bot${TG_TOKEN.value()}/${method}`;
+      if (body) {
+        r = await fetch(api, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      } else {
+        const f = new FormData();
+        f.append("chat_id", chat);
+        if (photos.length === 1) {
+          f.append("photo", new Blob([photos[0]], { type: "image/jpeg" }), "0.jpg");
+        } else {
+          f.append("media", JSON.stringify(photos.map((_, i) => ({ type: "photo", media: `attach://p${i}` }))));
+          photos.forEach((p, i) => f.append(`p${i}`, new Blob([p], { type: "image/jpeg" }), `${i}.jpg`));
+        }
+        r = await fetch(api, { method: "POST", body: f });
+      }
+      const j = await r.json().catch(() => ({ ok: false, description: "bad Telegram reply" }));
+      if (!j.ok) logger.warn("orderRelay tg " + method, { ref, code: j.error_code, desc: j.description });
+      // Never pass Telegram's 401/404 (token problems) through as-is.
+      const st = j.ok ? 200 : (r.status === 400 || r.status === 429 ? r.status : 502);
+      return res.status(st).json(j);
+    } catch (e) {
+      logger.warn("orderRelay send", { ref, error: e.message });
+      return res.status(502).json({ ok: false, description: "Telegram not reachable" });
+    }
   },
 );
