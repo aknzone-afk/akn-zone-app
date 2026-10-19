@@ -1093,7 +1093,12 @@ async function checkPayment(db, ref, img, notes) {
     await staff(`💰 ${head}: +${inr(p.amount)} → ${inr(r.total)} / ${inr(bill)} · balance ${inr(due)}`);
     return false;
   }
-  await say(`✅ Payment screenshot received — ${inr(r.total)} for bill ${inr(bill)}. Thank you sir 🙏 We will confirm once it is credited.`);
+  // Owner 19-Oct: up to Rs 100 short still goes ahead — but ask for the rest
+  // so the party's ledger is clear.
+  await say(due > 1
+    ? `✅ Payment screenshot received — ${inr(r.total)} of bill ${inr(bill)}. Your goods are being processed 🙏 ` +
+      `Sir, please pay the remaining ${inr(due)} also and send the screenshot here, so your ledger is fully clear.`
+    : `✅ Payment screenshot received — ${inr(r.total)} for bill ${inr(bill)}. Thank you sir 🙏 We will confirm once it is credited.`);
   // Owner 18-Oct: a screenshot never ticks the step — only Tally (bill settled) does.
   await staff(`💰 ${head}: FULL payment screenshot ${inr(r.total)} / ${inr(bill)}${due < -1 ? " (extra " + inr(-due) + ")" : ""} — ticks when the bill is settled in Tally`);
   await mainDoc.set({ payShot: Date.now() }, { merge: true });
