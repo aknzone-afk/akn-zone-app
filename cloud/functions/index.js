@@ -984,10 +984,14 @@ async function handleBillPhoto(db, m) {
   // One message per customer chat (all linked orders share the mobile).
   const advPaid = Number(main.paidTotal || 0);
   const balance = b.grandTotal ? Math.max(0, Number(b.grandTotal) - advPaid) : 0;
-  await addChat(db, main.id, { from: "shop", text: "🧾 Sir, please make the payment — Bill" + (b.billNo ? " " + b.billNo : "") +
+  // Owner 19-Oct: the bill screenshot first (own bubble), the request under it.
+  await addChat(db, main.id, { from: "shop", text: "🧾 Your bill" + (b.billNo ? " " + b.billNo : "") +
     (b.grandTotal ? " · " + inr(b.grandTotal) : "") +
-    (advPaid > 0 && b.grandTotal ? ` (token ${inr(advPaid)} received — deducted, balance ${inr(balance)})` : "") +
-    ". Send the payment screenshot here 🙏", fileId, mime });
+    (advPaid > 0 && b.grandTotal ? ` (token ${inr(advPaid)} received — deducted, balance ${inr(balance)})` : ""),
+    fileId, mime, silent: true });
+  const payAmt = b.grandTotal ? (advPaid > 0 ? balance : Number(b.grandTotal)) : 0;
+  await addChat(db, main.id, { from: "shop", text: `Sir, please make the payment${payAmt ? " of " + inr(payAmt) : ""} and send the ` +
+    "payment screenshot here below 🙏 We will credit it, notify you, and dispatch your parcel right away." });
   const no = main.serial ? `ORDER NO. ${main.serial}` : "the order";
   return reply(`✅ Bill sent to ${main.billName} — ${no}${b.billNo ? " · Bill " + b.billNo : ""}${b.grandTotal ? " · ₹" + b.grandTotal : ""}`);
 }
@@ -1306,7 +1310,7 @@ async function addChat(db, ref, m) {
   await db.collection("bbapp_chat").add({ ref, cust: o.mobile || "", from: m.from, text: m.text || "",
     fileId: m.fileId || null, storagePath: m.fileId ? null : storagePath, mime: m.mime || null,
     by: m.by || "", at: Date.now(), mirrored: true });
-  if (m.from === "shop" && o.mobile) await pushTo(db, custKey(o.mobile), m.text || "📎 Sent you a file");
+  if (m.from === "shop" && o.mobile && !m.silent) await pushTo(db, custKey(o.mobile), m.text || "📎 Sent you a file");
 }
 
 /* ───────────── AKN Chat "AKN App" tab (owner, 11-Oct-2026) ─────────────
