@@ -1078,7 +1078,17 @@ async function checkPayment(db, ref, img, notes) {
     return false;
   }
   const due = bill - r.total;
-  if (due > 1) {
+  // Owner 19-Oct: paid in full (up to Rs 100 short) -> the OPTIONAL bill
+  // becomes regular + prints (Sales bill bot, via convertQueue).
+  if (due <= 100 && /^OP\s*\d+/i.test(String(m.billNo || ""))) {
+    const cref = db.collection("bbapp_convert").doc(mainRef);
+    if (!(await cref.get()).exists) { // once per order — a 2nd screenshot never re-queues
+      await cref.set({ bill: String(m.billNo).toUpperCase().replace(/\s+/g, ""),
+        paid: inr(r.total), total: inr(bill), serial: m.serial || null, at: Date.now(), sentAt: null });
+    }
+    if (notes) notes.push(`🔁 Paid in full${due > 1 ? " (" + inr(due) + " short)" : ""} — bill ${m.billNo} goes regular + prints`);
+  }
+  if (due > 100) {
     await say(`✅ Received ${inr(p.amount)} — total ${inr(r.total)} of bill ${inr(bill)}. Sir, please pay ${inr(due)} more and send the screenshot 🙏`);
     await staff(`💰 ${head}: +${inr(p.amount)} → ${inr(r.total)} / ${inr(bill)} · balance ${inr(due)}`);
     return false;
@@ -1089,6 +1099,28 @@ async function checkPayment(db, ref, img, notes) {
   await mainDoc.set({ payShot: Date.now() }, { merge: true });
   return true;
 }
+
+/** Owner 19-Oct: the Sales bill bot picks up paid optional bills (once each). */
+exports.convertQueue = onRequest(
+  { region: "asia-south1", secrets: [PC_KEY], timeoutSeconds: 30, memory: "256MiB", maxInstances: 1, invoker: "public" },
+  async (req, res) => {
+    if (req.method !== "POST" || !pcOk(req)) return res.status(403).json({ ok: false });
+    const db = admin.firestore();
+    const q = await db.collection("bbapp_convert").where("sentAt", "==", null).get().catch(() => null);
+    const all = q ? q.docs : (await db.collection("bbapp_convert").get()).docs.filter((x) => !x.get("sentAt"));
+    const items = [];
+    for (const doc of all.slice(0, 3)) {
+      const c = doc.data();
+      const o = (await db.collection("bbapp_orders").doc(doc.id).get()).data() || {};
+      if (o.cancelled) { await doc.ref.set({ sentAt: Date.now(), skipped: "cancelled" }, { merge: true }); continue; }
+      const acc = (await db.collection("bbapp_accounts").doc(accKey(o.mobile) || "-").get()).data() || {};
+      const party = String(o.ledgerName || (acc.kind === "existing" && acc.party) || o.billName || "").trim();
+      await doc.ref.set({ sentAt: Date.now(), party }, { merge: true });
+      items.push({ ref: doc.id, bill: c.bill, party, paid: c.paid, total: c.total, serial: c.serial });
+    }
+    return res.json({ ok: true, items });
+  },
+);
 
 /** Owner 19-Oct: closing balance in words. Dr (party owes) = positive. */
 function balWords(b) {
