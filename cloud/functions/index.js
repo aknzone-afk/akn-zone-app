@@ -2974,6 +2974,99 @@ function kycLines(a, c) {
 
 /** Owner 14-Oct: every day 9 PM — "New designs are in — check DAILY UPDATE",
  *  ONLY to approved accounts (never pending / declined / blocked). */
+/** Owner 20-Oct: staff + customer nudges (see each block). Every 30 min, 9-21 IST. */
+exports.opsNudges = onSchedule(
+  { region: "asia-south1", schedule: "every 30 minutes", secrets: [TG_TOKEN, APNS_KEY], timeoutSeconds: 300, memory: "256MiB" },
+  async () => {
+    const db = admin.firestore();
+    const now = Date.now();
+    const h = Number(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata", hour: "numeric", hour12: false }));
+    const mi = Number(new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata", minute: "numeric" }));
+    if (h < 9 || h >= 21) return;
+    const today = dmyOf(now);
+    const ageH = (ms) => Math.round((now - ms) / 3600e3);
+    const ageTxt = (ms) => { const hh = ageH(ms); return hh >= 48 ? `${Math.round(hh / 24)} d` : `${hh} h`; };
+    const marks = (await db.collection("bbapp_settings").doc("nudges").get()).data() || {};
+    const mark = (k) => db.collection("bbapp_settings").doc("nudges").set({ [k]: today }, { merge: true });
+    const window = (hour) => h === hour && mi < 30;
+    const appChat = await approvalsChat(db);
+
+    // A. pending sign-ups (not the ones the owner put on Waiting)
+    if (appChat && (window(10) || window(17)) && marks["A" + h] !== today) {
+      const pend = (await db.collection("bbapp_accounts").where("status", "==", "pending").get()).docs
+        .map((d) => ({ id: d.id, ...d.data() })).filter((a) => !a.held && now - (a.at || 0) > 2 * 3600e3)
+        .sort((a, b) => (a.at || 0) - (b.at || 0));
+      if (pend.length) {
+        const lines = pend.slice(0, 25).map((a) => `• ${escH((a.cust || {}).billName || a.id)} · ${ageTxt(a.at || now)}`);
+        await tg("sendMessage", { chat_id: appChat, parse_mode: "HTML",
+          text: `⏳ <b>${pend.length} sign-up${pend.length > 1 ? "s" : ""} waiting for your Approve / Decline</b>\n${lines.join(NL)}\n(scroll up to their messages and tap the button)` });
+      }
+      await mark("A" + h);
+    }
+
+    // B. orders stuck with staff
+    if ((window(11) || window(17)) && marks["B" + h] !== today) {
+      const open = (await db.collection("bbapp_orders").where("status", "in", ["received", "getting_ready"]).get()).docs
+        .map((d) => ({ id: d.id, ...d.data() })).filter((o) => o.serial && !o.addOnTo && !o.cancelled && !/SYNTHETICS \(SURAT\)/i.test(o.billName || ""));
+      const lines = [];
+      for (const o of open) {
+        const st = o.statusAt && o.statusAt.toMillis ? o.statusAt.toMillis() : (o.at && o.at.toMillis ? o.at.toMillis() : now);
+        if (o.hold) { if (now - (o.holdAt || st) > 3 * 86400e3) lines.push(`⏸ ORDER NO. ${o.serial} ${escH(o.billName)} — on hold for ${ageTxt(o.holdAt || st)}`); continue; }
+        if (o.status === "received" && now - st > 4 * 3600e3) lines.push(`🧺 ORDER NO. ${o.serial} ${escH(o.billName)} — waiting for "Maal nikalna chalu" since ${ageTxt(st)}`);
+        if (o.status === "getting_ready" && now - st > 24 * 3600e3) lines.push(`🧾 ORDER NO. ${o.serial} ${escH(o.billName)} — maal nikalna started ${ageTxt(st)} ago, bill not sent yet`);
+      }
+      if (lines.length) await tg("sendMessage", { chat_id: ORDER_GROUP, parse_mode: "HTML", text: `⏰ <b>Orders waiting for us</b>\n${lines.join(NL)}` });
+      await mark("B" + h);
+    }
+
+    // C. customer: bill sent, no payment screenshot (24 h, then 72 h)
+    const billed = (await db.collection("bbapp_orders").where("status", "==", "bill_sent").get()).docs;
+    for (const d of billed) {
+      const o = d.data();
+      if (o.cancelled || o.hold || o.payShot || (o.paidTotal || 0) > 0 || !o.billSentAt) continue;
+      const n = Number(o.payRem || 0);
+      const dueAt = o.billSentAt + (n === 0 ? 24 : 72) * 3600e3;
+      if (n >= 2 || now < dueAt) continue;
+      const amt = o.billTotal ? inr(Math.max(0, Number(o.billTotal) - Number(o.paidTotal || 0))) : "";
+      await addChat(db, d.id, { from: "shop", text: `🙏 Sir, a gentle reminder — your bill${o.billNo ? " " + o.billNo : ""}${amt ? " of " + amt : ""} is waiting for payment. ` +
+        "Please pay and send the payment screenshot here, and we dispatch your parcel right away." });
+      await d.ref.set({ payRem: n + 1, payRemAt: now }, { merge: true });
+    }
+
+    // D. customer chat message unanswered for 1 h
+    if (appChat) {
+      const recent = (await db.collection("bbapp_chat").where("at", ">", now - 3 * 86400e3).get()).docs.map((d) => ({ id: d.id, ...d.data() }));
+      const byCust = {};
+      for (const m of recent) { if (!m.cust) continue; (byCust[m.cust] = byCust[m.cust] || []).push(m); }
+      for (const [cust, list] of Object.entries(byCust)) {
+        list.sort((a, b) => a.at - b.at);
+        const last = list[list.length - 1];
+        if (last.from !== "party" || now - last.at < 3600e3 || last.alerted) continue;
+        const o = last.ref ? (await db.collection("bbapp_orders").doc(last.ref).get()).data() || {} : {};
+        const isPay = /payment screenshot/i.test(String(last.text || "")) || (last.fileId || last.storagePath) && !String(last.text || "").trim();
+        if (!isPay) {
+          await tg("sendMessage", { chat_id: appChat, parse_mode: "HTML",
+            text: `💬 <b>Unanswered for ${ageTxt(last.at)}</b> — ${escH(o.billName || cust)}${o.serial ? " · ORDER NO. " + o.serial : ""}\n"${escH(String(last.text || "📎 photo").slice(0, 120))}"\nReply in AKN Chat → AKN App.` });
+        }
+        await db.collection("bbapp_chat").doc(last.id).set({ alerted: true }, { merge: true });
+      }
+    }
+
+    // E. approved new customer, no order after 3 days -> one welcome push
+    const fresh = (await db.collection("bbapp_accounts").where("status", "==", "approved").get()).docs;
+    let sent = 0;
+    for (const d of fresh) {
+      const a = d.data();
+      if (sent >= 30 || a.welcomed || a.kind !== "new" || (a.orders || 0) > 0) continue;
+      const since = a.approvedAt || a.at || 0;
+      if (!since || now - since < 3 * 86400e3) continue;
+      await pushTo(db, d.id, "🙏 Welcome to B.B Synthetics — your account is ready. See today's new designs in DAILY UPDATE and place your first order.", "/daily");
+      await d.ref.set({ welcomed: now }, { merge: true });
+      sent++;
+    }
+  },
+);
+
 exports.dailyDesignPush = onSchedule(
   { region: "asia-south1", schedule: "0 21 * * *", timeZone: "Asia/Kolkata", secrets: [APNS_KEY], timeoutSeconds: 300, memory: "256MiB" },
   async () => {
