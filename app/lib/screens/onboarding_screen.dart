@@ -811,7 +811,13 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
       const SizedBox(height: 22),
       _BigButton(
           label: 'Login with WhatsApp', icon: Icons.chat_rounded, color: _green, onPressed: _verify),
+      // Owner 19-Oct: outside India too — WhatsApp login only (any country).
       if (_netCountry != null && _netCountry != 'IN') ...[
+        const SizedBox(height: 14),
+        const Text('Outside India? Login with WhatsApp works with any country number.',
+            textAlign: TextAlign.center, style: TextStyle(fontSize: 13.5, height: 1.35)),
+      ],
+      if (false) ...[
         const SizedBox(height: 18),
         const Text('Outside India? No login needed.',
             textAlign: TextAlign.center, style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15)),
@@ -1141,7 +1147,8 @@ class _SignupFormState extends State<_SignupForm> {
   _KycPhoto? _cardPhoto; // shop / visiting card (existing business, no GST)
 
   /// Owner 14-Oct: an existing saree business without GST shows its card.
-  bool get _needCard => _india && !_hasGst; // business proof (owner 15-Oct)
+  // business proof (owner 15-Oct); outside India always (owner 19-Oct)
+  bool get _needCard => !_india || !_hasGst;
   final _bizNote = TextEditingController();
   XFile? _proofVideo; // owner 15-Oct: business proof may be a video
   String? _proofKind; // 'existing' (photo) | 'startup' (live video)
@@ -1709,7 +1716,7 @@ class _SignupFormState extends State<_SignupForm> {
       if (_india && !_hasGst && _panPhoto != null && panValid(_pan.text)) 'pan': _norm(_pan.text),
       if (_bizNote.text.trim().isNotEmpty) 'bizNote': _bizNote.text.trim(),
       'address': _address.text.trim(),
-      'pincode': _india ? _pin.text.trim() : '',
+      'pincode': _india ? _pin.text.trim() : _pin.text.trim().toUpperCase(),
       'bookingPlace': _place.text.trim().toUpperCase(),
       'transport': _india ? _transport.text.trim().toUpperCase() : '',
       'taxId': taxId,
@@ -1920,6 +1927,22 @@ class _SignupFormState extends State<_SignupForm> {
                   ],
                   decoration: _dec('Pincode *', helper: pinHelper, helperColor: pinColor),
                   validator: (v) => OrderService.validatePincode(v ?? '', india: true),
+                ),
+                const SizedBox(height: 12),
+              ],
+              // Owner 19-Oct: outside India the postal / ZIP code is compulsory too.
+              if (!_india) ...[
+                TextFormField(
+                  controller: _pin,
+                  textCapitalization: TextCapitalization.characters,
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9 \-]')),
+                    LengthLimitingTextInputFormatter(12),
+                  ],
+                  decoration: _dec('Postal / ZIP code *', hint: 'e.g. 00000, SW1A 1AA'),
+                  validator: (v) => (v ?? '').replaceAll(RegExp(r'[^A-Za-z0-9]'), '').length < 3
+                      ? 'Enter your postal / ZIP code'
+                      : null,
                 ),
                 const SizedBox(height: 12),
               ],

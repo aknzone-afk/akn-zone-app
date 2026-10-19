@@ -2491,8 +2491,11 @@ exports.accountSignup = onRequest(
     let key = await verifiedKey(db, req.body && req.body.code);
     let abroadDirect = false;
     if (!key && req.body && req.body.abroad) {
-      // Owner 14-Oct: customer abroad — no WhatsApp login, approved at once,
-      // but only from a network outside India and with a non-Indian number.
+      // Owner 19-Oct: foreigners must verify on WhatsApp too — no typed numbers.
+      return res.json({ ok: false, error: "Please log in with WhatsApp — tap Back, then \"Login with WhatsApp\". It works with any country's WhatsApp number." });
+    }
+    if (false) {
+      // (old 14-Oct path: customer abroad, typed number, no WhatsApp login)
       const k = accKey(req.body.mobile);
       if (!k || k.length === 10) return res.json({ ok: false, error: "Indian numbers log in with WhatsApp." });
       const cc = await ipCountry(req);
@@ -2517,6 +2520,10 @@ exports.accountSignup = onRequest(
     if (!cust.billName || !cust.address || !cust.bookingPlace) return res.json({ ok: false, error: "Please fill bill name, address and destination." });
     if (india && (!cust.pincode || !cust.transport || !cust.taxId)) {
       return res.json({ ok: false, error: "Please fill pincode, transport and GST / PAN / Aadhaar." });
+    }
+    // Owner 19-Oct: outside India — postal code compulsory too.
+    if (!india && String(cust.pincode || "").replace(/[^A-Za-z0-9]/g, "").length < 3) {
+      return res.json({ ok: false, error: "Please fill your postal / ZIP code." });
     }
     // Owner 16-Oct: "MOHIT" -> our transporter "MOHIT TRANSPORT CORPORATION".
     let trWarn = null;
@@ -2559,7 +2566,8 @@ exports.accountSignup = onRequest(
     if (/^proof\/\d{7,15}-\d+\.mp4$/.test(proofVideo) && proofVideo.startsWith(`proof/${key}-`)) {
       try { videoOk = (await admin.storage().bucket().file(proofVideo).exists())[0]; } catch (e) { videoOk = false; }
     }
-    if (india && doc !== "gst" && card.length < 1000 && !videoOk) {
+    if ((!india || doc !== "gst") && card.length < 1000 && !videoOk) {
+      // Owner 19-Oct: outside India the business proof is compulsory too.
       return res.json({ ok: false, error: "Please add a business proof photo or video." });
     }
     if (india && !idValid(doc, cust.taxId)) {
