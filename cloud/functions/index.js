@@ -1011,12 +1011,13 @@ const PAY_SCHEMA = { type: "object", properties: {
  * never counts twice; short → "please pay ₹X more sir"; Payment received is
  * ticked only when the bill is fully paid. Returns true when fully paid.
  */
-async function checkPayment(db, ref, img) {
+async function checkPayment(db, ref, img, notes) {
   const first = (await db.collection("bbapp_orders").doc(ref).get()).data() || {};
   const mainRef = first.billGroup || ref;
   const mainDoc = db.collection("bbapp_orders").doc(mainRef);
   const m = (await mainDoc.get()).data() || {};
   const staff = async (text) => {
+    if (notes) { notes.push(text); return; } // owner 19-Oct: goes inside the one receipts message
     // Owner 19-Oct: payment notes only in the auto-receipts group.
     const rg = (await db.collection("bbapp_settings").doc("receipts").get()).data();
     if (!rg || !rg.chat) return;
@@ -1089,6 +1090,38 @@ async function checkPayment(db, ref, img) {
   return true;
 }
 
+/** Owner 19-Oct: closing balance in words. Dr (party owes) = positive. */
+function balWords(b) {
+  const n = Math.round(Number(b) || 0);
+  if (n > 0) return `${inr(n)} — ${inr(n)} still to receive from the party`;
+  if (n < 0) return `${inr(n)} — party has ${inr(-n)} extra (advance)`;
+  return `${inr(0)} — nothing due`;
+}
+
+/** Owner 19-Oct: ONE message in the auto-receipts group per payment screenshot. */
+async function receiptsPost(db, ref, d, img, text, notes) {
+  const rg = (await db.collection("bbapp_settings").doc("receipts").get()).data();
+  if (!rg || !rg.chat) { logger.warn("receipts group not connected"); return; }
+  const acc = (await db.collection("bbapp_accounts").doc(accKey(d.mobile) || "-").get()).data() || {};
+  const party = String(d.ledgerName || (acc.kind === "existing" && acc.party) || d.billName || "?").toUpperCase();
+  const dest = String((d.cust && d.cust.bookingPlace) || (acc.cust && acc.cust.bookingPlace) || "").toUpperCase();
+  const tallyBill = d.tallyBillNo ? `Tally bill ${d.tallyBillNo}` : (d.billNo ? `Bill ${d.billNo} (Tally no. not yet in the parcel report)` : "Bill not sent yet");
+  const head = [`💰 Payment screenshot — ${party}${d.serial ? " · ORDER NO. " + d.serial : ""}`,
+    `📍 ${dest || "-"}`, `🧾 ${tallyBill}`, ...(notes || []).map((x) => String(x).replace(/^💰\S*\s*/, "")),
+    ...(text ? [`💬 ${text}`] : [])].join("\n");
+  const bal = d.payBal != null && d.payChk ? `💼 Closing balance: ${balWords(d.payBal)} (${dhm(d.payChk)})` : "💼 Closing balance: checking Tally…";
+  const cap = `${head}\n${bal}\n• • • • • • • • • •`.slice(0, 1000);
+  const fd = new FormData();
+  fd.append("chat_id", String(rg.chat));
+  fd.append("caption", cap);
+  fd.append("photo", new Blob([img], { type: "image/jpeg" }), "payment.jpg");
+  const x = await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/sendPhoto`, { method: "POST", body: fd }).then((y) => y.json()).catch(() => ({}));
+  if (!x.ok) { logger.warn("receipts photo", { ref, desc: x.description }); return; }
+  await db.collection("bbapp_msgmap").doc(`${rg.chat}_${x.result.message_id}`).set({ ref: d.billGroup || ref });
+  await db.collection("bbapp_orders").doc(ref).set({ payNow: Date.now(),
+    receiptMsg: { chat: rg.chat, id: x.result.message_id, head } }, { merge: true });
+}
+
 /** App: the bill image for an order (party taps VIEW BILL). */
 exports.billImage = onRequest(
   { region: "asia-south1", secrets: [TG_TOKEN], timeoutSeconds: 30, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
@@ -1115,17 +1148,12 @@ exports.paymentProof = onRequest(
     const db = admin.firestore();
     const d = (await db.collection("bbapp_orders").doc(ref).get()).data();
     if (!d || !d.chat) return res.json({ ok: false, error: "order not found" });
-    const fd = new FormData();
-    fd.append("chat_id", String(d.chat));
-    if (d.msg) fd.append("reply_to_message_id", String(d.msg));
-    fd.append("caption", `💰 Payment screenshot — ${d.billName || ""}${d.serial ? " · ORDER NO. " + d.serial : ""}`);
-    fd.append("photo", new Blob([img], { type: "image/jpeg" }), "payment.jpg");
-    const sent = await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/sendPhoto`, { method: "POST", body: fd })
-      .then((r) => r.json()).catch(() => ({}));
-    const mid = sent && sent.result && sent.result.message_id;
-    if (mid) await db.collection("bbapp_msgmap").doc(`${d.chat}_${mid}`).set({ ref: d.billGroup || ref });
+    // Owner 19-Oct: never in the Party order group — ONE message in auto-receipts.
+    await addChat(db, ref, { from: "party", text: "💰 Payment screenshot", bytes: img, mime: "image/jpeg" }).catch(() => {});
+    const notes = [];
     let paid = false;
-    if ((d.status || "received") === "bill_sent") paid = await checkPayment(db, ref, img);
+    if ((d.status || "received") === "bill_sent") paid = await checkPayment(db, ref, img, notes);
+    await receiptsPost(db, ref, d, img, "", notes).catch((e) => logger.warn("receiptsPost", { ref, error: e.message }));
     return res.json({ ok: true, paid });
   },
 );
@@ -1367,30 +1395,11 @@ exports.chatSend = onRequest(
     // Tester 13-Oct: the bytes go along too — a failed Telegram send must not
     // lose the screenshot (it is still kept in Storage / AKN Chat).
     await addChat(db, ref, { from: "party", text, fileId, bytes: img, mime: img ? "image/jpeg" : null });
-    // Owner 16-Oct: every payment screenshot also goes to the payment group,
-    // with the party name and destination under it.
-    if (img) {
-      try {
-        const rg = (await db.collection("bbapp_settings").doc("receipts").get()).data();
-        if (rg && rg.chat) {
-          const acc = (await db.collection("bbapp_accounts").doc(accKey(d.mobile) || "-").get()).data() || {};
-          const party = String(d.ledgerName || (acc.kind === "existing" && acc.party) || d.billName || "?").toUpperCase();
-          const dest = String((d.cust && d.cust.bookingPlace) || (acc.cust && acc.cust.bookingPlace) || "").toUpperCase();
-          const fd = new FormData();
-          fd.append("chat_id", String(rg.chat));
-          const billNo = d.tallyBillNo || d.billNo || "";
-          const bal = d.payBal != null && d.payChk ? `${inr(d.payBal)} (${dhm(d.payChk)})` : "checking…";
-          fd.append("caption", `${party}\n📍 ${dest || "-"}\n💰 Payment screenshot${d.serial ? " · ORDER NO. " + d.serial : ""}${billNo ? " · Bill " + billNo : ""}\n💼 Closing balance: ${bal}${text ? "\n" + text : ""}`.slice(0, 1000));
-          fd.append("photo", new Blob([img], { type: "image/jpeg" }), "payment.jpg");
-          const x = await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/sendPhoto`, { method: "POST", body: fd }).then((y) => y.json());
-          if (!x.ok) logger.warn("payment group photo", { ref, desc: x.description });
-          // a fresh closing balance from Tally right away (daytime only)
-          await db.collection("bbapp_orders").doc(ref).set({ payNow: Date.now() }, { merge: true });
-        }
-      } catch (e) { logger.warn("payment group photo", { ref, error: e.message }); }
-    }
+    // Owner 19-Oct: ONE message, only in the auto-receipts group.
+    const notes = [];
     let paid = false;
-    if (img && (d.status || "received") === "bill_sent") paid = await checkPayment(db, ref, img);
+    if (img && (d.status || "received") === "bill_sent") paid = await checkPayment(db, ref, img, notes);
+    if (img) await receiptsPost(db, ref, d, img, text, notes).catch((e) => logger.warn("receiptsPost", { ref, error: e.message }));
     return res.json({ ok: true, paid });
   },
 );
@@ -3236,10 +3245,10 @@ exports.lookupQueue = onRequest(
       const d = (await oref.get()).data() || {};
       const zero = r.ok && r.balance != null && Number(r.balance) <= 0;
       if (d.payNow && r.ok && r.balance != null) {
-        const rg = (await db.collection("bbapp_settings").doc("receipts").get()).data();
-        if (rg && rg.chat) {
-          await tg("sendMessage", { chat_id: rg.chat, text: `💼 ${String(d.ledgerName || d.billName || "").toUpperCase()}${d.serial ? " · ORDER NO. " + d.serial : ""}${(d.tallyBillNo || d.billNo) ? " · Bill " + (d.tallyBillNo || d.billNo) : ""}` +
-            `\nClosing balance now: ${inr(r.balance)} (${dhm(Date.now())})` });
+        const rm = d.receiptMsg;
+        if (rm && rm.chat && rm.id) {
+          await tg("editMessageCaption", { chat_id: rm.chat, message_id: rm.id,
+            caption: `${rm.head}\n💼 Closing balance: ${balWords(r.balance)} (${dhm(Date.now())})\n• • • • • • • • • •`.slice(0, 1000) }).catch(() => {});
         }
         await oref.set({ payNow: admin.firestore.FieldValue.delete() }, { merge: true });
       }
