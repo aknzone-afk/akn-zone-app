@@ -999,10 +999,11 @@ const PAY_PROMPT = "This should be a payment screenshot (UPI app like GPay/Phone
   "txnId (the bank's UPI Ref No. / UTR / RRN — usually 12 digits; NOT the app's own id that starts with letters like T2610… or the PhonePe/GPay transaction id when a UTR is also shown), " +
   "refs (EVERY reference / transaction / UTR / RRN number shown on the screenshot, as strings), " +
   "success (true only if it clearly says successful/completed/paid), " +
-  "payee (receiver name). Use null when not shown. If it is not a payment screenshot, amount = null.";
+  "payee (receiver name), payerVpa (the payer's UPI id like name@okhdfcbank, if shown). Use null when not shown. If it is not a payment screenshot, amount = null.";
 const PAY_SCHEMA = { type: "object", properties: {
   amount: { type: ["number", "null"] }, date: { type: ["string", "null"] }, time: { type: ["string", "null"] },
-  txnId: { type: ["string", "null"] }, success: { type: ["boolean", "null"] }, payee: { type: ["string", "null"] } },
+  txnId: { type: ["string", "null"] }, success: { type: ["boolean", "null"] }, payee: { type: ["string", "null"] },
+  refs: { type: ["array", "null"], items: { type: "string" } }, payerVpa: { type: ["string", "null"] } },
   required: ["amount"] };
 
 /**
@@ -1071,6 +1072,17 @@ async function checkPayment(db, ref, img, notes) {
     await say(`ℹ️ This payment (${inr(p.amount)}) is already counted. Total received ${inr(r.total)}.`);
     return false;
   }
+  // Owner 19-Oct: the HDFC morning entry puts this credit in the PARTY, not
+  // SUSPENSE — the PC adds it to TallyReceiptBot's waiting-screenshot list.
+  try {
+    const acc = (await db.collection("bbapp_accounts").doc(accKey(m.mobile) || "-").get()).data() || {};
+    const party = String(m.ledgerName || (acc.kind === "existing" && acc.party) || m.billName || "").trim();
+    if (party) {
+      await db.collection("bbapp_paypending").add({ ref: mainRef, party, amount: Number(p.amount), date: dt || nowIst,
+        time: tm || "", refs: [txn, ...(Array.isArray(p.refs) ? p.refs : [])].map((x) => String(x || "").replace(/\W/g, "")).filter((x) => x.length >= 6),
+        vpa: String(p.payerVpa || p.vpa || "").toLowerCase(), bill: String(m.tallyBillNo || m.billNo || ""), at: Date.now(), sentAt: null });
+    }
+  } catch (e) { logger.warn("paypending", { ref: mainRef, error: e.message }); }
   const bill = Number(m.billTotal) || 0;
   if (!bill) {
     await say(`✅ Payment ${inr(p.amount)} received. Our staff will confirm the bill amount.`);
@@ -1104,6 +1116,20 @@ async function checkPayment(db, ref, img, notes) {
   await mainDoc.set({ payShot: Date.now() }, { merge: true });
   return true;
 }
+
+/** Owner 19-Oct: PC helper picks up app payment screenshots for the HDFC entry. */
+exports.payPendingQueue = onRequest(
+  { region: "asia-south1", secrets: [PC_KEY], timeoutSeconds: 30, memory: "256MiB", maxInstances: 1, invoker: "public" },
+  async (req, res) => {
+    if (req.method !== "POST" || !pcOk(req)) return res.status(403).json({ ok: false });
+    const db = admin.firestore();
+    for (const id of ((req.body && req.body.ack) || []).slice(0, 50)) {
+      await db.collection("bbapp_paypending").doc(String(id).replace(/[^A-Za-z0-9]/g, "")).set({ sentAt: Date.now() }, { merge: true });
+    }
+    const q = await db.collection("bbapp_paypending").where("sentAt", "==", null).limit(20).get();
+    return res.json({ ok: true, items: q.docs.map((d) => ({ id: d.id, ...d.data() })) });
+  },
+);
 
 /** Owner 19-Oct: the Sales bill bot picks up paid optional bills (once each). */
 exports.convertQueue = onRequest(
