@@ -1147,8 +1147,8 @@ class _SignupFormState extends State<_SignupForm> {
   _KycPhoto? _cardPhoto; // shop / visiting card (existing business, no GST)
 
   /// Owner 14-Oct: an existing saree business without GST shows its card.
-  // business proof (owner 15-Oct); outside India always (owner 19-Oct)
-  bool get _needCard => !_india || !_hasGst;
+  // business proof (owner 15-Oct); never outside India (owner 20-Oct)
+  bool get _needCard => _india && !_hasGst;
   final _bizNote = TextEditingController();
   XFile? _proofVideo; // owner 15-Oct: business proof may be a video
   String? _proofKind; // 'existing' (photo) | 'startup' (live video)
@@ -1913,8 +1913,8 @@ class _SignupFormState extends State<_SignupForm> {
                 minLines: 2,
                 maxLines: 4,
                 textCapitalization: TextCapitalization.words,
-                decoration: _dec('Address *'),
-                validator: (v) => _need(v, 5, 'Enter full address'),
+                decoration: _dec(_india ? 'Address *' : 'Address with postal / ZIP code *'),
+                validator: (v) => _need(v, 5, _india ? 'Enter full address' : 'Enter your address with postal / ZIP code'),
               ),
               const SizedBox(height: 12),
               if (_india) ...[
@@ -1930,8 +1930,8 @@ class _SignupFormState extends State<_SignupForm> {
                 ),
                 const SizedBox(height: 12),
               ],
-              // Owner 19-Oct: outside India the postal / ZIP code is compulsory too.
-              if (!_india) ...[
+              // Owner 20-Oct: no postal box outside India — it goes inside the address.
+              if (false) ...[
                 TextFormField(
                   controller: _pin,
                   textCapitalization: TextCapitalization.characters,

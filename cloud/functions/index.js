@@ -2603,10 +2603,7 @@ exports.accountSignup = onRequest(
     if (india && (!cust.pincode || !cust.transport || !cust.taxId)) {
       return res.json({ ok: false, error: "Please fill pincode, transport and GST / PAN / Aadhaar." });
     }
-    // Owner 19-Oct: outside India — postal code compulsory too.
-    if (!india && String(cust.pincode || "").replace(/[^A-Za-z0-9]/g, "").length < 3) {
-      return res.json({ ok: false, error: "Please fill your postal / ZIP code." });
-    }
+    // Owner 20-Oct: outside India only bill name, address, city, country.
     // Owner 16-Oct: "MOHIT" -> our transporter "MOHIT TRANSPORT CORPORATION".
     let trWarn = null;
     if (india) {
@@ -2648,8 +2645,7 @@ exports.accountSignup = onRequest(
     if (/^proof\/\d{7,15}-\d+\.mp4$/.test(proofVideo) && proofVideo.startsWith(`proof/${key}-`)) {
       try { videoOk = (await admin.storage().bucket().file(proofVideo).exists())[0]; } catch (e) { videoOk = false; }
     }
-    if ((!india || doc !== "gst") && card.length < 1000 && !videoOk) {
-      // Owner 19-Oct: outside India the business proof is compulsory too.
+    if (india && doc !== "gst" && card.length < 1000 && !videoOk) {
       return res.json({ ok: false, error: "Please add a business proof photo or video." });
     }
     if (india && !idValid(doc, cust.taxId)) {
