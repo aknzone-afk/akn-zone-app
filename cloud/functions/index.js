@@ -1128,6 +1128,21 @@ async function checkPayment(db, ref, img, notes) {
   return true;
 }
 
+/** Owner 21-Oct: shop PC sends one push to a chosen list of customers (PC key). */
+exports.pushBatch = onRequest(
+  { region: "asia-south1", secrets: [PC_KEY, APNS_KEY], timeoutSeconds: 300, memory: "256MiB", maxInstances: 1, invoker: "public" },
+  async (req, res) => {
+    if (req.method !== "POST" || !pcOk(req)) return res.status(403).json({ ok: false });
+    const db = admin.firestore();
+    const text = String((req.body && req.body.text) || "").slice(0, 180);
+    const route = String((req.body && req.body.route) || "/orders");
+    const list = ((req.body && req.body.mobiles) || []).map((m) => custKey(m)).filter(Boolean).slice(0, 100);
+    if (!text || !list.length) return res.json({ ok: false, error: "text + mobiles needed" });
+    for (const m of list) await pushTo(db, m, text, route);
+    return res.json({ ok: true, sent: list.length });
+  },
+);
+
 /** Owner 19-Oct: PC helper picks up app payment screenshots for the HDFC entry. */
 exports.payPendingQueue = onRequest(
   { region: "asia-south1", secrets: [PC_KEY], timeoutSeconds: 30, memory: "256MiB", maxInstances: 1, invoker: "public" },
