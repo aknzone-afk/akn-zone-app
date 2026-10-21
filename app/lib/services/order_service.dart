@@ -857,7 +857,7 @@ class OrderService {
           'text': await _details(prefs, order),
         });
         order.detailsSent = true;
-        order.tgChat = _chatOf(sent) ?? '-5370195204'; // the order group
+        order.tgChat = _chatOf(sent) ?? '-1004395901098'; // the order group (supergroup since 20-Oct)
         order.tgMsgId = _msgId(sent);
         order.registered = false;
         await _saveOrder(prefs, order);

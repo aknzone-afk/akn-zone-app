@@ -1926,7 +1926,7 @@ exports.pruneLiveParties = onRequest(
  * order, UTR never used before. Only then does the app send the order to the
  * group. Unpaid after 24 h → a reminder in the Party order group.
  */
-const ORDER_GROUP = -5370195204;
+const ORDER_GROUP = -1004395901098; // owner 21-Oct: group became a supergroup on 20-Oct (old -5370195204)
 const ADV_PROMPT = "This should be a payment screenshot (UPI app like GPay/PhonePe/Paytm/BHIM, or a bank app NEFT/RTGS/IMPS). " +
   "Return JSON: amount (number, rupees paid), date (YYYY-MM-DD of the payment as shown), time (HH:MM 24-hour as shown), " +
   "txnId (the bank's UPI Ref No. / UTR / RRN — usually 12 digits; NOT the app's own id that starts with letters like T2610… or the PhonePe/GPay transaction id when a UTR is also shown), " +
