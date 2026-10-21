@@ -989,6 +989,13 @@ async function handleBillPhoto(db, m) {
     (b.grandTotal ? " · " + inr(b.grandTotal) : "") +
     (advPaid > 0 && b.grandTotal ? ` (token ${inr(advPaid)} received — deducted, balance ${inr(balance)})` : ""),
     fileId, mime, silent: true });
+  // Owner 21-Oct: ALWAYS our UPI QR + payment details under the bill.
+  try {
+    const qr = require("fs").readFileSync(require("path").join(__dirname, "upi_qr.jpg"));
+    await addChat(db, main.id, { from: "shop", silent: true, bytes: qr, mime: "image/jpeg",
+      text: "💳 Pay to B B SYNTHETICS\nUPI: vyapar.173947529358@hdfcbank (scan this QR)\n" +
+        "Bank: BANK OF INDIA · A/c 270320110001776 · IFSC BKID0002703" });
+  } catch (e) { logger.warn("upi qr", { error: e.message }); }
   const payAmt = b.grandTotal ? (advPaid > 0 ? balance : Number(b.grandTotal)) : 0;
   await addChat(db, main.id, { from: "shop", text: `Sir, please make the payment${payAmt ? " of " + inr(payAmt) : ""} and send the ` +
     "payment screenshot here below 🙏 We will credit it, notify you, and dispatch your parcel right away." });
