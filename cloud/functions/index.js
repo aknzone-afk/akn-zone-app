@@ -1300,7 +1300,7 @@ exports.syncDispatch = onRequest(
       return list.filter((r) => r.billDate && r.billDate >= from).sort((a, b) => a.billDate.localeCompare(b.billDate))[0] || null;
     };
     const db = admin.firestore();
-    const snap = await db.collection("bbapp_orders").where("status", "in", ["bill_sent", "payment_received", "dispatched"]).get();
+    const snap = await db.collection("bbapp_orders").where("status", "in", ["bill_sent", "payment_received", "dispatched", "bilty"]).get();
     let disp = 0, bil = 0;
     for (const doc of snap.docs) {
       const d = doc.data();
@@ -1320,6 +1320,14 @@ exports.syncDispatch = onRequest(
           await autoStep(db, doc.id, "l", `${r.bilty} · ${todayDmy()}`, { lr: `${pd ? "Dispatched " + pd + " · " : ""}Bilty ${r.bilty} · ${todayDmy()}`,
             bilty: String(r.bilty), tallyBillNo: String(r.billNo || "") });
           bil++;
+        }
+        // Owner 22-Oct: the bilty / LR no. also goes to the customer's chat, once.
+        const now2 = (await doc.ref.get()).data() || {};
+        if (now2.status === "bilty" && !now2.biltyMsg && !d.addOnTo && !/HAND DELIVERY/i.test(String(r.bilty))) {
+          const pd2 = dmy(r.parcelDate || now2.parcelDate || "");
+          await addChat(db, doc.id, { from: "shop", text: `🚚 Sir, your parcel has been dispatched${pd2 ? " on " + pd2 : ""}.` +
+            ` Bilty / LR No.: ${r.bilty}${r.billNo ? " (bill " + r.billNo + ")" : ""}. Please collect it from the transport office 🙏 Thank you for your order!` });
+          await doc.ref.set({ biltyMsg: Date.now() }, { merge: true });
         }
       }
     }
