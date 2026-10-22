@@ -1128,6 +1128,27 @@ async function checkPayment(db, ref, img, notes) {
   return true;
 }
 
+/** Owner 22-Oct: send our UPI QR + bank details to one order's customer chat (PC key). */
+exports.sendPayInfo = onRequest(
+  { region: "asia-south1", secrets: [PC_KEY, APNS_KEY], timeoutSeconds: 60, memory: "256MiB", maxInstances: 1, invoker: "public" },
+  async (req, res) => {
+    if (req.method !== "POST" || !pcOk(req)) return res.status(403).json({ ok: false });
+    const db = admin.firestore();
+    const serial = Number((req.body && req.body.serial) || 0);
+    const q = await db.collection("bbapp_orders").where("serial", "==", serial).limit(1).get();
+    if (q.empty) return res.json({ ok: false, error: "order not found" });
+    const o = q.docs[0].data();
+    const due = o.billTotal ? Math.max(0, Number(o.billTotal) - Number(o.paidTotal || 0)) : 0;
+    const qr = require("fs").readFileSync(require("path").join(__dirname, "upi_qr.jpg"));
+    await addChat(db, q.docs[0].id, { from: "shop", silent: true, bytes: qr, mime: "image/jpeg",
+      text: "💳 Pay to B B SYNTHETICS\nUPI: vyapar.173947529358@hdfcbank (scan this QR)\n" +
+        "Bank: BANK OF INDIA · A/c 270320110001776 · IFSC BKID0002703" });
+    await addChat(db, q.docs[0].id, { from: "shop", text: `Sir, please make the payment${due ? " of " + inr(due) : ""}` +
+      `${o.billNo ? " for bill " + o.billNo : ""} using the QR above and send the payment screenshot here 🙏 We will credit it and dispatch your parcel right away.` });
+    return res.json({ ok: true, ref: q.docs[0].id, party: o.billName, due });
+  },
+);
+
 /** Owner 21-Oct: shop PC sends one push to a chosen list of customers (PC key). */
 exports.pushBatch = onRequest(
   { region: "asia-south1", secrets: [PC_KEY, APNS_KEY], timeoutSeconds: 300, memory: "256MiB", maxInstances: 1, invoker: "public" },
