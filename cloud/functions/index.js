@@ -1158,6 +1158,32 @@ async function checkPayment(db, ref, img, notes) {
   return true;
 }
 
+/** Owner 24-Oct: DAILY UPDATE feed straight from the shop PC (no GitHub Pages
+ *  delay) — the PC uploads the same daily-feed.json it publishes; the app
+ *  reads it here first and falls back to GitHub Pages. */
+exports.dailyFeedUpload = onRequest(
+  { region: "asia-south1", secrets: [PC_KEY], timeoutSeconds: 30, memory: "256MiB", maxInstances: 1, invoker: "public" },
+  async (req, res) => {
+    if (req.method !== "POST" || !pcOk(req)) return res.status(403).json({ ok: false });
+    const feed = req.body && req.body.feed;
+    if (!feed || !Array.isArray(feed.days)) return res.status(400).json({ ok: false, error: "feed.days needed" });
+    const json = JSON.stringify(feed);
+    if (json.length > 900000) return res.status(400).json({ ok: false, error: "too big" });
+    await admin.firestore().collection("bbapp_settings").doc("dailyfeed").set({ json, at: Date.now(), days: feed.days.length });
+    return res.json({ ok: true, days: feed.days.length, bytes: json.length });
+  },
+);
+exports.dailyFeed = onRequest(
+  { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 5, invoker: "public", cors: true },
+  async (req, res) => {
+    if (!appOk(req)) return res.status(403).json({ ok: false });
+    const d = (await admin.firestore().collection("bbapp_settings").doc("dailyfeed").get()).data();
+    if (!d || !d.json) return res.json({ ok: false, error: "no feed yet" });
+    res.set("Cache-Control", "no-store");
+    return res.type("application/json").send(d.json);
+  },
+);
+
 /** Owner 24-Oct: undo a wrong automatic 💰 (a bad Tally read) — back to
  *  "bill sent", STATUS shows the undo, the group message is redrawn (PC key).
  *  Body: { ref, action: "undo-pay", by } */
