@@ -1344,7 +1344,10 @@ exports.syncDispatch = onRequest(
     for (const doc of snap.docs) {
       const d = doc.data();
       const r = (d.billNo && byBill.get(normBill(d.billNo))) || (d.tallyBillNo && byBill.get(normBill(d.tallyBillNo))) || partyRow(d, doc.id);
-      if (!r) continue;
+      if (!r) { // not in Daily Parcels yet — a Tally payment tick still reaches the customer
+        try { await notifyCust(db, doc.id, false); } catch (e) { logger.warn("notifyCust", { ref: doc.id, error: e.message }); }
+        continue;
+      }
       // finished and announced, nothing new in the report -> nothing to do
       if (d.status === "bilty" && d.biltyMsg && String(d.bilty || "") === String(r.bilty || "")) continue;
       // Owner 18-Oct: the Tally bill no. lets the payment check find the bill.
