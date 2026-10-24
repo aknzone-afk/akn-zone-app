@@ -17,6 +17,7 @@ import '../services/drive_urls.dart';
 import '../services/photo_freshness.dart';
 import '../services/price_check.dart';
 import '../services/price_ocr.dart';
+import '../services/stats_service.dart';
 
 /// Swipeable full-screen photo viewer. The user can swipe left/right to step
 /// through whatever list of photos they were just browsing (folder, search,
@@ -64,7 +65,16 @@ class _PhotoDetailScreenState extends ConsumerState<PhotoDetailScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _prefetchAdjacent(_currentIndex);
       _recheckCurrentPrice();
+      _countView();
     });
+  }
+
+  /// 25-Oct: one "view" per design opened full-screen (weekly what's-hot report).
+  void _countView() {
+    final id = _ids[_currentIndex];
+    final photo = {for (final p in ref.read(photosProvider)) p.id: p}[id];
+    // ignore: discarded_futures
+    Stats.bump('views', photo?.designNumber);
   }
 
   /// Photos already checked against Drive while this viewer is open.
@@ -241,6 +251,7 @@ class _PhotoDetailScreenState extends ConsumerState<PhotoDetailScreen> {
                 setState(() => _currentIndex = i);
                 _prefetchAdjacent(i);
                 _recheckCurrentPrice();
+                _countView();
               },
               loadingBuilder: (_, ev) => Center(
                 child: CircularProgressIndicator(

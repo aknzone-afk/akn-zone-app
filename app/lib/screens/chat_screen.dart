@@ -2,9 +2,11 @@ import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 
@@ -132,7 +134,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         if (m.file) _ChatImage(mobile: m.cust.isNotEmpty ? m.cust : mob, id: m.id, mime: m.mime),
-                        if (m.text.isNotEmpty) Text(m.text, style: const TextStyle(fontSize: 15)),
+                        if (m.text.isNotEmpty) _LinkText(m.text),
                         const SizedBox(height: 2),
                         Text(OrderService.formatWhen(DateTime.fromMillisecondsSinceEpoch(m.at)),
                             style: const TextStyle(fontSize: 10, color: Colors.black45)),
@@ -173,6 +175,37 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               ),
             ),
     );
+  }
+}
+
+/// 25-Oct: links in a chat message open in the browser / store (rating
+/// request, video links) — before this they were plain text.
+class _LinkText extends StatelessWidget {
+  final String text;
+  const _LinkText(this.text);
+
+  static final _url = RegExp(r'https?://[^\s<>"]+');
+
+  @override
+  Widget build(BuildContext context) {
+    final spans = <InlineSpan>[];
+    var last = 0;
+    for (final m in _url.allMatches(text)) {
+      if (m.start > last) spans.add(TextSpan(text: text.substring(last, m.start)));
+      final url = m.group(0)!.replaceAll(RegExp(r'[.,)]+$'), '');
+      spans.add(TextSpan(
+        text: url,
+        style: const TextStyle(color: Color(0xFF1565C0), decoration: TextDecoration.underline),
+        recognizer: TapGestureRecognizer()
+          ..onTap = () {
+            // ignore: discarded_futures
+            launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+          },
+      ));
+      last = m.start + url.length;
+    }
+    if (last < text.length) spans.add(TextSpan(text: text.substring(last)));
+    return Text.rich(TextSpan(children: spans, style: const TextStyle(fontSize: 15, color: Colors.black87)));
   }
 }
 

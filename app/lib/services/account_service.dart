@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../models/order.dart';
 import 'chat_service.dart';
 import 'order_service.dart';
+import 'stats_service.dart';
 
 /// Owner 14-Oct: customer ONBOARDING. Before the catalog every customer
 /// verifies their mobile on WhatsApp ("AKN LOGIN <code>" to the shop's
@@ -190,8 +191,13 @@ class AccountService {
     return (true, null);
   }
 
-  static Future<Map<String, dynamic>?> checkStatus(String mobile) =>
-      _post('accountStatus', {'mobile': mobile});
+  /// 25-Oct: carries the design view / cart counts along (Stats) — one call.
+  static Future<Map<String, dynamic>?> checkStatus(String mobile) async {
+    final st = await Stats.pending();
+    final d = await _post('accountStatus', {'mobile': mobile, if (st.isNotEmpty) 'stats': st});
+    if (d != null && d['ok'] == true && st.isNotEmpty) await Stats.clear();
+    return d;
+  }
 
   // ───────────────────────── approval ─────────────────────────
 

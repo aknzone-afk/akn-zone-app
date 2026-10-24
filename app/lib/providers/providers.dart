@@ -13,6 +13,7 @@ import '../models/filter_state.dart';
 import '../models/folder.dart';
 import '../models/photo.dart';
 import '../services/catalog_service.dart';
+import '../services/stats_service.dart';
 import '../services/drive_scraper.dart';
 import '../services/drive_urls.dart';
 import '../services/favorites_service.dart';
@@ -1325,6 +1326,10 @@ class FavoritesNotifier extends StateNotifier<Set<String>> {
     if (state.contains(id)) return;
     state = {...state, id};
     await _service.setStarred(id, true);
+    // 25-Oct: "put in cart" count for the weekly what's-hot report
+    final p = _ref.read(photosProvider).where((x) => x.id == id).firstOrNull;
+    // ignore: discarded_futures
+    Stats.bump('carts', p?.designNumber);
   }
 
   Future<void> toggle(String id) async {
