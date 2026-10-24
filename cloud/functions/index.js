@@ -315,6 +315,7 @@ const FLAG_LINES = {
   resume: "▶️ Hold removed",
   cancel: "🚫 Party does not want the goods",
   uncancel: "↩️ Order back on (party wants the goods)",
+  biltyfix: "✏️ Bilty corrected",
 };
 
 function hhmm(ms) {
@@ -767,6 +768,18 @@ function stepTexts(d) {
   return out;
 }
 
+/** Owner 18/24-Oct: under the pending 💰 step — "₹25,694 · 23/10/26" and, when
+ *  the parcel left before the payment, "· 🚚 parcel sent 23/10/26 · bilty X". */
+function balLine(d) {
+  const parts = [];
+  if (d.payBal != null && d.payChk) parts.push(`${inr(d.payBal)} · ${dmyOf(d.payChk)}`);
+  if (ORDER.indexOf(d.status || "received") < ORDER.indexOf("dispatched") && d.parcelDate) {
+    if (!parts.length) parts.push("being checked");
+    parts.push(`🚚 parcel sent ${dmy(d.parcelDate)}${d.bilty ? " · bilty " + d.bilty : ""}`);
+  }
+  return parts.length ? parts.join(" · ") : null;
+}
+
 /** My Orders: statuses for this phone's orders. */
 exports.orderStatus = onRequest(
   { region: "asia-south1", timeoutSeconds: 20, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
@@ -794,9 +807,7 @@ exports.orderStatus = onRequest(
     const out = {};
     for (const s of snaps) {
       if (s.exists) out[s.id] = { status: s.get("status") || null, lr: s.get("lr") || null,
-        steps: stepTexts(s.data()), bal: s.get("payBal") != null && s.get("payChk") ? `${inr(s.get("payBal"))} · ${dmyOf(s.get("payChk"))}` +
-          (ORDER.indexOf(s.get("status") || "received") < ORDER.indexOf("dispatched") && s.get("parcelDate")
-            ? ` · 🚚 parcel sent ${dmy(s.get("parcelDate"))}${s.get("bilty") ? " · bilty " + s.get("bilty") : ""}` : "") : null,
+        steps: stepTexts(s.data()), bal: balLine(s.data()),
         bill: !!s.get("billFileId"), billNo: s.get("billNo") || null, billTotal: s.get("billTotal") || null,
         adv: s.get("advanceAmt") || null, tokenRecv: !!s.get("tokenRecvAt"),
         tokenMiss: !s.get("tokenRecvAt") && !!s.get("tokenMissAt"), tokenDue: s.get("tokenDue") || null,
@@ -1300,37 +1311,80 @@ exports.syncDispatch = onRequest(
       byParty.get(k).push(r);
     }
     // The first parcel-report bill of this party dated on/after the order day.
-    const partyRow = (d) => {
+    // 24-Oct: with several such bills, the one whose pieces are nearest to the
+    // ordered pieces (main + add-ons) wins — a party's other bill of the same
+    // week must not tick this order.
+    const pcsByGroup = new Map();
+    const partyRow = (d, ref) => {
       const list = byParty.get(normName(d.ledgerName || d.billName)) || [];
       const at = d.at && d.at.toDate ? d.at.toDate() : new Date(d.at || 0);
       const from = new Date(at.getTime() - 24 * 3600e3).toISOString().slice(0, 10);
-      return list.filter((r) => r.billDate && r.billDate >= from).sort((a, b) => a.billDate.localeCompare(b.billDate))[0] || null;
+      const cand = list.filter((r) => r.billDate && r.billDate >= from).sort((a, b) => a.billDate.localeCompare(b.billDate));
+      if (cand.length < 2) return cand[0] || null;
+      const pcs = pcsByGroup.get(d.billGroup || ref) || 0;
+      const withQty = cand.filter((r) => Number(r.qty) > 0);
+      if (pcs && withQty.length) {
+        const best = withQty.slice().sort((a, b) => Math.abs(Number(a.qty) - pcs) - Math.abs(Number(b.qty) - pcs))[0];
+        if (Math.abs(Number(best.qty) - pcs) <= Math.max(3, pcs * 0.3)) return best;
+        logger.warn("syncDispatch: no bill of this party fits the ordered pieces", { ref, pcs, cand: cand.map((r) => `${r.billNo}:${r.qty}`) });
+        return null;
+      }
+      return cand[0];
     };
     const db = admin.firestore();
     const snap = await db.collection("bbapp_orders").where("status", "in", ["bill_sent", "payment_received", "dispatched", "bilty"]).get();
+    for (const doc of snap.docs) {
+      const d = doc.data();
+      const m = /(\d+)\s*pcs/i.exec(String(d.text || ""));
+      const g = d.billGroup || doc.id;
+      if (m) pcsByGroup.set(g, (pcsByGroup.get(g) || 0) + Number(m[1]));
+    }
     let disp = 0, bil = 0;
     const photos = [];
     for (const doc of snap.docs) {
       const d = doc.data();
-      const r = (d.billNo && byBill.get(normBill(d.billNo))) || (d.tallyBillNo && byBill.get(normBill(d.tallyBillNo))) || partyRow(d);
+      const r = (d.billNo && byBill.get(normBill(d.billNo))) || (d.tallyBillNo && byBill.get(normBill(d.tallyBillNo))) || partyRow(d, doc.id);
       if (!r) continue;
+      // finished and announced, nothing new in the report -> nothing to do
+      if (d.status === "bilty" && d.biltyMsg && String(d.bilty || "") === String(r.bilty || "")) continue;
       // Owner 18-Oct: the Tally bill no. lets the payment check find the bill.
       if (!d.tallyBillNo && r.billNo) await doc.ref.set({ tallyBillNo: String(r.billNo) }, { merge: true });
       // Owner 24-Oct: the parcel can leave before the payment — keep it,
-      // show it in Telegram + the app, tell the customer.
+      // show it in Telegram + the app, tell the customer. parcelSeen /
+      // biltySeen = when the cloud first saw it (a late report entry still
+      // reaches the customer).
       const early = {};
-      if (r.parcelDate && String(d.parcelDate || "") !== String(r.parcelDate)) early.parcelDate = String(r.parcelDate);
-      if (r.bilty && String(d.bilty || "") !== String(r.bilty) && !d.biltyMsg) early.bilty = String(r.bilty);
+      let fix = null;
+      if (r.parcelDate && String(d.parcelDate || "") !== String(r.parcelDate)) {
+        early.parcelDate = String(r.parcelDate);
+        if (!d.parcelSeen) early.parcelSeen = Date.now();
+      }
+      if (r.bilty && String(d.bilty || "") !== String(r.bilty)) {
+        if (d.biltyMsg && d.bilty && !isDelivery(d.bilty) && !isDelivery(r.bilty) && Number(d.biltyFixN || 0) < 2) {
+          // the customer was told an LR that was corrected later -> tell once
+          fix = { old: String(d.bilty), now: String(r.bilty) };
+          Object.assign(early, { bilty: String(r.bilty), biltySeen: Date.now(), biltyFixN: Number(d.biltyFixN || 0) + 1,
+            log: admin.firestore.FieldValue.arrayUnion({ a: "biltyfix", by: `${d.bilty} → ${r.bilty}`, at: Date.now(), uid: 0 }) });
+        } else if (!d.biltyMsg) {
+          early.bilty = String(r.bilty);
+          if (!d.biltySeen) early.biltySeen = Date.now();
+        }
+      }
       if (Object.keys(early).length) {
         await doc.ref.set(early, { merge: true });
         const d2 = (await doc.ref.get()).data() || {};
-        if (d2.chat && d2.msg && ORDER.indexOf(d2.status) < ORDER.indexOf("dispatched")) {
+        if (d2.chat && d2.msg && (fix || ORDER.indexOf(d2.status) < ORDER.indexOf("dispatched"))) {
           await tg("editMessageText", { chat_id: d2.chat, message_id: d2.msg, text: statusText(d2, ""), parse_mode: "HTML",
             disable_web_page_preview: true, reply_markup: statusKeyboard(doc.id, d2) }).catch(() => {});
         }
+        if (fix && !d.addOnTo && !(d.billGroup && d.billGroup !== doc.id) && !d.cancelled) {
+          const bill = /^OP/i.test(String(d.billNo || "")) && d.tallyBillNo ? d.tallyBillNo : (d.billNo || d.tallyBillNo || "");
+          await addChat(db, doc.id, { from: "shop", text: `✏️ Correction sir — the Bilty / LR No.${bill ? " for bill " + bill : ""} is ${fix.now} (not ${fix.old}). ` +
+            "Please use this number at the transport office 🙏" });
+        }
       }
       if (r.parcelDate && d.status === "payment_received") {
-        await autoStep(db, doc.id, "d", dmy(r.parcelDate), { parcelDate: String(r.parcelDate),
+        await autoStep(db, doc.id, "d", dmy(r.parcelDate), { parcelDate: String(r.parcelDate), ...(d.parcelSeen ? {} : { parcelSeen: Date.now() }),
           tallyBillNo: String(r.billNo || ""), lr: `Dispatched ${dmy(r.parcelDate)}` });
         disp++;
       }
@@ -1339,7 +1393,7 @@ exports.syncDispatch = onRequest(
         if (cur === "dispatched") {
           const pd = dmy(r.parcelDate || d.parcelDate);
           await autoStep(db, doc.id, "l", `${r.bilty} · ${todayDmy()}`, { lr: `${pd ? "Dispatched " + pd + " · " : ""}Bilty ${r.bilty} · ${todayDmy()}`,
-            bilty: String(r.bilty), tallyBillNo: String(r.billNo || "") });
+            bilty: String(r.bilty), ...(d.biltySeen ? {} : { biltySeen: Date.now() }), tallyBillNo: String(r.billNo || "") });
           bil++;
         }
       }
@@ -1384,7 +1438,9 @@ async function notifyCust(db, ref, photoReady) {
       (d.parcelDate ? "" : " Your parcel will be dispatched soon.") });
   }
   const bilty = d.bilty && !isDelivery(d.bilty) ? String(d.bilty) : "";
-  if (d.parcelDate && !d.dispMsg && !d.biltyMsg && fresh(pdMs(d.parcelDate))) {
+  const seenP = fresh(d.parcelSeen) || fresh(pdMs(d.parcelDate));
+  const seenB = fresh(d.biltySeen) || fresh(d.biltyAt && d.biltyAt.toMillis ? d.biltyAt.toMillis() : 0) || seenP;
+  if (d.parcelDate && !d.dispMsg && !d.biltyMsg && seenP) {
     const won = await claimOnce(docRef, { dispMsg: now, ...(isDelivery(d.bilty) ? { biltyMsg: now } : {}) });
     if (won && !bilty) { // with the bilty already here, the bilty message says it all
       await addChat(db, ref, { from: "shop", text: isDelivery(d.bilty)
@@ -1392,7 +1448,7 @@ async function notifyCust(db, ref, photoReady) {
         : `🚚 Sir, your parcel${billTxt} was dispatched from our shop on ${dmy(d.parcelDate)}. We will send the bilty / LR no. here as soon as we get it 🙏` });
     }
   }
-  if (bilty && !d.biltyMsg && (fresh(pdMs(d.parcelDate)) || fresh(d.biltyAt && d.biltyAt.toMillis ? d.biltyAt.toMillis() : 0) || !d.parcelDate)) {
+  if (bilty && !d.biltyMsg && seenB) {
     // the photo comes from the shop PC; wait for it up to 30 min, then text only
     if (photoReady && (!d.biltyAsk || now - d.biltyAsk < 30 * 60e3)) {
       if (!d.biltyAsk) await docRef.set({ biltyAsk: now }, { merge: true });
@@ -1586,6 +1642,12 @@ exports.chatSend = onRequest(
     if (!payShot) {
       // Owner 11-Oct: chats are answered in AKN Chat → "AKN App", not in the group.
       await addChat(db, ref, { from: "party", text, bytes: img, mime: img ? "image/jpeg" : null });
+      // 24-Oct: "payment kar diya" with no screenshot -> read the Tally closing
+      // balance now (under Rs 100 = 💰 ticks + "payment received" by itself)
+      if (!img && (d.status || "received") === "bill_sent" && /\b(paid|payment|pay|paisa|paise|kar diya|bhej|transfer|neft|rtgs|upi|gpay|phonepe)\b/i.test(text)) {
+        const mainRef = d.billGroup || ref;
+        await db.collection("bbapp_orders").doc(mainRef).set({ payNow: Date.now() }, { merge: true }).catch(() => {});
+      }
       return res.json({ ok: true, paid: false });
     }
     let sent = null;
@@ -3175,9 +3237,13 @@ exports.opsNudges = onSchedule(
         continue;
       }
       if (Number(o.payBal) < 100) continue;
-      const amt = o.billTotal ? inr(Math.max(0, Number(o.billTotal) - Number(o.paidTotal || 0))) : "";
-      await addChat(db, d.id, { from: "shop", text: `🙏 Sir, a gentle reminder — your bill${o.billNo ? " " + o.billNo : ""}${amt ? " of " + amt : ""} is waiting for payment. ` +
-        "Please pay and send the payment screenshot here, and we dispatch your parcel right away." });
+      const due = o.billTotal ? Math.max(0, Number(o.billTotal) - Number(o.paidTotal || 0)) : 0;
+      const amt = due ? inr(due) : "";
+      const balTxt = Math.abs(Number(o.payBal) - due) > 100 ? ` Your account closing balance with us is ${inr(o.payBal)}.` : "";
+      const bill = /^OP/i.test(String(o.billNo || "")) && o.tallyBillNo ? o.tallyBillNo : (o.billNo || "");
+      await addChat(db, d.id, { from: "shop", text: `🙏 Sir, a gentle reminder — your bill${bill ? " " + bill : ""}${amt ? " of " + amt : ""} is waiting for payment.${balTxt} ` +
+        (o.parcelDate ? `Your parcel was already sent on ${dmy(o.parcelDate)} — please pay and send the payment screenshot here 🙏`
+          : "Please pay and send the payment screenshot here, and we dispatch your parcel right away.") });
       await d.ref.set({ payRem: n + 1, payRemAt: now }, { merge: true });
     }
 
@@ -3544,9 +3610,7 @@ exports.lookupQueue = onRequest(
       }
     }
     // Owner 18-Oct: bill settled in Tally -> 💰 Payment received by itself.
-    for (const r of (b.payres || []).slice(0, 10)) {
-      const ref = String(r.key || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
-      if (!ref) continue;
+    const applyPay = async (ref, r) => {
       const oref = db.collection("bbapp_orders").doc(ref);
       await oref.set({ payChk: Date.now(), payOk: !!r.ok, payRes: Date.now(), payOpen: (r.open || []).slice(0, 10).map(String),
         ...(r.ok && r.balance != null ? { payBal: Math.round(Number(r.balance) || 0) } : {}) }, { merge: true });
@@ -3561,13 +3625,36 @@ exports.lookupQueue = onRequest(
         }
         await oref.set({ payNow: admin.firestore.FieldValue.delete() }, { merge: true });
       }
+      // 24-Oct: the party is not in Tally under this name -> staff, once per order
+      if (!r.ok && r.error === "no ledger" && !d.payNoLedger) {
+        await oref.set({ payNoLedger: Date.now() }, { merge: true });
+        const chat = await approvalsChat(db);
+        if (chat) await tg("sendMessage", { chat_id: chat, text: `⚠️ ORDER NO. ${d.serial || "?"} ${d.billName || ""}: no ledger "${r.party || ""}" in Tally — ` +
+          "the payment check cannot run (no reminder, no payment tick). Link the account to the right Tally party." }).catch(() => {});
+      }
       if (zero && d.status === "bill_sent" && !d.cancelled) {
         await autoStep(db, ref, "y", `closing balance ${inr(Math.max(0, Math.round(Number(r.balance))))} · ${dhm(Date.now())}`, { paidTally: Date.now() });
+        // parcel / bilty that left before the payment: tick them now too
+        if (d.parcelDate) {
+          await autoStep(db, ref, "d", dmy(d.parcelDate), { lr: `Dispatched ${dmy(d.parcelDate)}` });
+          if (d.bilty) await autoStep(db, ref, "l", `${d.bilty} · ${todayDmy()}`, { lr: `Dispatched ${dmy(d.parcelDate)} · Bilty ${d.bilty} · ${todayDmy()}` });
+        }
         try { await notifyCust(db, ref, false); } catch (e) { logger.warn("notifyCust pay", { ref, error: e.message }); }
       } else if (r.ok && d.chat && d.msg) {
         // redraw: the closing balance line / wait button
         await tg("editMessageText", { chat_id: d.chat, message_id: d.msg, text: statusText(d, ""), parse_mode: "HTML",
           disable_web_page_preview: true, reply_markup: statusKeyboard(ref, d) }).catch(() => {});
+      }
+      return d;
+    };
+    for (const r of (b.payres || []).slice(0, 10)) {
+      const ref = String(r.key || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
+      if (!ref) continue;
+      const d = await applyPay(ref, r);
+      // 24-Oct: add-on orders are on the same bill -> same answer, no extra read
+      if (!d.addOnTo && !(d.billGroup && d.billGroup !== ref)) {
+        const subs = await db.collection("bbapp_orders").where("billGroup", "==", ref).get();
+        for (const sd of subs.docs) if (sd.id !== ref) await applyPay(sd.id, r);
       }
     }
     await db.collection("bbapp_settings").doc("lookup").set({ at: Date.now() });
@@ -3601,13 +3688,14 @@ exports.lookupQueue = onRequest(
         for (const doc of bs.docs) {
           const d = doc.data();
           if (d.cancelled || d.hold) continue;
+          if (d.addOnTo || (d.billGroup && d.billGroup !== doc.id)) continue; // answered through the main order
           if (d.payChk && dmyOf(d.payChk) === today) continue; // already refreshed today
           const acc = (await db.collection("bbapp_accounts").doc(accKey(d.mobile) || "-").get()).data() || {};
           const party = String(d.ledgerName || (acc.kind === "existing" && acc.party) || d.billName || "").trim();
           if (!party) continue;
           await doc.ref.set({ payChk: Date.now() }, { merge: true });
           pay.push({ key: doc.id, party, bill: String(d.tallyBillNo || d.billNo || "-") });
-          if (pay.length >= 3) break;
+          if (pay.length >= 5) break;
         }
       }
     } catch (e) { logger.warn("pay queue", { error: e.message }); }
