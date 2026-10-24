@@ -3124,6 +3124,28 @@ exports.accountStatus = onRequest(
           ? { openDays: admin.firestore.FieldValue.increment(1), lastOpenDay: new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10) } : {}) },
       { merge: true });
     }
+    // 25-Oct: what customers look at / put in the cart (design no. -> count),
+    // summed per day for the weekly what's-hot report. Keys are design
+    // numbers only; at most 60 per kind per call.
+    try {
+      const st = req.body && req.body.stats;
+      if (a && st && typeof st === "object") {
+        const inc = {};
+        for (const kind of ["views", "carts"]) {
+          const m = st[kind];
+          if (!m || typeof m !== "object") continue;
+          for (const [k, v] of Object.entries(m).slice(0, 60)) {
+            const key = String(k).toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 20);
+            const n = Math.min(50, Math.max(0, Math.round(Number(v) || 0)));
+            if (key && n) inc[`${kind}.${key}`] = admin.firestore.FieldValue.increment(n);
+          }
+        }
+        if (Object.keys(inc).length) {
+          const day = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
+          await admin.firestore().collection("bbapp_stats").doc(day).set({ ...inc, customers: admin.firestore.FieldValue.arrayUnion(key) }, { merge: true });
+        }
+      }
+    } catch (e) { logger.warn("stats", { error: e.message }); }
     return res.json({ ok: true, status: (a && a.status) || "none", kind: (a && a.kind) || null,
       party: (a && a.party) || null, cust: (a && a.cust) || null });
   },
@@ -3380,6 +3402,70 @@ exports.opsNudges = onSchedule(
       }
     }
 
+    // F. owner 25-Oct: customers who ordered before -> "N new designs since
+    //    your last order" once in 14 days, only when there are 5+ (11:00).
+    if (window(11) && marks["F"] !== today) {
+      await mark("F");
+      try {
+        const feedDoc = (await db.collection("bbapp_settings").doc("dailyfeed").get()).data();
+        const feed = feedDoc && feedDoc.json ? JSON.parse(feedDoc.json) : { days: [] };
+        const ords = (await db.collection("bbapp_orders").get()).docs.map((x) => x.data()).filter((o) => o.serial && !o.addOnTo && !o.cancelled && o.mobile);
+        const lastBy = {};
+        for (const o of ords) {
+          const t = o.at && o.at.toMillis ? o.at.toMillis() : Date.parse(o.at || 0) || 0;
+          if (t > (lastBy[o.mobile] || 0)) lastBy[o.mobile] = t;
+        }
+        const ymd = (ms) => new Date(ms + 5.5 * 3600e3).toISOString().slice(0, 10);
+        let n = 0;
+        for (const [mob, last] of Object.entries(lastBy)) {
+          if (n >= 40 || now - last < 14 * 86400e3) continue;
+          const key = accKey(mob);
+          if (!key || key === DEMO_KEY) continue;
+          const a = (await db.collection("bbapp_accounts").doc(key).get()).data();
+          if (!a || a.status !== "approved" || (a.reorderAt && now - a.reorderAt < 14 * 86400e3)) continue;
+          const since = ymd(last);
+          const count = (feed.days || []).filter((d) => d.d > since).reduce((t, d) => t + (d.items || []).length, 0);
+          if (count < 5) continue;
+          const dt = new Date(last + 5.5 * 3600e3);
+          const when = `${dt.getUTCDate()} ${["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][dt.getUTCMonth()]}`;
+          await db.collection("bbapp_accounts").doc(key).set({ reorderAt: now }, { merge: true });
+          await pushTo(db, key, `🆕 ${count} new designs since your last order (${when}) — tap to see them in DAILY UPDATE.`, "/daily");
+          n++;
+        }
+      } catch (e) { logger.warn("reorder nudge", { error: e.message }); }
+    }
+
+    // G. owner 25-Oct: a day after the bilty reached the customer -> ONE
+    //    store-rating request per customer, ever.
+    try {
+      const done = (await db.collection("bbapp_orders").where("status", "==", "bilty").get()).docs;
+      let n = 0;
+      for (const d of done) {
+        const o = d.data();
+        if (n >= 10 || !o.biltyMsg || o.addOnTo || (o.billGroup && o.billGroup !== d.id) || o.cancelled) continue;
+        if (now - o.biltyMsg < 24 * 3600e3 || now - o.biltyMsg > 10 * 86400e3) continue;
+        const key = accKey(o.mobile);
+        if (!key || key === DEMO_KEY) continue;
+        const aref = db.collection("bbapp_accounts").doc(key);
+        const won = await db.runTransaction(async (t) => {
+          const a = (await t.get(aref)).data();
+          if (!a || a.rated || a.status !== "approved") return false;
+          t.set(aref, { rated: now }, { merge: true });
+          return true;
+        });
+        if (!won) continue;
+        let plat = "";
+        try {
+          const pq = await db.collection("bbapp_push").where("mobiles", "array-contains", key).limit(3).get();
+          const plats = new Set(pq.docs.map((x) => String(x.get("platform") || "")));
+          plat = plats.size === 1 ? [...plats][0] : "";
+        } catch (e) { /* both links */ }
+        const links = plat === "ios" ? RATE_IOS : (plat === "android" ? RATE_ANDROID : `${RATE_ANDROID}\niPhone: ${RATE_IOS}`);
+        await addChat(db, d.id, { from: "shop", text: `⭐ Sir, if you liked our service, a 5-star rating of the B.B Synthetics app helps us a lot 🙏\n${links}` });
+        n++;
+      }
+    } catch (e) { logger.warn("rating nudge", { error: e.message }); }
+
     // E. approved new customer, no order after 3 days -> one welcome push
     const fresh = (await db.collection("bbapp_accounts").where("status", "==", "approved").get()).docs;
     let sent = 0;
@@ -3400,6 +3486,44 @@ exports.opsNudges = onSchedule(
         sent++;
       }
     }
+  },
+);
+
+const RATE_ANDROID = "https://play.google.com/store/apps/details?id=com.bbsynthetics.catalog_app";
+const RATE_IOS = "https://apps.apple.com/app/id6776107523";
+
+/** Owner 25-Oct: Sunday 8 PM — the week's most viewed / most carted designs
+ *  (from the phones' counts), active customers and orders, to the app group. */
+exports.weeklyHotReport = onSchedule(
+  { region: "asia-south1", schedule: "0 20 * * 0", timeZone: "Asia/Kolkata", secrets: [TG_TOKEN], timeoutSeconds: 120, memory: "256MiB" },
+  async () => {
+    const db = admin.firestore();
+    const chat = await approvalsChat(db);
+    if (!chat) return;
+    const now = Date.now();
+    const days = [];
+    for (let i = 0; i < 7; i++) days.push(new Date(now + 5.5 * 3600e3 - i * 86400e3).toISOString().slice(0, 10));
+    const views = {}, carts = {}, custs = new Set();
+    for (const day of days) {
+      const d = (await db.collection("bbapp_stats").doc(day).get()).data();
+      if (!d) continue;
+      for (const [k, v] of Object.entries(d.views || {})) views[k] = (views[k] || 0) + Number(v || 0);
+      for (const [k, v] of Object.entries(d.carts || {})) carts[k] = (carts[k] || 0) + Number(v || 0);
+      for (const c of d.customers || []) custs.add(c);
+    }
+    const top = (m) => Object.entries(m).sort((a, b) => b[1] - a[1]).slice(0, 15);
+    const accs = (await db.collection("bbapp_accounts").where("status", "==", "approved").get()).docs.map((x) => x.data());
+    const active = accs.filter((a) => now - Number(a.lastOpen || 0) < 7 * 86400e3).length;
+    const ords = (await db.collection("bbapp_orders").get()).docs.map((x) => x.data())
+      .filter((o) => o.serial && !o.addOnTo && (o.at && o.at.toMillis ? o.at.toMillis() : 0) > now - 7 * 86400e3);
+    const amt = ords.reduce((t, o) => t + Number(o.billTotal || 0), 0);
+    const line = (arr, what) => arr.length ? arr.map(([k, v], i) => `${i + 1}. ${escH(k)} — ${v} ${what}`).join(NL) : "(no data yet — counts start with app 3.1.35)";
+    const text = `📊 <b>App week ${days[6]} → ${days[0]}</b>${NL}` +
+      `👥 ${active} of ${accs.length} customers opened the app · ${custs.size} looked at designs${NL}` +
+      `🧾 ${ords.length} orders${amt ? " · " + inr(amt) + " billed" : ""}${NL}${NL}` +
+      `👀 <b>Most viewed designs</b>${NL}${line(top(views), "views")}${NL}${NL}` +
+      `🛒 <b>Most put in cart</b>${NL}${line(top(carts), "times")}`;
+    await tg("sendMessage", { chat_id: chat, parse_mode: "HTML", text: text.slice(0, 4000) });
   },
 );
 
