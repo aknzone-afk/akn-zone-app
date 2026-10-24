@@ -3385,12 +3385,20 @@ exports.opsNudges = onSchedule(
     let sent = 0;
     for (const d of fresh) {
       const a = d.data();
-      if (sent >= 30 || a.welcomed || a.kind !== "new" || (a.orders || 0) > 0) continue;
+      // 25-Oct: every kind (existing shop parties too — they were skipped),
+      // and on day 7 one "how to order" push with the video, then silence.
+      if (sent >= 30 || (a.orders || 0) > 0 || d.id === DEMO_KEY) continue;
       const since = a.approvedAt || a.at || 0;
-      if (!since || now - since < 3 * 86400e3) continue;
-      await pushTo(db, d.id, "🙏 Welcome to B.B Synthetics — your account is ready. See today's new designs in DAILY UPDATE and place your first order.", "/daily");
-      await d.ref.set({ welcomed: now }, { merge: true });
-      sent++;
+      if (!since) continue;
+      if (!a.welcomed && now - since >= 3 * 86400e3) {
+        await pushTo(db, d.id, "🙏 Welcome to B.B Synthetics — your account is ready. See today's new designs in DAILY UPDATE and place your first order.", "/daily");
+        await d.ref.set({ welcomed: now }, { merge: true });
+        sent++;
+      } else if (a.welcomed && !a.howTo && now - since >= 7 * 86400e3 && now - a.welcomed >= 3 * 86400e3) {
+        await pushTo(db, d.id, "🛒 Ordering takes 1 minute: tap designs → SEND TO CART → ORDER NOW. Need help? Watch the video in the app or chat with us.", "/");
+        await d.ref.set({ howTo: now }, { merge: true });
+        sent++;
+      }
     }
   },
 );
