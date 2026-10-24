@@ -127,4 +127,6 @@ const String kAppConfigUrl = '$kDataBase/app/app-config.json';
 /// over the order. Below this the order cannot be sent — the customer is asked
 /// to select more. If some designs have no price the value can't be judged, so
 /// the order goes through and the shop checks it.
-const int kMinOrderValue = 30000;
+/// 25-Oct: set from app-config.json "min_order" at every app open (the
+/// owner can change the minimum without an app update); 30,000 until then.
+int kMinOrderValue = 30000;

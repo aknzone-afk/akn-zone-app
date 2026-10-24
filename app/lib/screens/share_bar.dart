@@ -16,7 +16,11 @@ class SelectionBottomBar extends ConsumerWidget {
   static bool _adding = false;
 
   /// Returns false when a previous tap is still adding (nothing done).
-  Future<bool> _addToCart(WidgetRef ref) async {
+  /// 25-Oct: works on the app-wide container, not the bar's `ref` — the bar
+  /// can be rebuilt away halfway through ("Cannot use ref after the widget
+  /// was disposed", 18 reports) and the rest of the designs never reached
+  /// the cart.
+  Future<bool> _addToCart(ProviderContainer ref) async {
     if (_adding) return false;
     final ids = ref.read(selectionProvider).toList();
     if (ids.isEmpty) return false;
@@ -74,7 +78,12 @@ class SelectionBottomBar extends ConsumerWidget {
               FilledButton.icon(
                 onPressed: () async {
                   final n = ref.read(selectionProvider).length;
-                  final added = await _addToCart(ref);
+                  final messenger = ScaffoldMessenger.maybeOf(context);
+                  final added = await _addToCart(ProviderScope.containerOf(context, listen: false));
+                  if (added && !context.mounted) {
+                    messenger?.showSnackBar(SnackBar(
+                        content: Text('$n design${n == 1 ? '' : 's'} added as 1 SET each — tap a design to change.')));
+                  }
                   if (added && context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
                         content: Text('$n design${n == 1 ? '' : 's'} added as 1 SET each — tap a design to change.')));
