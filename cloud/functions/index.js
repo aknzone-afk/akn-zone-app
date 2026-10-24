@@ -3637,6 +3637,18 @@ exports.lookupQueue = onRequest(
       }
       if (zero && d.status === "bill_sent" && !d.cancelled) {
         await autoStep(db, ref, "y", `closing balance ${inr(Math.max(0, Math.round(Number(r.balance))))} · ${dhm(Date.now())}`, { paidTally: Date.now() });
+        // Owner 24-Oct: paid in Tally (screenshot or not) -> the OPTIONAL bill
+        // goes regular + prints (Sales bill bot via convertQueue), once per
+        // order, main order only, never when the bill is already regular.
+        const isMain = !d.addOnTo && !(d.billGroup && d.billGroup !== ref);
+        const stillOp = /^OP\s*\d+/i.test(String(d.billNo || "")) && !(d.tallyBillNo && normBill(d.tallyBillNo) !== normBill(d.billNo));
+        if (isMain && stillOp) {
+          const cref = db.collection("bbapp_convert").doc(ref);
+          if (!(await cref.get()).exists) {
+            await cref.set({ bill: String(d.billNo).toUpperCase().replace(/\s+/g, ""), paid: `Tally closing balance ${inr(Math.max(0, Math.round(Number(r.balance))))}`,
+              total: d.billTotal ? inr(d.billTotal) : "", serial: d.serial || null, at: Date.now(), sentAt: null, by: "tally" });
+          }
+        }
         // parcel / bilty that left before the payment: tick them now too
         if (d.parcelDate) {
           await autoStep(db, ref, "d", dmy(d.parcelDate), { lr: `Dispatched ${dmy(d.parcelDate)}` });
