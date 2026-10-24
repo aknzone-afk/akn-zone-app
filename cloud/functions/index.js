@@ -1028,12 +1028,23 @@ const PAY_PROMPT = "This should be a payment screenshot (UPI app like GPay/Phone
   "txnId (the bank's UPI Ref No. / UTR / RRN — usually 12 digits; NOT the app's own id that starts with letters like T2610… or the PhonePe/GPay transaction id when a UTR is also shown), " +
   "refs (EVERY reference / transaction / UTR / RRN number shown on the screenshot, as strings), " +
   "success (true only if it clearly says successful/completed/paid), " +
-  "payee (receiver name), payerVpa (the payer's UPI id like name@okhdfcbank, if shown). Use null when not shown. If it is not a payment screenshot, amount = null.";
+  "payee (receiver name), payerVpa (the payer's UPI id like name@okhdfcbank, if shown), " +
+  "payeeVpa (the RECEIVER's UPI id, e.g. vyapar.173947529358@hdfcbank, if shown), payeeAccount (the receiver's bank account number if shown), " +
+  "payeeBank (the receiver's bank name or IFSC if shown, e.g. 'HDFC Bank' / 'Bank of India' / BKID0002703). Use null when not shown. If it is not a payment screenshot, amount = null.";
 const PAY_SCHEMA = { type: "object", properties: {
   amount: { type: ["number", "null"] }, date: { type: ["string", "null"] }, time: { type: ["string", "null"] },
   txnId: { type: ["string", "null"] }, success: { type: ["boolean", "null"] }, payee: { type: ["string", "null"] },
-  refs: { type: ["array", "null"], items: { type: "string" } }, payerVpa: { type: ["string", "null"] } },
+  refs: { type: ["array", "null"], items: { type: "string" } }, payerVpa: { type: ["string", "null"] },
+  payeeVpa: { type: ["string", "null"] }, payeeAccount: { type: ["string", "null"] }, payeeBank: { type: ["string", "null"] } },
   required: ["amount"] };
+/** Owner 24-Oct: which of OUR banks the money landed in (from the screenshot). */
+function ourBank(p) {
+  const s = [p.payeeVpa, p.payeeAccount, p.payeeBank, p.payee].map((x) => String(x || "").toUpperCase()).join(" ");
+  if (/173947529358|VYAPAR|@HDFCBANK|HDFC/.test(s)) return "HDFC";
+  if (/270320110001776|BKID|BANK OF INDIA|\bBOI\b/.test(s)) return "BOI";
+  return "";
+}
+const BANK_LINE = { HDFC: "🏦 Screenshot of money received in HDFC Bank", BOI: "🏦 Screenshot of money received in Bank of India" };
 
 /**
  * Owner (11-Oct-2026): every payment screenshot is read and added up against
@@ -1059,6 +1070,7 @@ async function checkPayment(db, ref, img, notes) {
   const head = `${m.billName || "Party"}${m.serial ? " · ORDER NO. " + m.serial : ""}`;
 
   const p = await geminiJson(img, "image/jpeg", PAY_PROMPT, PAY_SCHEMA);
+  if (notes) notes.bank = ourBank(p || {}); // owner 24-Oct: which of our banks got the money
   if (!p || !p.amount || p.amount <= 0) {
     await staff(`💰❓ ${head}: could not read an amount from this screenshot — please check it.`);
     return false;
@@ -1145,6 +1157,40 @@ async function checkPayment(db, ref, img, notes) {
   await mainDoc.set({ payShot: Date.now() }, { merge: true });
   return true;
 }
+
+/** Owner 24-Oct: undo a wrong automatic 💰 (a bad Tally read) — back to
+ *  "bill sent", STATUS shows the undo, the group message is redrawn (PC key).
+ *  Body: { ref, action: "undo-pay", by } */
+exports.orderFix = onRequest(
+  { region: "asia-south1", secrets: [PC_KEY, TG_TOKEN], timeoutSeconds: 30, memory: "256MiB", maxInstances: 1, invoker: "public" },
+  async (req, res) => {
+    if (req.method !== "POST" || !pcOk(req)) return res.status(403).json({ ok: false });
+    const db = admin.firestore();
+    const ref = String((req.body && req.body.ref) || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
+    const action = String((req.body && req.body.action) || "");
+    const docRef = db.collection("bbapp_orders").doc(ref);
+    const d = (await docRef.get()).data();
+    if (!d) return res.json({ ok: false, error: "order not found" });
+    if (action !== "undo-pay") return res.json({ ok: false, error: "unknown action" });
+    if (!["payment_received", "dispatched", "bilty"].includes(d.status)) return res.json({ ok: false, error: `status is ${d.status}` });
+    const del = admin.firestore.FieldValue.delete();
+    // the parcel / bilty facts stay (parcelDate, bilty, the customer messages);
+    // only the step ticks go — they come back by themselves once Tally shows
+    // the balance under Rs 100
+    await docRef.set({ status: "bill_sent", statusAt: admin.firestore.FieldValue.serverTimestamp(),
+      paidAt: del, paidBy: del, paidTally: del, payBal: del, payOk: del, payRcvMsg: del, payChk: del, payRes: del, payOpen: del,
+      dispatchedAt: del, dispatchedBy: del, biltyAt: del, biltyBy: del, lr: del,
+      log: admin.firestore.FieldValue.arrayUnion({ a: "undo", k: "y", by: String((req.body && req.body.by) || "bot — wrong Tally read").slice(0, 80), at: Date.now(), uid: 0 }) }, { merge: true });
+    const cv = await db.collection("bbapp_convert").doc(ref).get();
+    if (cv.exists && cv.get("by") === "tally" && !cv.get("sentAt")) await cv.ref.delete();
+    const fresh = (await docRef.get()).data() || {};
+    if (fresh.chat && fresh.msg) {
+      await tg("editMessageText", { chat_id: fresh.chat, message_id: fresh.msg, text: statusText(fresh, ""), parse_mode: "HTML",
+        disable_web_page_preview: true, reply_markup: statusKeyboard(ref, fresh) }).catch(() => {});
+    }
+    return res.json({ ok: true, status: fresh.status, convertQueued: cv.exists && !!cv.get("sentAt") });
+  },
+);
 
 /** Owner 22-Oct: send our UPI QR + bank details to one order's customer chat (PC key). */
 exports.sendPayInfo = onRequest(
@@ -1234,8 +1280,13 @@ async function receiptsPost(db, ref, d, img, text, notes) {
   const party = String(d.ledgerName || (acc.kind === "existing" && acc.party) || d.billName || "?").toUpperCase();
   const dest = String((d.cust && d.cust.bookingPlace) || (acc.cust && acc.cust.bookingPlace) || "").toUpperCase();
   const tallyBill = d.tallyBillNo ? `Tally bill ${d.tallyBillNo}` : (d.billNo ? `Bill ${d.billNo} (Tally no. not yet in the parcel report)` : "Bill not sent yet");
+  // Owner 24-Oct: say which of our banks the money landed in (read off the
+  // screenshot; parsed here only when checkPayment did not run)
+  let bank = notes && notes.bank;
+  if (bank === undefined) { try { bank = ourBank((await geminiJson(img, "image/jpeg", PAY_PROMPT, PAY_SCHEMA)) || {}); } catch (e) { bank = ""; } }
   const head = [`💰 Payment screenshot — ${party}${d.serial ? " · ORDER NO. " + d.serial : ""}`,
-    `📍 ${dest || "-"}`, `🧾 ${tallyBill}`, ...(notes || []).map((x) => String(x).replace(/^💰\S*\s*/, "")),
+    `📍 ${dest || "-"}`, `🧾 ${tallyBill}`, BANK_LINE[bank] || "🏦 Receiving bank not visible in the screenshot",
+    ...(notes || []).map((x) => String(x).replace(/^💰\S*\s*/, "")),
     ...(text ? [`💬 ${text}`] : [])].join("\n");
   const bal = d.payBal != null && d.payChk ? `💼 Closing balance: ${balWords(d.payBal)} (${dhm(d.payChk)})` : "💼 Closing balance: checking Tally…";
   const cap = `${head}\n${bal}\n• • • • • • • • • •`.slice(0, 1000);
@@ -1248,7 +1299,31 @@ async function receiptsPost(db, ref, d, img, text, notes) {
   await db.collection("bbapp_msgmap").doc(`${rg.chat}_${x.result.message_id}`).set({ ref: d.billGroup || ref });
   await db.collection("bbapp_orders").doc(ref).set({ payNow: Date.now(),
     receiptMsg: { chat: rg.chat, id: x.result.message_id, head } }, { merge: true });
+  // Owner 24-Oct: the same screenshot also goes to the bank's own receipt
+  // group — HDFC RECEIPTS (TallyReceiptBot enters the receipt against the
+  // party; the next-day bank-mail pass then finds it) or the Bank of India
+  // agent's group — party name + destination underneath.
+  const billNo = d.tallyBillNo || d.billNo || "";
+  const grp = bank === "HDFC" ? HDFC_RECEIPTS_GROUP : (bank === "BOI" ? BOI_RECEIPTS_GROUP : null);
+  if (grp) {
+    const cap = bank === "HDFC"
+      ? `${party} ${dest}${billNo ? " bill " + billNo : ""}\n${BANK_LINE.HDFC}\n(AKN Zone app${d.serial ? " · ORDER NO. " + d.serial : ""})`
+      : `${BANK_LINE.BOI}\nParty: ${party}\nDestination: ${dest || "-"}${billNo ? "\nBill: " + billNo : ""}\n(AKN Zone app${d.serial ? " · ORDER NO. " + d.serial : ""})`;
+    const fd2 = new FormData();
+    fd2.append("chat_id", String(grp));
+    fd2.append("caption", cap.slice(0, 1000));
+    fd2.append("photo", new Blob([img], { type: "image/jpeg" }), "payment.jpg");
+    const y = await fetch(`https://api.telegram.org/bot${TG_TOKEN.value()}/sendPhoto`, { method: "POST", body: fd2 }).then((z) => z.json()).catch(() => ({}));
+    if (!y.ok) {
+      logger.warn("bank group photo", { ref, bank, desc: y.description });
+      await tg("sendMessage", { chat_id: rg.chat, reply_to_message_id: x.result.message_id,
+        text: `⚠️ Could not post this screenshot in the ${bank === "HDFC" ? "HDFC RECEIPTS" : "Bank of India"} group (${y.description || "no answer"}) — add @Aknzonesales_bot to that group.` }).catch(() => {});
+    }
+  }
 }
+// Owner 24-Oct: TallyReceiptBot's "HDFC RECEIPTS" group and the Bank of India agent's group.
+const HDFC_RECEIPTS_GROUP = -5400776964;
+const BOI_RECEIPTS_GROUP = -1004361279970;
 
 /** App: the bill image for an order (party taps VIEW BILL). */
 exports.billImage = onRequest(
@@ -1496,6 +1571,16 @@ exports.biltyPhoto = onRequest(
  */
 async function addChat(db, ref, m) {
   const o = (await db.collection("bbapp_orders").doc(ref).get()).data() || {};
+  // Owner 24-Oct: the same automatic text never reaches a customer twice
+  // (two overlapping runs once sent a parcel message twice). Staff replies
+  // (m.by) and photos are not held back.
+  if (m.from === "shop" && !m.by && !m.bytes && !m.fileId && m.text) {
+    const dup = await db.collection("bbapp_chat").where("ref", "==", ref).where("from", "==", "shop").where("text", "==", m.text).limit(5).get();
+    if (dup.docs.some((x) => Date.now() - Number(x.get("at") || 0) < 7 * 86400e3)) {
+      logger.warn("addChat: same text already sent — skipped", { ref, text: String(m.text).slice(0, 60) });
+      return;
+    }
+  }
   let storagePath = null;
   try {
     storagePath = await mirrorToAknChat(db, o, m);
@@ -3616,7 +3701,9 @@ exports.lookupQueue = onRequest(
     const applyPay = async (ref, r) => {
       const oref = db.collection("bbapp_orders").doc(ref);
       await oref.set({ payChk: Date.now(), payOk: !!r.ok, payRes: Date.now(), payOpen: (r.open || []).slice(0, 10).map(String),
-        ...(r.ok && r.balance != null ? { payBal: Math.round(Number(r.balance) || 0) } : {}) }, { merge: true });
+        ...(r.ok && r.balance != null ? { payBal: Math.round(Number(r.balance) || 0) } : {}),
+        // 24-Oct: the PC found the party under its real Tally name (M/S …) -> remember it
+        ...(r.ok && r.ledger ? { ledgerName: String(r.ledger).slice(0, 120) } : {}) }, { merge: true });
       const d = (await oref.get()).data() || {};
       // Owner 24-Oct: under Rs 100 closing balance = paid (screenshot or not)
       const zero = r.ok && r.balance != null && Number(r.balance) < 100;
