@@ -15,6 +15,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config.dart';
 import '../models/order.dart';
+import 'background_refresh.dart' show BackgroundRefresh;
 import '../models/photo.dart';
 import 'drive_urls.dart';
 import 'edit_service.dart';
@@ -631,7 +632,10 @@ class OrderService {
     onStep?.call('Placing order…');
     try {
       final no = await _placeOnCloud(prefs, dio, order);
-      if (no != null) order.serial = no;
+      if (no != null) {
+        order.serial = no;
+        onStep?.call('✅ Order no. $no placed.\nNow sending the photos — please keep the app open for a minute.');
+      }
     } catch (_) {}
 
     // Freeze the photos NOW: emptying the cart later wipes the markup, and a
@@ -724,7 +728,11 @@ class OrderService {
 
     onStep?.call('Sending order…');
     if (holdForAdvance) return order;
-    await _trySend(prefs, dio, order, onStep: onStep);
+    // Owner 25-Oct: if the app is closed mid-send, Android finishes it from
+    // the background within minutes (see BackgroundRefresh.scheduleOrderResend).
+    await BackgroundRefresh.scheduleOrderResend();
+    final done = await _trySend(prefs, dio, order, onStep: onStep);
+    if (done) await BackgroundRefresh.cancelOrderResend();
     return order;
   }
 
@@ -890,7 +898,7 @@ class OrderService {
         chunks.add(items.sublist(i, min(i + 10, items.length)));
       }
       for (var c = order.photoChunksSent; c < chunks.length; c++) {
-        onStep?.call('Sending photos… ${c + 1}/${chunks.length}');
+        onStep?.call('Sending photos… ${c + 1}/${chunks.length}\nPlease keep the app open.');
         order.tgExtraIds.addAll(await _sendAlbum(dio, dir, chunks[c], order));
         order.photoChunksSent = c + 1;
         await _saveOrder(prefs, order);

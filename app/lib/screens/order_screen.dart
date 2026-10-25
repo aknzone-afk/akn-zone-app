@@ -824,6 +824,10 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       builder: (_) => PopScope(
         canPop: false,
         child: AlertDialog(
+          // Owner 25-Oct: "please don't close the app" — in big letters.
+          title: Text(t('📤 Sending your order — please do NOT close the app',
+              '📤 ऑर्डर भेज रहे हैं — कृपया ऐप बंद न करें'),
+              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w800, color: Color(0xFFB71C1C))),
           content: Row(children: [
             const SizedBox(
                 width: 22,

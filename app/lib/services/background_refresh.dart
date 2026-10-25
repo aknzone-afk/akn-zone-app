@@ -22,6 +22,7 @@ const String kBackgroundTaskName = 'catalog_periodic_refresh';
 /// the window [period - flex, period]. 2 hours is the spec.
 const Duration kBackgroundPeriod = Duration(hours: 2);
 const String kChatTaskName = 'aknz.chat.check';
+const String kOrderResendTask = 'aknz.order.resend';
 
 /// The active refresh window in the device's local time zone.
 const int kWindowStartHour = 10; // 10:00 inclusive
@@ -160,6 +161,32 @@ class BackgroundRefresh {
       existingWorkPolicy: ExistingPeriodicWorkPolicy.keep,
       tag: 'catalog_refresh',
     );
+  }
+
+  /// Owner 25-Oct: an order is being sent — if the app is closed before it
+  /// finishes, Android runs this one-off task within minutes and
+  /// retryPending completes the send from the background (the cloud's own
+  /// 3-minute safety net covers the rest, and iPhones).
+  static Future<void> scheduleOrderResend() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await Workmanager().registerOneOffTask(
+        kOrderResendTask,
+        kOrderResendTask,
+        initialDelay: const Duration(minutes: 2),
+        constraints: Constraints(networkType: NetworkType.connected),
+        existingWorkPolicy: ExistingWorkPolicy.replace,
+        backoffPolicy: BackoffPolicy.linear,
+        backoffPolicyDelay: const Duration(minutes: 5),
+      );
+    } catch (_) {}
+  }
+
+  static Future<void> cancelOrderResend() async {
+    if (!Platform.isAndroid) return;
+    try {
+      await Workmanager().cancelByUniqueName(kOrderResendTask);
+    } catch (_) {}
   }
 
   /// Remove the scheduled task (e.g. from a future Settings toggle).
