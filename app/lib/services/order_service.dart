@@ -731,8 +731,8 @@ class OrderService {
     // Owner 25-Oct: if the app is closed mid-send, Android finishes it from
     // the background within minutes (see BackgroundRefresh.scheduleOrderResend).
     await BackgroundRefresh.scheduleOrderResend();
-    final done = await _trySend(prefs, dio, order, onStep: onStep);
-    if (done) await BackgroundRefresh.cancelOrderResend();
+    final sentNow = await _trySend(prefs, dio, order, onStep: onStep);
+    if (sentNow) await BackgroundRefresh.cancelOrderResend();
     return order;
   }
 
