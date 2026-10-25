@@ -346,6 +346,15 @@ async function finalizeOrder(db, { ref, chat, msg, extra, text, mobile, billName
   const first = !(d.exists && d.get("status"));
   await docRef.set({ msg, chat, mobile, billName, serial, addOnTo, ...(text ? { text } : {}), ...(cust && cust.kind !== "old" ? { cust } : {}),
     ...(first ? { status: "received", statusAt: admin.firestore.FieldValue.serverTimestamp() } : {}) }, { merge: true });
+  // 25-Oct: it was reported lost — tell the group it has arrived now
+  try {
+      const cur = (await docRef.get()).data() || {};
+      if (cur.lostAlert && !cur.lostResolved) {
+        await docRef.set({ lostResolved: Date.now() }, { merge: true });
+        await tg("sendMessage", { chat_id: ORDER_GROUP, parse_mode: "HTML",
+          text: `✅ <b>ORDER NO. ${cur.no || serial || "?"} has arrived now</b> (${cur.selfSent ? "delivered by the cloud" : "the customer's phone sent it"}) — see the order above.` }).catch(() => {});
+      }
+  } catch (e) { logger.warn("late arrive note", { ref, error: e.message }); }
   if (first) {
     await tg("editMessageReplyMarkup", { chat_id: chat, message_id: msg,
       reply_markup: statusKeyboard(ref, (await docRef.get()).data() || {}) }).catch(() => {});
@@ -428,6 +437,32 @@ async function selfDeliver(db, ref, o) {
  * message with text ("LR 4521 DRT") attaches that as the dispatch info.
  */
 const TG_TOKEN = defineSecret("BBAPP_TG_TOKEN");
+// 25-Oct: AKN Chat's WhatsApp token (same Firebase project) — sign-up nudges.
+const WA_TOKEN = defineSecret("WA_PERMANENT_TOKEN");
+const WA_INQUIRIES = "675753472293658"; // the number customers send "AKN LOGIN <code>" to
+
+/** One WhatsApp text to a customer who wrote to us (24 h window), recorded
+ *  in AKN Chat as a bot message so staff see it and can take over. */
+async function waText(db, waId, body) {
+  const r = await fetch(`https://graph.facebook.com/v25.0/${WA_INQUIRIES}/messages`, { method: "POST",
+    headers: { Authorization: "Bearer " + WA_TOKEN.value(), "Content-Type": "application/json" },
+    body: JSON.stringify({ messaging_product: "whatsapp", recipient_type: "individual", to: waId, type: "text", text: { preview_url: false, body } }) });
+  const j = await r.json().catch(() => ({}));
+  const wamid = j && j.messages && j.messages[0] && j.messages[0].id;
+  if (!wamid) throw new Error("wa send: " + JSON.stringify(j).slice(0, 200));
+  const { Timestamp, FieldValue } = admin.firestore;
+  const now = Timestamp.now();
+  const chatId = `${waId}_${WA_INQUIRIES}`;
+  const chatRef = db.collection("chats").doc(chatId);
+  await chatRef.collection("messages").doc(wamid).set({
+    direction: "out", from: "bot", type: "text", status: "sent", statusRank: 1, wamid, waId, phoneNumberId: WA_INQUIRIES,
+    timestamp: now, createdAt: FieldValue.serverTimestamp(), replyToWamid: null, senderStaffId: null, error: null,
+    mediaStatus: "none", text: body, caption: null, mediaPath: null, mediaMime: null, fileName: null, fileSize: null, aknzSource: true,
+  });
+  await chatRef.set({ waId, phoneNumberId: WA_INQUIRIES, lastMessageText: body.slice(0, 200), lastMessageAt: now, lastMessageType: "text",
+    updatedAt: now, ...((await chatRef.get()).exists ? {} : { name: waId, botEnabled: true, pinned: false, needsAttention: false, unreadCount: 0, createdAt: now }) }, { merge: true });
+  return wamid;
+}
 const TG_SECRET = defineSecret("BBAPP_TG_SECRET");
 // Owner (11-Oct-2026): RECEIVED is automatic. Then ONE button at a time:
 //   🧺 Maal nikalna chalu  →  🧾 Bill  →  💰 Payment  →  🚚 Dispatched  →  📄 Bilty
@@ -889,6 +924,15 @@ exports.registerOrder = onRequest(
         } catch (e) { logger.warn("order ack", { ref, error: e.message }); }
       }
     }
+    // 25-Oct: it was reported lost — tell the group it has arrived now
+    try {
+      const cur = (await docRef.get()).data() || {};
+      if (cur.lostAlert && !cur.lostResolved) {
+        await docRef.set({ lostResolved: Date.now() }, { merge: true });
+        await tg("sendMessage", { chat_id: ORDER_GROUP, parse_mode: "HTML",
+          text: `✅ <b>ORDER NO. ${cur.no || serial || "?"} has arrived now</b> (${cur.selfSent ? "delivered by the cloud" : "the customer's phone sent it"}) — see the order above.` }).catch(() => {});
+      }
+    } catch (e) { logger.warn("late arrive note", { ref, error: e.message }); }
     if (newAdv) {
       // Owner 12-Oct: the advance screenshot is the FIRST message of the
       // customer's chat (and goes to the new-party group with the ledger).
@@ -2928,7 +2972,8 @@ async function verifiedKey(db, code) {
   const c = String(code || "").replace(/\D/g, "");
   if (c.length !== 6) return null;
   const v = (await db.collection("bbapp_verify").doc(c).get()).data();
-  if (!v || !v.from || Date.now() - Number(v.at || 0) > 20 * 60e3) return null;
+  // 25-Oct: 2 h (was 20 min) — customers come back from WhatsApp late and had to verify again
+  if (!v || !v.from || Date.now() - Number(v.at || 0) > 120 * 60e3) return null;
   return accKey(v.from);
 }
 
@@ -3053,23 +3098,31 @@ exports.accountSignup = onRequest(
     if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
     const db = admin.firestore();
     let key = await verifiedKey(db, req.body && req.body.code);
+    // 25-Oct: every refusal is counted (why do verified numbers not finish?)
+    const fail = async (error) => {
+      try {
+        await db.collection("bbapp_signup_fail").add({ key: key || null, code: String((req.body && req.body.code) || "").slice(0, 6),
+          error: String(error).slice(0, 160), at: Date.now(), transport: String(((req.body && req.body.cust) || {}).transport || "").slice(0, 60) });
+      } catch (e) { /* never blocks */ }
+      return res.json({ ok: false, error });
+    };
     let abroadDirect = false;
     if (!key && req.body && req.body.abroad) {
       // Owner 19-Oct: foreigners must verify on WhatsApp too — no typed numbers.
-      return res.json({ ok: false, error: "Please log in with WhatsApp — tap Back, then \"Login with WhatsApp\". It works with any country's WhatsApp number." });
+      return fail("Please log in with WhatsApp — tap Back, then \"Login with WhatsApp\". It works with any country's WhatsApp number.");
     }
     if (false) {
       // (old 14-Oct path: customer abroad, typed number, no WhatsApp login)
       const k = accKey(req.body.mobile);
-      if (!k || k.length === 10) return res.json({ ok: false, error: "Indian numbers log in with WhatsApp." });
+      if (!k || k.length === 10) return fail("Indian numbers log in with WhatsApp.");
       const cc = await ipCountry(req);
       if (cc !== "ABROAD") {
-        return res.json({ ok: false, error: cc === "IN" ? "You are in India — please log in with WhatsApp." : "Could not check your location — please log in with WhatsApp." });
+        return fail(cc === "IN" ? "You are in India — please log in with WhatsApp." : "Could not check your location — please log in with WhatsApp.");
       }
       key = k;
       abroadDirect = true;
     }
-    if (!key) return res.json({ ok: false, error: "Please verify your number on WhatsApp again." });
+    if (!key) return fail("Please verify your number on WhatsApp again.");
     const c = (req.body && req.body.cust) || {};
     const cust = Object.fromEntries(["contact", "billName", "address", "pincode", "bookingPlace", "transport", "taxId", "country", "kycDoc", "businessType", "pan", "bizNote"]
       .map((k) => [k, String(c[k] || "").trim().slice(0, 300)]));
@@ -3081,9 +3134,9 @@ exports.accountSignup = onRequest(
     cust.mobile = key;
     cust.kind = "new";
     const india = cust.country === "India";
-    if (!cust.billName || !cust.address || !cust.bookingPlace) return res.json({ ok: false, error: "Please fill bill name, address and destination." });
+    if (!cust.billName || !cust.address || !cust.bookingPlace) return fail("Please fill bill name, address and destination.");
     if (india && (!cust.pincode || !cust.transport || !cust.taxId)) {
-      return res.json({ ok: false, error: "Please fill pincode, transport and GST / PAN / Aadhaar." });
+      return fail("Please fill pincode, transport and GST / PAN / Aadhaar.");
     }
     // Owner 20-Oct: outside India only bill name, address, city, country.
     // Owner 16-Oct: "MOHIT" -> our transporter "MOHIT TRANSPORT CORPORATION".
@@ -3100,13 +3153,13 @@ exports.accountSignup = onRequest(
           const sug = nearest(T, list, 3);
           // Owner 18-Oct: compulsory pick from the list — the app shows the
           // nearest names; the customer chooses one and sends again.
-          return res.json({ ok: false, error: `Please choose your transport from the list${sug.length ? " — did you mean: " + sug.join(" / ") : ""}` });
+          return fail(`Please choose your transport from the list${sug.length ? " — did you mean: " + sug.join(" / ") : ""}`);
         }
       }
     }
     const ref = db.collection("bbapp_accounts").doc(key);
     const cur = (await ref.get()).data();
-    if (abroadDirect && cur) return res.json({ ok: false, error: "This number already has an account — please log in with WhatsApp." });
+    if (abroadDirect && cur) return fail("This number already has an account — please log in with WhatsApp.");
     if (cur && cur.status === "blocked") return res.json({ ok: true, status: "blocked" });
     if (cur && cur.status === "approved") return res.json({ ok: true, status: "approved" });
     // Owner 14-Oct: PAN / Aadhaar need their photo; GST only the number.
@@ -3115,12 +3168,12 @@ exports.accountSignup = onRequest(
     const img = String((c.kycImage) || "");
     // Owner 14-Oct 10:00: PAN / Aadhaar = the card PHOTO (number read from it).
     if (india && doc !== "gst" && img.length < 1000) {
-      return res.json({ ok: false, error: `Please add a photo of your ${doc === "pan" ? "PAN card" : "Aadhaar card"}.` });
+      return fail(`Please add a photo of your ${doc === "pan" ? "PAN card" : "Aadhaar card"}.`);
     }
     const card = String(c.cardImage || "");
     // Owner 15-Oct: no GST -> Aadhaar photo + a business proof photo, both compulsory.
     if (india && doc !== "gst" && doc !== "aadhaar") {
-      return res.json({ ok: false, error: "No GST? Please add a photo of your Aadhaar card." });
+      return fail("No GST? Please add a photo of your Aadhaar card.");
     }
     const proofVideo = String(c.proofVideo || "");
     let videoOk = false;
@@ -3128,10 +3181,10 @@ exports.accountSignup = onRequest(
       try { videoOk = (await admin.storage().bucket().file(proofVideo).exists())[0]; } catch (e) { videoOk = false; }
     }
     if (india && doc !== "gst" && card.length < 1000 && !videoOk) {
-      return res.json({ ok: false, error: "Please add a business proof photo or video." });
+      return fail("Please add a business proof photo or video.");
     }
     if (india && !idValid(doc, cust.taxId)) {
-      return res.json({ ok: false, error: `This ${doc === "gst" ? "GST" : doc === "pan" ? "PAN" : "Aadhaar"} number is not valid — please check it.` });
+      return fail(`This ${doc === "gst" ? "GST" : doc === "pan" ? "PAN" : "Aadhaar"} number is not valid — please check it.`);
     }
     const kyc = india ? await kycCheck(db, cust, doc, String(c.kycText || "")) : [];
     if (trWarn) kyc.push(trWarn);
@@ -3485,7 +3538,7 @@ function kycLines(a, c) {
  *  ONLY to approved accounts (never pending / declined / blocked). */
 /** Owner 20-Oct: staff + customer nudges (see each block). Every 30 min, 9-21 IST. */
 exports.opsNudges = onSchedule(
-  { region: "asia-south1", schedule: "every 30 minutes", secrets: [TG_TOKEN, APNS_KEY], timeoutSeconds: 300, memory: "256MiB" },
+  { region: "asia-south1", schedule: "every 30 minutes", secrets: [TG_TOKEN, APNS_KEY, WA_TOKEN], timeoutSeconds: 300, memory: "256MiB" },
   async () => {
     const db = admin.firestore();
     const now = Date.now();
@@ -3680,6 +3733,33 @@ exports.opsNudges = onSchedule(
         }
       } catch (e) { logger.warn("cart nudge", { error: e.message }); }
     }
+
+    // J. 25-Oct: verified on WhatsApp 2-20 h ago, still no account -> one
+    //    WhatsApp nudge (inside the 24 h reply window), once per number / 7 d.
+    try {
+      const vq = await db.collection("bbapp_verify").where("at", ">", now - 20 * 3600e3).get();
+      const seen = new Set();
+      let n = 0;
+      for (const d of vq.docs.sort((a, b) => Number(b.get("at")) - Number(a.get("at")))) {
+        const v = d.data();
+        const waId = String(v.from || "").replace(/\D/g, "");
+        const key = accKey(waId);
+        if (!key || seen.has(key) || n >= 30 || now - Number(v.at || 0) < 2 * 3600e3 || v.manual) continue;
+        seen.add(key);
+        const a = (await db.collection("bbapp_accounts").doc(key).get()).data();
+        if (a && a.status && a.status !== "none") continue;
+        const nref = db.collection("bbapp_wa_nudge").doc(key);
+        const prev = (await nref.get()).data();
+        if (prev && now - Number(prev.at || 0) < 7 * 86400e3) continue;
+        await nref.set({ at: now, code: d.id }, { merge: true });
+        try {
+          await waText(db, waId, "Namaste 🙏 Your B.B Synthetics app sign-up is not complete yet. Open the app and fill in your details — " +
+            "GST number, or Aadhaar photo + shop photo — it takes 2 minutes, then our team approves you and you can order wholesale saree designs directly from Surat. " +
+            "Any problem? Reply here and we will help you finish it.");
+          n++;
+        } catch (e) { logger.warn("wa nudge", { key, error: e.message }); }
+      }
+    } catch (e) { logger.warn("wa nudge block", { error: e.message }); }
 
     // E. approved new customer, no order after 3 days -> one welcome push
     const fresh = (await db.collection("bbapp_accounts").where("status", "==", "approved").get()).docs;
