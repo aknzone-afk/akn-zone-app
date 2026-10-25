@@ -88,6 +88,10 @@ class ChatService {
   static final Map<String, List<ChatMsg>> _cache = {};
   static final Set<String> _relinked = {};
 
+  /// Owner 25-Oct: true once the shop has sent this customer a bill for
+  /// payment (from the cloud). Until then the chat cannot be typed in.
+  static bool chatOpen = false;
+
   /// Tester 13-Oct: chats / files are served only to a phone linked to the
   /// number (PhoneLock id). A phone that ordered for it but is not linked
   /// (the lock call failed while ordering, or the shop's /reset) links it
@@ -116,6 +120,7 @@ class ChatService {
     final since = have.isEmpty ? 0 : have.last.at - 60000;
     final d = await _call(dio, 'chatList', mobile, {'since': since}, 20);
     if (d == null || d['ok'] != true) return List.of(have);
+    if (d['open'] == true) chatOpen = true;
     final ids = {for (final x in have) x.id};
     final fresh = (d['msgs'] as List)
         .map((m) => ChatMsg('${m['id']}', '${m['from']}', '${m['text'] ?? ''}',

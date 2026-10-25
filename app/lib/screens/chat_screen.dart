@@ -77,6 +77,11 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
         .catchError((_) => null);
     if (!mounted) return;
     setState(() => _sending = false);
+    if (paid == null && !ChatService.chatOpen) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('This chat opens after we send you a bill for payment.')));
+      return;
+    }
     if (paid == null) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Not sent — please check internet and try again.')));
@@ -146,7 +151,16 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             ),
       bottomNavigationBar: mob == null
           ? null
-          : SafeArea(
+          : !(ChatService.chatOpen || _msgs.any((m) => !m.mine && m.file))
+              // Owner 25-Oct: no typing until a bill for payment was sent.
+              ? const SafeArea(
+                  child: Padding(
+                    padding: EdgeInsets.all(14),
+                    child: Text('This chat opens after we send you a bill for payment.',
+                        textAlign: TextAlign.center, style: TextStyle(color: Colors.black54, fontWeight: FontWeight.w600)),
+                  ),
+                )
+              : SafeArea(
               child: Padding(
                 padding: EdgeInsets.fromLTRB(8, 6, 8, 8 + MediaQuery.of(context).viewInsets.bottom),
                 child: Row(children: [

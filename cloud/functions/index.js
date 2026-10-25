@@ -1737,6 +1737,15 @@ exports.aknChatOut = onDocumentCreated(
   },
 );
 
+/** Owner 25-Oct: has this customer been sent a bill for payment (any order)? */
+async function chatOpen(db, d) {
+  const after = ["bill_sent", "payment_received", "dispatched", "bilty"];
+  if (after.includes(d.status) || d.billSentAt) return true;
+  if (!d.mobile) return false;
+  const q = await db.collection("bbapp_orders").where("mobile", "==", d.mobile).get();
+  return q.docs.some((x) => after.includes(x.get("status")) || x.get("billSentAt"));
+}
+
 exports.chatSend = onRequest(
   { region: "asia-south1", secrets: [TG_TOKEN, GEMINI_API_KEY, APNS_KEY], timeoutSeconds: 60, memory: "512MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
@@ -1751,6 +1760,9 @@ exports.chatSend = onRequest(
     const d = (await db.collection("bbapp_orders").doc(ref).get()).data();
     if (!d || !d.chat) return res.json({ ok: false, error: "order not found" });
     if (await isBlocked(db, d.mobile)) return res.status(403).json({ ok: false, error: "blocked" });
+    // Owner 25-Oct: the chat opens only after the shop has sent a bill for
+    // payment ("hi / hello / urgent" before that is not taken).
+    if (!(await chatOpen(db, d))) return res.json({ ok: false, error: "locked", locked: true });
     const head = `💬 ${d.billName || "Party"}${d.serial ? " · ORDER NO. " + d.serial : ""}`;
     const payShot = img && (d.status || "received") === "bill_sent";
     if (!payShot) {
@@ -1818,7 +1830,9 @@ exports.chatList = onRequest(
     }
     const msgs = docs.map((x) => ({ id: x.id, ...x.data() })).sort((a, b) => a.at - b.at).slice(-200)
       .map((m) => ({ id: m.id, from: m.from, text: m.text, at: m.at, by: m.by, file: !!(m.fileId || m.storagePath), mime: m.mime }));
-    return res.json({ ok: true, msgs });
+    // Owner 25-Oct: the app shows the typing box only once a bill was sent.
+    const open = await chatOpen(db, { mobile: cust });
+    return res.json({ ok: true, msgs, open });
   },
 );
 
