@@ -314,6 +314,11 @@ exports.placeOrder = onRequest(
     const mobile = custKey(b.mobile);
     const db = admin.firestore();
     if (await isBlocked(db, mobile)) return res.status(403).json({ ok: false, error: "blocked" });
+    // 25-Oct: only an approved account can reserve an order number (the app
+    // key is public — no fake orders / burnt serials from outside).
+    const accKeyM = accKey(mobile);
+    const accDoc = accKeyM ? (await db.collection("bbapp_accounts").doc(accKeyM).get()).data() : null;
+    if (!accDoc || accDoc.status !== "approved") return res.status(403).json({ ok: false, error: "not approved" });
     const items = (Array.isArray(b.items) ? b.items : []).slice(0, 300).map((it) => ({
       id: String((it && it.id) || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 60),
       d: String((it && it.d) || "").slice(0, 30), f: String((it && it.f) || "").slice(0, 120),
