@@ -42,7 +42,7 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           working-directory: app
-          script: flutter drive --driver=test_driver/shots.dart --target=integration_test/store_shots_test.dart --no-dds
+          script: flutter drive --driver=test_driver/shots.dart --target=integration_test/store_shots_test.dart --profile --no-dds
       - uses: actions/upload-artifact@v4
         if: always()
         with:
