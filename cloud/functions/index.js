@@ -3755,6 +3755,25 @@ exports.opsNudges = onSchedule(
     // J. 25-Oct: verified on WhatsApp 2-20 h ago, still no account -> one
     //    WhatsApp nudge (inside the 24 h reply window), once per number / 7 d.
     try {
+      // the last nudge failed (Meta 131042 = no payment method on the WhatsApp
+      // Business account) -> hold, and tell the owner once a day
+      const lastN = await db.collection("bbapp_wa_nudge").orderBy("at", "desc").limit(1).get();
+      if (!lastN.empty) {
+        const ln = lastN.docs[0];
+        const cid = `91${ln.id}_${WA_INQUIRIES}`;
+        const wamid = ln.get("wamid");
+        const lm = wamid ? await db.collection("chats").doc(cid).collection("messages").doc(wamid).get().catch(() => null) : null;
+        const st = lm && lm.exists ? lm.get("status") : "";
+        const err = lm && lm.exists ? (lm.get("error") || {}) : {};
+        if (st === "failed") {
+          if (marks["WAF"] !== today && appChat) {
+            await mark("WAF");
+            await tg("sendMessage", { chat_id: appChat, text: `⚠️ WhatsApp sending is FAILING (Meta error ${err.code || "?"}: ${String(err.message || "").slice(0, 80)}). ` +
+              "AKN Chat replies and the sign-up nudges do not reach customers until a payment method is added in Meta Business (WhatsApp Business account → Billing)." }).catch(() => {});
+          }
+          throw new Error("wa paused: last nudge failed");
+        }
+      }
       const vq = await db.collection("bbapp_verify").where("at", ">", now - 20 * 3600e3).get();
       const seen = new Set();
       let n = 0;
@@ -3771,9 +3790,10 @@ exports.opsNudges = onSchedule(
         if (prev && now - Number(prev.at || 0) < 7 * 86400e3) continue;
         await nref.set({ at: now, code: d.id }, { merge: true });
         try {
-          await waText(db, waId, "Namaste 🙏 Your B.B Synthetics app sign-up is not complete yet. Open the app and fill in your details — " +
+          const wamid = await waText(db, waId, "Namaste 🙏 Your B.B Synthetics app sign-up is not complete yet. Open the app and fill in your details — " +
             "GST number, or Aadhaar photo + shop photo — it takes 2 minutes, then our team approves you and you can order wholesale saree designs directly from Surat. " +
             "Any problem? Reply here and we will help you finish it.");
+          await nref.set({ wamid }, { merge: true });
           n++;
         } catch (e) { logger.warn("wa nudge", { key, error: e.message }); }
       }
