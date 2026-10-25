@@ -750,7 +750,7 @@ exports.registerOrder = onRequest(
       if (!addOnTo) {
         try {
           await addChat(db, ref, { from: "shop", text: `✅ Order${serial ? " no. " + serial : ""} received — thank you! ` +
-            "Our team is taking out your designs now. Your bill will come here, and you can pay with the UPI QR below it." });
+            "Our team will confirm with you and send your bill here; you can pay with the UPI QR below it." });
         } catch (e) { logger.warn("order ack", { ref, error: e.message }); }
       }
     }

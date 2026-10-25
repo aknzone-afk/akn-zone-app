@@ -18,6 +18,7 @@ import '../models/order.dart';
 import '../models/photo.dart';
 import 'drive_urls.dart';
 import 'edit_service.dart';
+import 'photo_freshness.dart' show photoCacheManager;
 import 'picks_service.dart';
 
 /// Result of an India Post pincode lookup.
@@ -654,6 +655,18 @@ class OrderService {
               await Future<void>.delayed(Duration(seconds: 1 + attempt * 2));
             }
           }
+          // 25-Oct: weak signal — the grid thumbnail this phone already has
+          // is good enough for the shop (design no. is in the caption); the
+          // order must not fail for a download.
+          if (bytes == null || bytes.isEmpty) {
+            try {
+              final f = await photoCacheManager.getFileFromCache(DriveUrls.thumbnail(ph.id, width: kThumbnailWidth));
+              if (f != null) {
+                final got = await f.file.readAsBytes();
+                if (got.isNotEmpty) bytes = got;
+              }
+            } catch (_) {}
+          }
         }
         final pick = picks[ph.id];
         if (bytes != null && bytes.isNotEmpty && pick != null && !pick.isEmpty) {
@@ -813,7 +826,10 @@ class OrderService {
       if (order.serial == null) {
         final res = await dio.post<dynamic>(
           'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net/nextOrderNo',
-          data: {'ref': order.number},
+          // 25-Oct: who is ordering goes with the number, so an order that
+          // never finishes sending (phone closed, no signal) is not a mystery.
+          data: {'ref': order.number, 'mobile': order.customer.mobile, 'billName': order.customer.billName,
+            'designs': order.items.length, 'pcs': order.items.fold<int>(0, (s, i) => s + i.qty)},
           options: Options(
             headers: {'x-app-key': 'akn-zone-app-v3'},
             contentType: Headers.jsonContentType,
