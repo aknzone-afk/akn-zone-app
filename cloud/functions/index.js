@@ -399,7 +399,9 @@ async function selfDeliver(db, ref, o) {
     } catch (e) { return null; }
   };
   const missing = [];
-  for (let i = 0; i < items.length; i += 10) {
+  // photos the phone already posted (albums go in item order) are skipped
+  const already = Math.min(items.length, Number((o.relay && o.relay.photos) || 0));
+  for (let i = already; i < items.length; i += 10) {
     const chunk = items.slice(i, i + 10);
     const bufs = await Promise.all(chunk.map((it) => fetchOne(it.id)));
     const photos = [], caps = [];
@@ -415,9 +417,13 @@ async function selfDeliver(db, ref, o) {
     text = `📦 ${items.length} designs · ${o.startPcs || "?"} pcs\n👤 Bill Name: ${escH(o.startName || "?")}\n📱 Mobile: ${o.startMobile || "?"}`;
   }
   if (missing.length) text += `\n\n⚠️ Photo not available for: ${escH(missing.join(", "))}`;
+  if (already) text += `\n\n📷 First ${already} photo${already === 1 ? "" : "s"} above were sent by the phone`;
   text += "\n\n☁️ Delivered by the cloud (the phone closed before finishing the send)";
-  const det = await tg("sendMessage", { chat_id: chat, text: cutAt(text, 4000), parse_mode: "HTML", disable_web_page_preview: true,
-    reply_markup: { inline_keyboard: [[{ text: STEPS[0].label, callback_data: `s|g|${ref}` }]] } });
+  const kb = { inline_keyboard: [[{ text: STEPS[0].label, callback_data: `s|g|${ref}` }]] };
+  let det = await tg("sendMessage", { chat_id: chat, text: cutAt(text, 4000), parse_mode: "HTML", disable_web_page_preview: true, reply_markup: kb });
+  if (!det.ok) { // broken HTML in the text -> plain text, never stuck
+    det = await tg("sendMessage", { chat_id: chat, text: cutAt(text.replace(/<[^>]+>/g, ""), 4000), disable_web_page_preview: true, reply_markup: kb });
+  }
   if (!det.ok) throw new Error("tg details: " + det.description);
   const msg = det.result.message_id;
   const noMsg = await tg("sendMessage", { chat_id: chat, text: `<b>ORDER NO. ${o.no}</b>`, parse_mode: "HTML" });
@@ -3798,6 +3804,7 @@ exports.orderSweep = onSchedule(
       const o = doc.data();
       if (o.msg || o.status || now - o.placed < 3 * 60e3) continue;
       if (o.sweeping && now - o.sweeping < 15 * 60e3) continue;
+      if (o.relay && o.relay.last && now - o.relay.last < 5 * 60e3) continue; // the phone is still sending
       const won = await db.runTransaction(async (t) => {
         const cur = (await t.get(doc.ref)).data() || {};
         if (cur.msg || cur.status || (cur.sweeping && now - cur.sweeping < 15 * 60e3)) return false;
@@ -4440,6 +4447,7 @@ exports.orderRelay = onRequest(
         const ph = (r.photos || 0) + photos.length;
         const ms = (r.msgs || 0) + (kind === "album" ? 0 : 1);
         if (o.get("selfSent")) return { self: true, msg: o.get("msg"), chat: o.get("chat") };
+        if (o.get("sweeping") && Date.now() - o.get("sweeping") < 15 * 60e3) throw new Error("503");
         if (!pc && (ph > RELAY_MAX_PHOTOS || ms > RELAY_MAX_MSGS)) throw new Error("429");
         if (!dry) tx.set(doc, { relay: { photos: ph, msgs: ms, ip, last: Date.now() } }, { merge: true });
         return { no: o.get("no") };
