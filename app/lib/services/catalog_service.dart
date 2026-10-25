@@ -1,5 +1,7 @@
 import 'dart:async';
+import 'dart:convert';
 
+import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../config.dart';
@@ -155,6 +157,30 @@ class CatalogService {
   /// Once per bundled manifest: correct cached prices with the manifest's
   /// verified ones, before anything is shown. Fixes prices misread earlier
   /// (e.g. from a stale Drive preview) on the very first screen after an update.
+  /// 25-Oct: the shop's published price list (prices.json, every photo id →
+  /// price) applied to photos still without a price — at most once an hour.
+  /// Returns how many photos got a price. Never throws.
+  Future<int> applyPublishedPrices(Dio dio, {bool force = false}) async {
+    try {
+      final last = _prefs.getInt('published_prices_at_v1') ?? 0;
+      if (!force && DateTime.now().millisecondsSinceEpoch - last < 3600e3) return 0;
+      final res = await dio.get<String>(
+          '$kDataBase/app/prices.json?t=${DateTime.now().millisecondsSinceEpoch ~/ 300000}',
+          options: Options(responseType: ResponseType.plain, receiveTimeout: const Duration(seconds: 15)));
+      final j = jsonDecode(res.data ?? '{}') as Map<String, dynamic>;
+      final p = (j['p'] as Map?) ?? const {};
+      final prices = <String, int>{
+        for (final e in p.entries)
+          if (e.value is num && (e.value as num) > 0) '${e.key}': (e.value as num).toInt(),
+      };
+      final n = await _cache.applyPublishedPrices(prices);
+      await _prefs.setInt('published_prices_at_v1', DateTime.now().millisecondsSinceEpoch);
+      return n;
+    } catch (_) {
+      return 0;
+    }
+  }
+
   Future<void> _applyBundledPricesOnce() async {
     try {
       final index = await _seedLoader.load();

@@ -180,6 +180,26 @@ class LocalCache {
     });
   }
 
+  /// 25-Oct: prices the shop PC publishes (prices.json) — fill every photo
+  /// that has no price yet or is still waiting for its on-phone read, so the
+  /// cart value and the minimum-order bar are right from the first second.
+  /// A price already read from the photo itself is left alone.
+  Future<int> applyPublishedPrices(Map<String, int> prices) async {
+    if (prices.isEmpty) return 0;
+    final db = await _open();
+    var n = 0;
+    await db.transaction((txn) async {
+      for (final e in prices.entries) {
+        n += await txn.rawUpdate(
+          "UPDATE photos SET price = ?, price_text = ?, ocr_text = 'published', ocr_state = 'done' "
+          "WHERE id = ? AND (price IS NULL OR price <= 0 OR ocr_state <> 'done')",
+          [e.value, 'Rs ${e.value}/-', e.key],
+        );
+      }
+    });
+    return n;
+  }
+
   Future<bool> isPending(String photoId) async {
     final db = await _open();
     final rows = await db.query('photos',

@@ -232,6 +232,14 @@ final FutureProvider<CatalogResult> catalogProvider =
     },
   );
 
+  // 25-Oct: the shop's published prices fill every unpriced photo at once —
+  // the cart value / minimum-order bar must never wait for on-phone reading.
+  try {
+    if (await svc.applyPublishedPrices(ref.read(dioProvider)) > 0) {
+      result = await _reloadFromCache(ref, result);
+    }
+  } catch (_) {/* non-fatal */}
+
   // FIRST LAUNCH (bundled catalog): show the branded loading screen BRIEFLY —
   // powered by the bundled data + folder covers, so it finishes in ~1-2s every
   // time, even offline — then reveal the COMPLETE app. This restores the "it
