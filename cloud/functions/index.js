@@ -297,6 +297,20 @@ exports.nextOrderNo = onRequest(
   },
 );
 
+/** 25-Oct: the last mobile a phone (IP) used — lets the cloud complete an
+ *  order whose phone stopped before sending the customer's details. */
+async function rememberIp(db, ip, mobile) {
+  try {
+    const id = require("crypto").createHash("sha1").update(String(ip)).digest("hex").slice(0, 24);
+    await db.collection("bbapp_iplast").doc(id).set({ mobile: String(mobile), at: Date.now() }, { merge: true });
+  } catch (e) { /* never blocks */ }
+}
+async function mobileForIp(db, ip, before) {
+  const id = require("crypto").createHash("sha1").update(String(ip)).digest("hex").slice(0, 24);
+  const d = (await db.collection("bbapp_iplast").doc(id).get()).data();
+  return d && d.mobile && Number(d.at) <= before + 60e3 && before - Number(d.at) < 2 * 3600e3 ? d.mobile : null;
+}
+
 /** Owner 25-Oct ("zero chance of a missed order"): the app calls this the
  *  moment the customer taps YES — before preparing photos — with the whole
  *  order as text (designs, pieces, picks, customer). The serial is reserved
@@ -384,6 +398,63 @@ async function finalizeOrder(db, { ref, chat, msg, extra, text, mobile, billName
   }
 }
 
+/** Posts an order's held photos (in arrival order) to the group, 10 per
+ *  album, resuming from bufSent; Telegram flood waits are honoured. Throws
+ *  when it could not finish in `budgetMs` (the caller retries). */
+async function flushHeld(db, ref, chat, budgetMs, captions) {
+  const t0 = Date.now();
+  const docRef = db.collection("bbapp_orders").doc(ref);
+  // one flusher at a time (a phone retry while the first is still posting
+  // must not post the same album twice)
+  const lockId = Math.random().toString(36).slice(2);
+  const got = await db.runTransaction(async (tx) => {
+    const cur = (await tx.get(docRef)).data() || {};
+    if (cur.flushLock && Date.now() - Number(cur.flushLock.at || 0) < 5 * 60e3) return false;
+    tx.set(docRef, { flushLock: { id: lockId, at: Date.now() } }, { merge: true });
+    return true;
+  });
+  if (!got) throw new Error("flush busy");
+  try {
+    return await flushHeldLocked(db, ref, chat, budgetMs, captions, t0, docRef);
+  } finally {
+    await docRef.set({ flushLock: admin.firestore.FieldValue.delete() }, { merge: true }).catch(() => {});
+  }
+}
+async function flushHeldLocked(db, ref, chat, budgetMs, captions, t0, docRef) {
+  for (;;) {
+    const o = (await docRef.get()).data() || {};
+    const buf = o.buf || [];
+    let sent = Number(o.bufSent || 0);
+    if (sent >= buf.length) {
+      if (buf.length && !o.bufClean) { // posted -> the held copies are not needed any more
+        await admin.storage().bucket().deleteFiles({ prefix: `relay/${ref}/` }).catch(() => {});
+        await docRef.set({ bufClean: Date.now() }, { merge: true });
+      }
+      return Number(sent);
+    }
+    if (Date.now() - t0 > budgetMs) throw new Error("flush budget");
+    const chunk = buf.slice(sent, sent + 10);
+    const bufs = [];
+    for (const h of chunk) {
+      try { bufs.push((await admin.storage().bucket().file(`relay/${ref}/${h}.jpg`).download())[0]); } catch (e) { bufs.push(null); }
+    }
+    const ok = bufs.map((b, i) => [b, (captions && captions[sent + i]) || ""]).filter((x) => x[0]);
+    if (ok.length) {
+      try {
+        const ids = await tgPhotos(chat, ok.map((x) => x[0]), ok.map((x) => x[1]));
+        const batch = db.batch();
+        for (const id of ids) batch.set(db.collection("bbapp_msgmap").doc(`${chat}_${id}`), { ref });
+        await batch.commit();
+      } catch (e) {
+        const m = /retry after (\d+)/i.exec(e.message);
+        if (m && Date.now() - t0 + Number(m[1]) * 1000 < budgetMs) { await new Promise((r) => setTimeout(r, (Number(m[1]) + 1) * 1000)); continue; }
+        throw e;
+      }
+    }
+    await docRef.set({ bufSent: sent + chunk.length }, { merge: true });
+  }
+}
+
 async function tgPhotos(chat, photos, captions) {
   const api = `https://api.telegram.org/bot${TG_TOKEN.value()}/${photos.length === 1 ? "sendPhoto" : "sendMediaGroup"}`;
   const f = new FormData();
@@ -416,8 +487,12 @@ async function selfDeliver(db, ref, o) {
     } catch (e) { return null; }
   };
   const missing = [];
-  // photos the phone already posted (albums go in item order) are skipped
-  const already = Math.min(items.length, Number((o.relay && o.relay.photos) || 0));
+  const capOf = (it, n) => [`${n}/${items.length}`, ...(it.d ? ["D.No " + it.d] : []), ...(it.p ? ["₹" + it.p] : []), it.pick ? `${it.pick} (${it.qty} pcs)` : `${it.qty} pcs`].join(" · ") +
+    (it.f ? "\n" + it.f.split("/").filter(Boolean).join(" › ") : "");
+  // photos the phone already sent are HELD in the cloud (not in the group) — post them first
+  const heldN = (o.buf || []).length;
+  if (heldN) await flushHeld(db, ref, chat, 400e3, items.map((it, i) => capOf(it, i + 1)));
+  const already = Math.min(items.length, heldN);
   for (let i = already; i < items.length; i += 10) {
     const chunk = items.slice(i, i + 10);
     const bufs = await Promise.all(chunk.map((it) => fetchOne(it.id)));
@@ -434,7 +509,7 @@ async function selfDeliver(db, ref, o) {
     text = `📦 ${items.length} designs · ${o.startPcs || "?"} pcs\n👤 Bill Name: ${escH(o.startName || "?")}\n📱 Mobile: ${o.startMobile || "?"}`;
   }
   if (missing.length) text += `\n\n⚠️ Photo not available for: ${escH(missing.join(", "))}`;
-  if (already) text += `\n\n📷 First ${already} photo${already === 1 ? "" : "s"} above were sent by the phone`;
+  if (!items.length && heldN) text = text.replace(/^📦[^\n]*/, `📦 ${heldN} design${heldN === 1 ? "" : "s"} — see the photos above`);
   text += "\n\n☁️ Delivered by the cloud (the phone closed before finishing the send)";
   const kb = { inline_keyboard: [[{ text: STEPS[0].label, callback_data: `s|g|${ref}` }]] };
   let det = await tg("sendMessage", { chat_id: chat, text: cutAt(text, 4000), parse_mode: "HTML", disable_web_page_preview: true, reply_markup: kb });
@@ -1050,6 +1125,7 @@ exports.phoneLock = onRequest(
     if (m.length === 12 && m.startsWith("91")) m = m.slice(2);
     if (!device || m.length < 7) return res.status(400).json({ ok: false });
     const db = admin.firestore();
+    await rememberIp(db, ip, m);
     const dRef = db.collection("bbapp_devices").doc(device);
     const mRef = db.collection("bbapp_mobiles").doc(m);
     const out = await db.runTransaction(async (tx) => {
@@ -3035,6 +3111,7 @@ exports.accountVerify = onRequest(
     const db = admin.firestore();
     const key = await verifiedKey(db, req.body && req.body.code);
     if (!key) return res.json({ ok: true, verified: false });
+    await rememberIp(db, ip, key);
     let a = (await db.collection("bbapp_accounts").doc(key).get()).data();
     const india = key.length === 10;
     let parties = null;
@@ -3839,15 +3916,25 @@ exports.orderSweep = onSchedule(
     // 25-Oct (order 660): an OLD app (no placeOrder) that sent photos but
     // never the details -> one alert at any hour, 20 min after the number
     try {
-      const lq = await db.collection("bbapp_orders").where("at", "<", new Date(now - 20 * 60e3)).where("at", ">", new Date(now - 86400e3)).get();
+      const lq = await db.collection("bbapp_orders").where("at", "<", new Date(now - 15 * 60e3)).where("at", ">", new Date(now - 86400e3)).get();
       for (const d of lq.docs) {
         const o = d.data();
-        if (o.status || o.msg || o.lostAlert || o.placed || !o.no) continue;
-        await d.ref.set({ lostAlert: now }, { merge: true });
-        const ph = Number((o.relay && o.relay.photos) || 0);
-        await tg("sendMessage", { chat_id: ORDER_GROUP, parse_mode: "HTML",
-          text: `⚠️ <b>ORDER NO. ${o.no} is incomplete</b> — ${ph ? ph + " photo" + (ph === 1 ? "" : "s") + " arrived above, but" : "nothing arrived;"} the customer's details did not (old app version, closed mid-send)` +
-            `${o.startName ? "\n" + escH(o.startName) + (o.startMobile ? " · " + o.startMobile : "") : ""}\nIt completes by itself when the customer opens the app again.` }).catch(() => {});
+        if (o.status || o.msg || o.placed || !o.no || !(o.buf || []).length) continue;
+        if (o.relay && o.relay.last && now - o.relay.last < 15 * 60e3) continue; // the phone is still sending
+        // older app: find the customer from the same phone (IP) login just before
+        const mob = (o.relay && o.relay.ip) ? await mobileForIp(db, o.relay.ip, Number(o.relay.last || now)) : null;
+        const a = mob ? (await db.collection("bbapp_accounts").doc(mob).get()).data() : null;
+        const c = (a && a.cust) || {};
+        const name = c.billName || (a && a.party) || "";
+        const pText = mob
+          ? `📦 ${(o.buf || []).length} designs — see the photos above (pieces as marked on them)\n${a && a.kind === "existing" ? "👤 OLD CUSTOMER" : "🆕 NEW CUSTOMER"}\n\n` +
+            `👤 Bill Name: ${escH(name)}\n🏠 Address: ${escH(c.address || "")}\n📍 Booking Place: ${escH(c.bookingPlace || "")}\n📮 Pincode: ${escH(c.pincode || "")}\n` +
+            `📱 Mobile: +91 ${mob} · WhatsApp\n🚚 Transport: ${escH(c.transport || "")}${c.taxId ? "\n🧾 GST/ID: " + escH(c.taxId) : ""}\n\n` +
+            "ℹ️ The app closed before the details were sent — customer taken from the same phone's login. Please confirm with a call."
+          : `📦 ${(o.buf || []).length} designs — see the photos above\n\n⚠️ Customer NOT identified (an old app version closed mid-send). The app sends the details by itself when the customer opens it again.`;
+        await d.ref.set({ placed: now - 4 * 60e3, startMobile: mob || null, startName: name, pText,
+          ...(mob ? { pCust: { country: c.country || "India", billName: name, address: c.address || "", bookingPlace: c.bookingPlace || "", pincode: c.pincode || "",
+            mobile: mob, transport: c.transport || "", taxId: c.taxId || "", kind: a && a.kind === "existing" ? "old" : "new" } } : {}) }, { merge: true });
       }
     } catch (e) { logger.warn("incomplete order check", { error: e.message }); }
     const q = await db.collection("bbapp_orders").where("placed", ">", now - 3 * 86400e3).get();
@@ -4450,9 +4537,9 @@ exports.proofUploadUrl = onRequest(
  */
 const RELAY_PER_IP_PER_HOUR = 60;
 const RELAY_MAX_PHOTOS = 300; // per order
-const RELAY_MAX_MSGS = 9; // details / no / dots, with retries
+const RELAY_MAX_MSGS = 30; // details / no / dots, with retries (details may need several calls to flush photos)
 exports.orderRelay = onRequest(
-  { region: "asia-south1", secrets: [TG_TOKEN, PC_KEY], timeoutSeconds: 120, memory: "512MiB", maxInstances: 3, invoker: "public" },
+  { region: "asia-south1", secrets: [TG_TOKEN, PC_KEY], timeoutSeconds: 300, memory: "512MiB", maxInstances: 3, invoker: "public" },
   async (req, res) => {
     if (req.method !== "POST") return res.status(405).json({ ok: false });
     if (!appOk(req)) return res.status(403).json({ ok: false });
@@ -4513,6 +4600,33 @@ exports.orderRelay = onRequest(
       const code = Number(e.message) || 500;
       if (code === 500) logger.warn("orderRelay ref", { ref, error: e.message });
       return res.status(code).json({ ok: false, description: code === 404 ? "unknown order" : code === 410 ? "order too old" : code === 429 ? "order send budget used" : "server busy" });
+    }
+
+    // Owner 25-Oct: photos are HELD in the cloud — the group sees the order
+    // only complete (photos + details together), never half.
+    if (kind === "album" && !dry) {
+      try {
+        const crypto = require("crypto");
+        const names = [];
+        for (const ph of photos) {
+          const h = crypto.createHash("md5").update(ph).digest("hex");
+          await admin.storage().bucket().file(`relay/${ref}/${h}.jpg`).save(ph, { contentType: "image/jpeg", resumable: false });
+          names.push(h);
+        }
+        await doc.set({ buf: admin.firestore.FieldValue.arrayUnion(...names), bufAt: Date.now() }, { merge: true });
+        return res.json({ ok: true, held: true, result: photos.length === 1 ? {} : [] });
+      } catch (e) {
+        logger.warn("relay hold", { ref, error: e.message });
+        return res.status(503).json({ ok: false, description: "server busy" });
+      }
+    }
+    if (kind === "details" && !dry) {
+      try {
+        await flushHeld(db, ref, chat, 240e3);
+      } catch (e) {
+        logger.warn("relay flush", { ref, error: e.message });
+        return res.status(503).json({ ok: false, description: "sending photos — will retry" });
+      }
     }
 
     let method; let body;
