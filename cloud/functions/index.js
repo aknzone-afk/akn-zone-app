@@ -265,13 +265,20 @@ exports.nextOrderNo = onRequest(
     const db = admin.firestore();
     const orderDoc = db.collection("bbapp_orders").doc(ref);
     const counter = db.collection("bbapp_counters").doc("orders");
+    // 25-Oct: app 3.1.37+ says who is ordering — an order that never finishes
+    // arriving (phone closed mid-send) is then no mystery (see opsNudges H).
+    const who = {
+      ...(custKey(req.body && req.body.mobile) ? { startMobile: custKey(req.body.mobile) } : {}),
+      ...(req.body && req.body.billName ? { startName: String(req.body.billName).slice(0, 120) } : {}),
+      ...(Number(req.body && req.body.designs) > 0 ? { startDesigns: Number(req.body.designs), startPcs: Number(req.body.pcs) || 0 } : {}),
+    };
     const no = await db.runTransaction(async (tx) => {
       const o = await tx.get(orderDoc);
       if (o.exists) return o.get("no");
       const c = await tx.get(counter);
       const next = (c.exists ? c.get("last") || 0 : 0) + 1;
       tx.set(counter, { last: next }, { merge: true });
-      tx.set(orderDoc, { no: next, at: admin.firestore.FieldValue.serverTimestamp() });
+      tx.set(orderDoc, { no: next, at: admin.firestore.FieldValue.serverTimestamp(), ...who });
       return next;
     });
     return res.json({ ok: true, no });
@@ -739,6 +746,13 @@ exports.registerOrder = onRequest(
     if (!(d.exists && d.get("status")) && msg && chat) {
       await tg("editMessageReplyMarkup", { chat_id: chat, message_id: msg,
         reply_markup: statusKeyboard(ref, (await docRef.get()).data() || {}) }).catch(() => {});
+      // 25-Oct: one acknowledgement in the customer's chat (+push), main orders only
+      if (!addOnTo) {
+        try {
+          await addChat(db, ref, { from: "shop", text: `✅ Order${serial ? " no. " + serial : ""} received — thank you! ` +
+            "Our team is taking out your designs now. Your bill will come here, and you can pay with the UPI QR below it." });
+        } catch (e) { logger.warn("order ack", { ref, error: e.message }); }
+      }
     }
     if (newAdv) {
       // Owner 12-Oct: the advance screenshot is the FIRST message of the
@@ -3355,20 +3369,43 @@ exports.opsNudges = onSchedule(
       await mark("A" + h);
     }
 
-    // B. orders stuck with staff
+    // B. orders stuck with staff (25-Oct: a day+ old ones on top, in red,
+    //    and the same list to the owner's app group)
     if ((window(11) || window(17)) && marks["B" + h] !== today) {
       const open = (await db.collection("bbapp_orders").where("status", "in", ["received", "getting_ready"]).get()).docs
         .map((d) => ({ id: d.id, ...d.data() })).filter((o) => o.serial && !o.addOnTo && !o.cancelled && !/SYNTHETICS \(SURAT\)/i.test(o.billName || ""));
-      const lines = [];
+      const lines = [], late = [];
       for (const o of open) {
         const st = o.statusAt && o.statusAt.toMillis ? o.statusAt.toMillis() : (o.at && o.at.toMillis ? o.at.toMillis() : now);
         if (o.hold) { if (now - (o.holdAt || st) > 3 * 86400e3) lines.push(`⏸ ORDER NO. ${o.serial} ${escH(o.billName)} — on hold for ${ageTxt(o.holdAt || st)}`); continue; }
-        if (o.status === "received" && now - st > 4 * 3600e3) lines.push(`🧺 ORDER NO. ${o.serial} ${escH(o.billName)} — waiting for "Maal nikalna chalu" since ${ageTxt(st)}`);
-        if (o.status === "getting_ready" && now - st > 24 * 3600e3) lines.push(`🧾 ORDER NO. ${o.serial} ${escH(o.billName)} — maal nikalna started ${ageTxt(st)} ago, bill not sent yet`);
+        const ordered = o.at && o.at.toMillis ? o.at.toMillis() : st;
+        if (now - ordered > 24 * 3600e3) late.push(`🔴 ORDER NO. ${o.serial} ${escH(o.billName)} — ordered ${ageTxt(ordered)} ago, still no bill`);
+        else if (o.status === "received" && now - st > 4 * 3600e3) lines.push(`🧺 ORDER NO. ${o.serial} ${escH(o.billName)} — waiting for "Maal nikalna chalu" since ${ageTxt(st)}`);
+        else if (o.status === "getting_ready" && now - st > 24 * 3600e3) lines.push(`🧾 ORDER NO. ${o.serial} ${escH(o.billName)} — maal nikalna started ${ageTxt(st)} ago, bill not sent yet`);
       }
-      if (lines.length) await tg("sendMessage", { chat_id: ORDER_GROUP, parse_mode: "HTML", text: `⏰ <b>Orders waiting for us</b>\n${lines.join(NL)}` });
+      const all = [...late, ...lines];
+      if (all.length) {
+        const text = `⏰ <b>Orders waiting for us${late.length ? " — " + late.length + " for more than a day" : ""}</b>\n${all.join(NL)}`;
+        await tg("sendMessage", { chat_id: ORDER_GROUP, parse_mode: "HTML", text });
+        if (late.length && appChat) await tg("sendMessage", { chat_id: appChat, parse_mode: "HTML", text }).catch(() => {});
+      }
       await mark("B" + h);
     }
+
+    // H. 25-Oct: an order number was taken but the order never finished
+    //    arriving (phone closed / no signal mid-send) — tell staff once, with
+    //    the customer when the app told us (3.1.37+), so nobody is lost.
+    try {
+      const q = await db.collection("bbapp_orders").where("at", "<", new Date(now - 45 * 60e3)).where("at", ">", new Date(now - 3 * 86400e3)).get();
+      for (const d of q.docs) {
+        const o = d.data();
+        if (o.status || o.msg || o.lostAlert || !o.no) continue;
+        await d.ref.set({ lostAlert: now }, { merge: true });
+        const who = o.startName ? `${escH(o.startName)}${o.startMobile ? " · " + o.startMobile : ""}${o.startDesigns ? " · " + o.startDesigns + " designs / " + (o.startPcs || "?") + " pcs" : ""}` : "customer unknown (older app)";
+        await tg("sendMessage", { chat_id: ORDER_GROUP, parse_mode: "HTML",
+          text: `⚠️ <b>ORDER NO. ${o.no} started in the app but never arrived</b>\n${who}\nThe app re-sends it by itself when the customer opens it again; if not, please call them.` }).catch(() => {});
+      }
+    } catch (e) { logger.warn("lost order check", { error: e.message }); }
 
     // C. customer: bill sent, no payment screenshot (24 h, then 72 h)
     const billed = (await db.collection("bbapp_orders").where("status", "==", "bill_sent").get()).docs;
