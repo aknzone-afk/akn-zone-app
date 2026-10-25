@@ -624,6 +624,16 @@ class OrderService {
       lockNote: lockNote,
     );
 
+    // Owner 25-Oct ("zero chance of a missed order"): the order goes to the
+    // cloud as text FIRST — one small call, before any photo work. If this
+    // phone never finishes sending the photos, the cloud posts the order to
+    // the shop itself within minutes. Offline: the normal retry path below.
+    onStep?.call('Placing order…');
+    try {
+      final no = await _placeOnCloud(prefs, dio, order);
+      if (no != null) order.serial = no;
+    } catch (_) {}
+
     // Freeze the photos NOW: emptying the cart later wipes the markup, and a
     // queued order must still send exactly what the customer saw.
     onStep?.call('Preparing photos…');
@@ -716,6 +726,31 @@ class OrderService {
     if (holdForAdvance) return order;
     await _trySend(prefs, dio, order, onStep: onStep);
     return order;
+  }
+
+  /// The whole order as text to the cloud (designs, pieces, picks, customer)
+  /// — returns the ORDER NO. the cloud reserved. Idempotent per order number.
+  static Future<int?> _placeOnCloud(SharedPreferences prefs, Dio dio, Order order) async {
+    final res = await dio.post<dynamic>(
+      '$_cloud/placeOrder',
+      data: {
+        'ref': order.number,
+        'mobile': order.customer.mobile,
+        'billName': order.customer.billName,
+        'cust': order.customer.toJson(),
+        'addOnTo': order.addOnTo,
+        'note': order.note,
+        'items': [for (final it in order.items) it.toJson()],
+        'text': await _details(prefs, order),
+      },
+      options: Options(
+          headers: {'x-app-key': 'akn-zone-app-v3'},
+          contentType: Headers.jsonContentType,
+          sendTimeout: const Duration(seconds: 20),
+          receiveTimeout: const Duration(seconds: 20)),
+    );
+    final d = res.data is String ? jsonDecode(res.data as String) : res.data;
+    return (d is Map && d['ok'] == true) ? (d['no'] as num?)?.toInt() : null;
   }
 
   static bool _retrying = false;

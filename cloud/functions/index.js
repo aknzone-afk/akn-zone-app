@@ -285,6 +285,141 @@ exports.nextOrderNo = onRequest(
   },
 );
 
+/** Owner 25-Oct ("zero chance of a missed order"): the app calls this the
+ *  moment the customer taps YES — before preparing photos — with the whole
+ *  order as text (designs, pieces, picks, customer). The serial is reserved
+ *  here (same transaction as nextOrderNo). If the phone never finishes
+ *  sending the photos / details, orderSweep posts the order itself. */
+exports.placeOrder = onRequest(
+  { region: "asia-south1", timeoutSeconds: 30, memory: "256MiB", maxInstances: 3, invoker: "public", cors: true },
+  async (req, res) => {
+    if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
+    const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
+    if (limited("n:" + ip)) return res.status(429).json({ ok: false });
+    const b = req.body || {};
+    const ref = String(b.ref || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
+    if (!ref) return res.status(400).json({ ok: false });
+    const mobile = custKey(b.mobile);
+    const db = admin.firestore();
+    if (await isBlocked(db, mobile)) return res.status(403).json({ ok: false, error: "blocked" });
+    const items = (Array.isArray(b.items) ? b.items : []).slice(0, 300).map((it) => ({
+      id: String((it && it.id) || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 60),
+      d: String((it && it.d) || "").slice(0, 30), f: String((it && it.f) || "").slice(0, 120),
+      p: Number(it && it.p) || null, qty: Math.max(1, Math.min(999, Number(it && it.qty) || 1)),
+      pick: String((it && it.pick) || "").slice(0, 80) })).filter((it) => it.id);
+    const c = b.cust && typeof b.cust === "object" ? Object.fromEntries(
+      ["country", "billName", "address", "bookingPlace", "pincode", "mobile", "transport", "taxId", "kind"].map((k) => [k, String(b.cust[k] || "").slice(0, 300)])) : null;
+    const placed = {
+      placed: Date.now(), startMobile: mobile || null, startName: String(b.billName || (c && c.billName) || "").slice(0, 120),
+      startDesigns: items.length, startPcs: items.reduce((t, it) => t + it.qty, 0),
+      items, pText: cutAt(String(b.text || ""), 3500), pNote: String(b.note || "").slice(0, 500),
+      pCust: c, pAddOnTo: String(b.addOnTo || "").slice(0, 40) || null, placedIp: ip,
+    };
+    const orderDoc = db.collection("bbapp_orders").doc(ref);
+    const counter = db.collection("bbapp_counters").doc("orders");
+    const no = await db.runTransaction(async (tx) => {
+      const o = await tx.get(orderDoc);
+      if (o.exists) { if (!o.get("placed")) tx.set(orderDoc, placed, { merge: true }); return o.get("no"); }
+      const cc = await tx.get(counter);
+      const next = (cc.exists ? cc.get("last") || 0 : 0) + 1;
+      tx.set(counter, { last: next }, { merge: true });
+      tx.set(orderDoc, { no: next, at: admin.firestore.FieldValue.serverTimestamp(), ...placed });
+      return next;
+    });
+    return res.json({ ok: true, no });
+  },
+);
+
+/** The bookkeeping registerOrder does once the Telegram messages exist —
+ *  also used when the cloud delivered the order itself. */
+async function finalizeOrder(db, { ref, chat, msg, extra, text, mobile, billName, serial, addOnTo, cust }) {
+  const docRef = db.collection("bbapp_orders").doc(ref);
+  const d = await docRef.get();
+  if (accKey(mobile) && !d.get("msg")) {
+    await db.collection("bbapp_accounts").doc(accKey(mobile)).set({ lastOrderAt: Date.now(),
+      orders: admin.firestore.FieldValue.increment(1) }, { merge: true });
+  }
+  const batch = db.batch();
+  batch.set(db.collection("bbapp_msgmap").doc(`${chat}_${msg}`), { ref });
+  for (const id of (extra || []).slice(0, 60)) batch.set(db.collection("bbapp_msgmap").doc(`${chat}_${id}`), { ref });
+  await batch.commit();
+  const first = !(d.exists && d.get("status"));
+  await docRef.set({ msg, chat, mobile, billName, serial, addOnTo, ...(text ? { text } : {}), ...(cust && cust.kind !== "old" ? { cust } : {}),
+    ...(first ? { status: "received", statusAt: admin.firestore.FieldValue.serverTimestamp() } : {}) }, { merge: true });
+  if (first) {
+    await tg("editMessageReplyMarkup", { chat_id: chat, message_id: msg,
+      reply_markup: statusKeyboard(ref, (await docRef.get()).data() || {}) }).catch(() => {});
+    if (!addOnTo) {
+      try {
+        await addChat(db, ref, { from: "shop", text: `✅ Order${serial ? " no. " + serial : ""} received — thank you! ` +
+          "Our team will confirm with you and send your bill here; you can pay with the UPI QR below it." });
+      } catch (e) { logger.warn("order ack", { ref, error: e.message }); }
+    }
+  }
+}
+
+async function tgPhotos(chat, photos, captions) {
+  const api = `https://api.telegram.org/bot${TG_TOKEN.value()}/${photos.length === 1 ? "sendPhoto" : "sendMediaGroup"}`;
+  const f = new FormData();
+  f.append("chat_id", String(chat));
+  if (photos.length === 1) {
+    f.append("photo", new Blob([photos[0]], { type: "image/jpeg" }), "0.jpg");
+    if (captions[0]) f.append("caption", captions[0].slice(0, 1000));
+  } else {
+    f.append("media", JSON.stringify(photos.map((_, i) => ({ type: "photo", media: `attach://p${i}`, ...(captions[i] ? { caption: captions[i].slice(0, 1000) } : {}) }))));
+    photos.forEach((p, i) => f.append(`p${i}`, new Blob([p], { type: "image/jpeg" }), `${i}.jpg`));
+  }
+  const j = await (await fetch(api, { method: "POST", body: f })).json().catch(() => ({ ok: false }));
+  if (!j.ok) throw new Error("tg photos: " + (j.description || "?"));
+  const r = j.result;
+  return Array.isArray(r) ? r.map((m) => m.message_id) : [r.message_id];
+}
+
+async function selfDeliver(db, ref, o) {
+  const items = o.items || [];
+  const chat = String(ORDER_GROUP);
+  const extra = [];
+  // photos, 10 per album, from Drive (the phone's marked copies are lost —
+  // the caption carries the colour pick and pieces)
+  const fetchOne = async (id) => {
+    try {
+      const r = await fetch(`https://drive.google.com/thumbnail?id=${encodeURIComponent(id)}&sz=w1600`, { signal: AbortSignal.timeout(20000) });
+      if (!r.ok) return null;
+      const buf = Buffer.from(await r.arrayBuffer());
+      return buf.length > 1000 && buf[0] === 0xff && buf[1] === 0xd8 ? buf : null;
+    } catch (e) { return null; }
+  };
+  const missing = [];
+  for (let i = 0; i < items.length; i += 10) {
+    const chunk = items.slice(i, i + 10);
+    const bufs = await Promise.all(chunk.map((it) => fetchOne(it.id)));
+    const photos = [], caps = [];
+    chunk.forEach((it, k) => {
+      const parts = [`${i + k + 1}/${items.length}`, ...(it.d ? ["D.No " + it.d] : []), ...(it.p ? ["₹" + it.p] : []), it.pick ? `${it.pick} (${it.qty} pcs)` : `${it.qty} pcs`];
+      const cap = parts.join(" · ") + (it.f ? "\n" + it.f.split("/").filter(Boolean).join(" › ") : "");
+      if (bufs[k]) { photos.push(bufs[k]); caps.push(cap); } else missing.push(it.d || "#" + (i + k + 1));
+    });
+    if (photos.length) extra.push(...await tgPhotos(chat, photos, caps));
+  }
+  let text = o.pText || "";
+  if (!text) {
+    text = `📦 ${items.length} designs · ${o.startPcs || "?"} pcs\n👤 Bill Name: ${escH(o.startName || "?")}\n📱 Mobile: ${o.startMobile || "?"}`;
+  }
+  if (missing.length) text += `\n\n⚠️ Photo not available for: ${escH(missing.join(", "))}`;
+  text += "\n\n☁️ Delivered by the cloud (the phone closed before finishing the send)";
+  const det = await tg("sendMessage", { chat_id: chat, text: cutAt(text, 4000), parse_mode: "HTML", disable_web_page_preview: true,
+    reply_markup: { inline_keyboard: [[{ text: STEPS[0].label, callback_data: `s|g|${ref}` }]] } });
+  if (!det.ok) throw new Error("tg details: " + det.description);
+  const msg = det.result.message_id;
+  const noMsg = await tg("sendMessage", { chat_id: chat, text: `<b>ORDER NO. ${o.no}</b>`, parse_mode: "HTML" });
+  if (noMsg.ok) extra.push(noMsg.result.message_id);
+  const dots = await tg("sendMessage", { chat_id: chat, text: ".\n." });
+  if (dots.ok) extra.push(dots.result.message_id);
+  await db.collection("bbapp_orders").doc(ref).set({ selfSent: Date.now(), sweeping: admin.firestore.FieldValue.delete() }, { merge: true });
+  await finalizeOrder(db, { ref, chat, msg, extra, text: o.pText || text, mobile: o.startMobile, billName: o.startName || "",
+    serial: o.no, addOnTo: o.pAddOnTo || null, cust: o.pCust });
+}
+
 /* ───────────── ORDER STATUS (owner, 11-Oct-2026) ─────────────
  * Each order's details message in the Telegram group carries buttons
  * ✅ Received · 📦 Packed · 🚚 Dispatched. A tap lands here (bot webhook),
@@ -3152,6 +3287,15 @@ exports.accountStatus = onRequest(
           ? { openDays: admin.firestore.FieldValue.increment(1), lastOpenDay: new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10) } : {}) },
       { merge: true });
     }
+    // Owner 25-Oct (point 5): the cart on the phone — designs + when it last
+    // changed — for the "waiting in your cart" reminder.
+    try {
+      const cart = req.body && req.body.cart;
+      if (a && cart && typeof cart === "object") {
+        const n = Math.max(0, Math.min(999, Math.round(Number(cart.n) || 0)));
+        await ref.set({ cartN: n, cartAt: Math.max(0, Number(cart.at) || 0), cartSeen: Date.now() }, { merge: true });
+      }
+    } catch (e) { logger.warn("cart snap", { error: e.message }); }
     // 25-Oct: what customers look at / put in the cart (design no. -> count),
     // summed per day for the weekly what's-hot report. Keys are design
     // numbers only; at most 60 per kind per call.
@@ -3517,6 +3661,26 @@ exports.opsNudges = onSchedule(
       }
     } catch (e) { logger.warn("rating nudge", { error: e.message }); }
 
+    // I. owner 25-Oct (point 5): designs sitting in the cart 24 h+ -> one
+    //    push, at most once in 3 days, never after the customer ordered since.
+    if (window(12) && marks["I"] !== today) {
+      await mark("I");
+      try {
+        const carts = (await db.collection("bbapp_accounts").where("cartN", ">", 0).get()).docs;
+        let n = 0;
+        for (const d of carts) {
+          const a = d.data();
+          if (n >= 40 || a.status !== "approved" || d.id === DEMO_KEY) continue;
+          if (!a.cartAt || now - a.cartAt < 24 * 3600e3) continue;
+          if ((a.lastOrderAt || 0) > a.cartAt) continue;
+          if (a.cartRemAt && now - a.cartRemAt < 3 * 86400e3) continue;
+          await d.ref.set({ cartRemAt: now }, { merge: true });
+          await pushTo(db, d.id, `🛒 ${a.cartN} design${a.cartN === 1 ? "" : "s"} waiting in your cart — tap ORDER NOW and we start packing today.`, "/favorites");
+          n++;
+        }
+      } catch (e) { logger.warn("cart nudge", { error: e.message }); }
+    }
+
     // E. approved new customer, no order after 3 days -> one welcome push
     const fresh = (await db.collection("bbapp_accounts").where("status", "==", "approved").get()).docs;
     let sent = 0;
@@ -3535,6 +3699,37 @@ exports.opsNudges = onSchedule(
         await pushTo(db, d.id, "🛒 Ordering takes 1 minute: tap designs → SEND TO CART → ORDER NOW. Need help? Watch the video in the app or chat with us.", "/");
         await d.ref.set({ howTo: now }, { merge: true });
         sent++;
+      }
+    }
+  },
+);
+
+/** Owner 25-Oct: every 3 min — an order placed on the cloud whose details
+ *  never reached the group (phone closed / no signal mid-send) is posted by
+ *  the cloud itself: photos from Drive with the same captions, then the
+ *  details, ORDER NO. and dots, exactly like the app does. */
+exports.orderSweep = onSchedule(
+  { region: "asia-south1", schedule: "every 3 minutes", secrets: [TG_TOKEN, APNS_KEY], timeoutSeconds: 540, memory: "1GiB" },
+  async () => {
+    const db = admin.firestore();
+    const now = Date.now();
+    const q = await db.collection("bbapp_orders").where("placed", ">", now - 3 * 86400e3).get();
+    for (const doc of q.docs) {
+      const o = doc.data();
+      if (o.msg || o.status || now - o.placed < 3 * 60e3) continue;
+      if (o.sweeping && now - o.sweeping < 15 * 60e3) continue;
+      const won = await db.runTransaction(async (t) => {
+        const cur = (await t.get(doc.ref)).data() || {};
+        if (cur.msg || cur.status || (cur.sweeping && now - cur.sweeping < 15 * 60e3)) return false;
+        t.set(doc.ref, { sweeping: now }, { merge: true });
+        return true;
+      });
+      if (!won) continue;
+      try {
+        await selfDeliver(db, doc.id, o);
+      } catch (e) {
+        logger.warn("orderSweep", { ref: doc.id, error: e.message });
+        await doc.ref.set({ sweepError: String(e.message).slice(0, 200) }, { merge: true });
       }
     }
   },
@@ -4164,10 +4359,17 @@ exports.orderRelay = onRequest(
         const r = o.get("relay") || {};
         const ph = (r.photos || 0) + photos.length;
         const ms = (r.msgs || 0) + (kind === "album" ? 0 : 1);
+        if (o.get("selfSent")) return { self: true, msg: o.get("msg"), chat: o.get("chat") };
         if (!pc && (ph > RELAY_MAX_PHOTOS || ms > RELAY_MAX_MSGS)) throw new Error("429");
         if (!dry) tx.set(doc, { relay: { photos: ph, msgs: ms, ip, last: Date.now() } }, { merge: true });
-        return o.get("no");
+        return { no: o.get("no") };
       });
+      // 25-Oct: the cloud delivered this order itself (orderSweep) — the
+      // phone's late send is answered as done, nothing is posted twice.
+      if (no && no.self) {
+        return res.json(kind === "details" ? { ok: true, result: { message_id: no.msg, chat: { id: Number(no.chat) } } } : { ok: true, result: {} });
+      }
+      no = no ? no.no : null;
     } catch (e) {
       const code = Number(e.message) || 500;
       if (code === 500) logger.warn("orderRelay ref", { ref, error: e.message });

@@ -2,6 +2,7 @@ import 'dart:io';
 
 import 'chat_service.dart';
 import 'notification_service.dart';
+import 'order_service.dart';
 import 'package:dio/dio.dart';
 import 'photo_freshness.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -39,6 +40,12 @@ bool _isInsideWindow(DateTime now) {
 @pragma('vm:entry-point')
 void backgroundCallbackDispatcher() {
   Workmanager().executeTask((taskName, inputData) async {
+    // Owner 25-Oct: an order still waiting on this phone goes out from the
+    // background too (app closed) — every task run tries, never throws.
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await OrderService.retryPending(prefs, Dio());
+    } catch (_) {}
     if (taskName == kChatTaskName) {
       try {
         final prefs = await SharedPreferences.getInstance();

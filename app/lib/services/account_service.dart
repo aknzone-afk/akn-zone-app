@@ -194,7 +194,8 @@ class AccountService {
   /// 25-Oct: carries the design view / cart counts along (Stats) — one call.
   static Future<Map<String, dynamic>?> checkStatus(String mobile) async {
     final st = await Stats.pending();
-    final d = await _post('accountStatus', {'mobile': mobile, if (st.isNotEmpty) 'stats': st});
+    final cart = await Stats.cartSnap();
+    final d = await _post('accountStatus', {'mobile': mobile, if (st.isNotEmpty) 'stats': st, if (cart != null) 'cart': cart});
     if (d != null && d['ok'] == true && st.isNotEmpty) await Stats.clear();
     return d;
   }

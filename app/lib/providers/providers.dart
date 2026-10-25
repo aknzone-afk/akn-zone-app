@@ -1330,12 +1330,16 @@ class FavoritesNotifier extends StateNotifier<Set<String>> {
     final p = _ref.read(photosProvider).where((x) => x.id == id).firstOrNull;
     // ignore: discarded_futures
     Stats.bump('carts', p?.designNumber);
+    // ignore: discarded_futures
+    Stats.cart(state.length);
   }
 
   Future<void> toggle(String id) async {
     final isNow = !state.contains(id);
     state = isNow ? {...state, id} : (state.where((x) => x != id).toSet());
     await _service.setStarred(id, isNow);
+    // ignore: discarded_futures
+    Stats.cart(state.length);
     // Removing from cart also wipes any saved markup so the photo reverts to
     // its fresh Drive thumbnail. If the customer re-adds it, they start over
     // on a clean image.
@@ -1352,6 +1356,8 @@ class FavoritesNotifier extends StateNotifier<Set<String>> {
     }
     state = const {};
     await _service.clear();
+    // ignore: discarded_futures
+    Stats.cart(0);
     // Also wipe every edit so the photos revert to their unedited versions.
     final editsNotifier = _ref.read(editsProvider.notifier);
     for (final id in removedIds) {

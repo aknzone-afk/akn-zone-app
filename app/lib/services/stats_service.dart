@@ -34,6 +34,26 @@ class Stats {
     } catch (_) {/* counting must never break the app */}
   }
 
+  /// Owner 25-Oct (point 5): the cart — how many designs, and when it last
+  /// changed — goes with the status call for the "waiting in your cart" push.
+  static const _kCart = 'cart_snap_v1';
+  static Future<void> cart(int n) async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setString(_kCart, jsonEncode({'n': n, 'at': DateTime.now().millisecondsSinceEpoch}));
+    } catch (_) {}
+  }
+
+  static Future<Map<String, dynamic>?> cartSnap() async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final m = jsonDecode(p.getString(_kCart) ?? 'null');
+      return m is Map<String, dynamic> ? m : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
   static Future<void> clear() async {
     try {
       final p = await SharedPreferences.getInstance();
