@@ -240,8 +240,20 @@ exports.lookupParty = onRequest(
     const fresh = live.exists && Date.now() - (live.get("at") || 0) < 86400e3 ? (live.get("list") || []) : [];
     const names = new Set(fresh.map((x) => x.name));
     const list = [...fresh, ...(PARTIES[d] || []).filter((x) => !names.has(x.name))].slice(0, 5);
+    // 25-Oct: an account linked to its Tally party by GST / PAN (the mobile is
+    // not on that ledger) must still order as that party — not as a new one.
+    try {
+      const a = (await admin.firestore().collection("bbapp_accounts").doc(d).get()).data();
+      if (a && a.status === "approved" && a.kind === "existing" && a.party && !list.some((x) => x.name === a.party)) {
+        let rec = null;
+        for (const recs of Object.values(PARTIES)) { rec = (recs || []).find((x) => x.name === a.party); if (rec) break; }
+        const c = a.cust || {};
+        list.unshift(rec ? { ...rec } : { name: a.party, address: c.address || "", dest: c.bookingPlace || "", pincode: c.pincode || "",
+          gstin: c.taxId || "", transport: c.transport || "" });
+      }
+    } catch (e) { logger.warn("lookupParty account", { error: e.message }); }
     logger.info("lookupParty", { found: list.length });
-    return res.json({ ok: true, parties: list });
+    return res.json({ ok: true, parties: list.slice(0, 5) });
   },
 );
 
