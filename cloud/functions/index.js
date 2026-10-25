@@ -3836,6 +3836,20 @@ exports.orderSweep = onSchedule(
   async () => {
     const db = admin.firestore();
     const now = Date.now();
+    // 25-Oct (order 660): an OLD app (no placeOrder) that sent photos but
+    // never the details -> one alert at any hour, 20 min after the number
+    try {
+      const lq = await db.collection("bbapp_orders").where("at", "<", new Date(now - 20 * 60e3)).where("at", ">", new Date(now - 86400e3)).get();
+      for (const d of lq.docs) {
+        const o = d.data();
+        if (o.status || o.msg || o.lostAlert || o.placed || !o.no) continue;
+        await d.ref.set({ lostAlert: now }, { merge: true });
+        const ph = Number((o.relay && o.relay.photos) || 0);
+        await tg("sendMessage", { chat_id: ORDER_GROUP, parse_mode: "HTML",
+          text: `⚠️ <b>ORDER NO. ${o.no} is incomplete</b> — ${ph ? ph + " photo" + (ph === 1 ? "" : "s") + " arrived above, but" : "nothing arrived;"} the customer's details did not (old app version, closed mid-send)` +
+            `${o.startName ? "\n" + escH(o.startName) + (o.startMobile ? " · " + o.startMobile : "") : ""}\nIt completes by itself when the customer opens the app again.` }).catch(() => {});
+      }
+    } catch (e) { logger.warn("incomplete order check", { error: e.message }); }
     const q = await db.collection("bbapp_orders").where("placed", ">", now - 3 * 86400e3).get();
     for (const doc of q.docs) {
       const o = doc.data();
