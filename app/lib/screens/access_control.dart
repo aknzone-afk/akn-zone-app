@@ -102,6 +102,8 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       await prefs.setBool('live_test_v1', false); // owner 14-Oct: app is live
       final mo = (j['min_order'] as num?)?.toInt();
       if (mo != null && mo >= 1000) kMinOrderValue = mo; // 25-Oct: owner's minimum, no update needed
+      final fl = (j['model_flash_ms'] as num?)?.toInt();
+      if (fl != null && fl >= 0 && fl <= 5000) kModelFlashMs = fl; // 26-Oct: modelling-photo flash on open
       final min = (j[Platform.isIOS ? 'min_build_ios' : 'min_build_android'] as num?)?.toInt() ?? 0;
       final mine = int.tryParse((await PackageInfo.fromPlatform()).buildNumber) ?? 0;
       return mine > 0 && mine < min;

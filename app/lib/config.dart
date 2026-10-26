@@ -130,3 +130,7 @@ const String kAppConfigUrl = '$kDataBase/app/app-config.json';
 /// 25-Oct: set from app-config.json "min_order" at every app open (the
 /// owner can change the minimum without an app update); 30,000 until then.
 int kMinOrderValue = 30000;
+
+/// 26-Oct: opening a design shows its modelling photo for this long first,
+/// then the normal photo. app-config.json "model_flash_ms"; 0 switches it off.
+int kModelFlashMs = 1000;

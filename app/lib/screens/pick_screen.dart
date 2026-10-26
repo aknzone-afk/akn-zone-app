@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'dart:math' as math;
 
 import 'package:cached_network_image/cached_network_image.dart';
@@ -11,7 +10,9 @@ import '../l10n.dart';
 
 import '../models/photo.dart';
 import '../providers/providers.dart';
+import '../config.dart' show kModelFlashMs;
 import '../widgets/bar_button.dart';
+import '../widgets/model_pic.dart';
 import '../widgets/pick_preview.dart';
 import '../services/model_pics.dart';
 import '../services/photo_freshness.dart';
@@ -39,7 +40,32 @@ class _PickScreenState extends ConsumerState<PickScreen> {
   void initState() {
     super.initState();
     _s = ref.read(picksProvider)[widget.photoId] ?? const PickState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _guideOnce());
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await _guideOnce();
+      await _flashModel();
+    });
+  }
+
+  /// Owner 26-Oct (2): opening any design first shows its modelling photo for
+  /// about a second, then the normal photo. No modelling photo = straight to
+  /// the photo; a slow download never holds the customer (gives up quietly).
+  /// Length from app-config "model_flash_ms" (0 = off).
+  Future<void> _flashModel() async {
+    if (kModelFlashMs <= 0 || !mounted) return;
+    final design = _photo?.designNumber;
+    if (design == null) return;
+    Map<String, List<String>> all;
+    try {
+      all = await ref.read(modelPicsProvider.future).timeout(const Duration(seconds: 2));
+    } catch (_) {
+      return;
+    }
+    final pics = all[modelKey(design)] ?? const <String>[];
+    if (pics.isEmpty || !mounted) return;
+    await showModelPic(context, pics,
+        autoClose: Duration(milliseconds: kModelFlashMs),
+        giveUpAfter: const Duration(milliseconds: 2500),
+        barrier: Colors.black);
   }
 
   /// First time only: a big, simple picture-guide of how to select.
@@ -79,53 +105,6 @@ class _PickScreenState extends ConsumerState<PickScreen> {
         ],
       ),
     );
-  }
-
-  /// Owner 26-Oct: the modelling photo full screen — closes by itself after
-  /// a short look (or with the ✕), tap the button again to see it again.
-  Future<void> _showModel(BuildContext context, List<String> pics) async {
-    final nav = Navigator.of(context);
-    var open = true;
-    final timer = Timer(const Duration(milliseconds: 2500), () {
-      if (open) nav.maybePop();
-    });
-    await showGeneralDialog<void>(
-      context: context,
-      barrierDismissible: true,
-      barrierLabel: 'close',
-      barrierColor: Colors.black87,
-      pageBuilder: (ctx, _, __) => SafeArea(
-        child: Stack(children: [
-          Positioned.fill(
-            child: PageView(children: [
-              for (final u in pics)
-                InteractiveViewer(
-                  child: Center(
-                    child: CachedNetworkImage(
-                      imageUrl: u,
-                      fit: BoxFit.contain,
-                      placeholder: (_, __) => const Center(child: CircularProgressIndicator(color: Colors.white)),
-                      errorWidget: (_, __, ___) => const Center(
-                          child: Text('Photo not available', style: TextStyle(color: Colors.white70))),
-                    ),
-                  ),
-                ),
-            ]),
-          ),
-          Positioned(
-            top: 8,
-            right: 8,
-            child: IconButton.filled(
-              style: IconButton.styleFrom(backgroundColor: Colors.black54),
-              icon: const Icon(Icons.close_rounded, color: Colors.white, size: 30),
-              onPressed: () => Navigator.of(ctx).pop(),
-            ),
-          ),
-        ]),
-      ),
-    );
-    open = false;
-    timer.cancel();
   }
 
   Photo? get _photo =>
@@ -827,17 +806,34 @@ class _PickScreenState extends ConsumerState<PickScreen> {
                   Builder(builder: (context) {
                     final pics = ref.watch(modelPicsProvider).value?[modelKey(photo.designNumber)] ?? const <String>[];
                     if (pics.isEmpty) return const SizedBox.shrink();
+                    warmModelPic(pics.first); // first tap = instant
+                    // Thumbnail of the photo first, the words beside it; the
+                    // viewer closes 2.5 s after the photo is on screen.
                     return Padding(
                       padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
-                      child: SizedBox(
-                        width: double.infinity,
-                        height: 50,
-                        child: FilledButton.icon(
-                          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF7A1B2F)),
-                          icon: const Icon(Icons.person_rounded),
-                          label: Text(t('SEE MODELLING PIC', 'मॉडलिंग फ़ोटो देखें'),
-                              style: const TextStyle(fontWeight: FontWeight.w800, letterSpacing: 0.6)),
-                          onPressed: () => _showModel(context, pics),
+                      child: Material(
+                        color: const Color(0xFF7A1B2F),
+                        borderRadius: BorderRadius.circular(14),
+                        clipBehavior: Clip.antiAlias,
+                        child: InkWell(
+                          onTap: () => showModelPic(context, pics, autoClose: const Duration(milliseconds: 2500)),
+                          child: SizedBox(
+                            height: 52,
+                            child: Row(children: [
+                              const SizedBox(width: 8),
+                              ModelThumb(pics.first),
+                              const SizedBox(width: 12),
+                              Expanded(
+                                child: Text(t('SEE MODELLING PIC', 'मॉडलिंग फ़ोटो देखें'),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                        color: Colors.white, fontSize: 15, fontWeight: FontWeight.w800, letterSpacing: 0.6)),
+                              ),
+                              const Icon(Icons.chevron_right_rounded, color: Colors.white70),
+                              const SizedBox(width: 6),
+                            ]),
+                          ),
                         ),
                       ),
                     );
