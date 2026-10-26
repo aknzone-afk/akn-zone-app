@@ -1084,12 +1084,22 @@ Future<void> _silentForegroundResync(Ref ref) {
   return run;
 }
 
-/// Flat photo list.
+/// Owner 26-Oct: a DAILY UPDATE photo this phone's catalogue does not have
+/// yet (the background Drive sync adds it a little later). Kept here so the
+/// select screen / cart / order find it — tapping it said "Photo not found".
+final feedPhotosProvider = StateProvider<Map<String, Photo>>((_) => const {});
+
+/// Flat photo list (catalogue first, then DAILY UPDATE photos it lacks).
 final photosProvider = Provider<List<Photo>>((ref) {
-  return ref.watch(catalogProvider).maybeWhen(
+  final cat = ref.watch(catalogProvider).maybeWhen(
         data: (d) => d.photos,
         orElse: () => const <Photo>[],
       );
+  final extra = ref.watch(feedPhotosProvider);
+  if (extra.isEmpty) return cat;
+  final have = {for (final p in cat) p.id};
+  final add = [for (final p in extra.values) if (!have.contains(p.id)) p];
+  return add.isEmpty ? cat : [...cat, ...add];
 });
 
 /// Seed for folder cover ("key") photos, so each folder tile shows a photo

@@ -119,13 +119,30 @@ String _label(String ymd) {
 /// The day's photos: the catalogue's copy when this phone already has it
 /// (prices, OCR, cart links), else the feed's own description — never a hole.
 ({List<Photo> photos, int missing}) _photosFor(WidgetRef ref, List<DailyItem> items) {
-  final byId = {for (final p in ref.watch(photosProvider)) p.id: p};
+  final byId = {
+    for (final p in ref.watch(catalogProvider).maybeWhen(data: (d) => d.photos, orElse: () => const <Photo>[])) p.id: p
+  };
+  final known = ref.watch(feedPhotosProvider);
   var missing = 0;
   final out = <Photo>[];
+  final add = <String, Photo>{};
   for (final it in items) {
     final p = byId[it.id];
-    if (p == null) missing++;
-    out.add(p ?? it.asPhoto());
+    if (p == null) {
+      missing++;
+      final f = known[it.id] ?? it.asPhoto();
+      if (!known.containsKey(it.id)) add[it.id] = f;
+      out.add(f);
+    } else {
+      out.add(p);
+    }
+  }
+  // the select screen / cart look photos up by id — register the feed's own copy
+  if (add.isNotEmpty) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final n = ref.read(feedPhotosProvider.notifier);
+      n.state = {...n.state, ...add};
+    });
   }
   return (photos: out, missing: missing);
 }
