@@ -1394,7 +1394,10 @@ async function checkPayment(db, ref, img, notes) {
     await staff(`💰⛔ ${head}: old screenshot ${inr(p.amount)} dated ${dt}${tm ? " " + tm : ""} (bill sent ${when}) — not counted.`);
     return false;
   }
-  if (!isNaN(paidAt) && paidAt > Date.now() + 15 * 60e3) {
+  // Owner 26-Oct (AANCHAL FASHION): a bank slip has a date but no time — the
+  // 23:59 stand-in is not a "future time". Only a later DATE is future; a
+  // time on today's date (12-h misread, phone clock) is counted.
+  if (dt && dt > nowIst) {
     await staff(`💰❓ ${head}: screenshot ${inr(p.amount)} shows a future time ${dt} ${tm || ""} — please check it.`);
     return false;
   }
