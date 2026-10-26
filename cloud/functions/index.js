@@ -281,6 +281,8 @@ exports.nextOrderNo = onRequest(
     // arriving (phone closed mid-send) is then no mystery (see opsNudges H).
     const who = {
       ...(custKey(req.body && req.body.mobile) ? { startMobile: custKey(req.body.mobile) } : {}),
+      // 26-Oct: the store reviewer's demo login — routed to the owner, not the group
+      ...(custKey(req.body && req.body.mobile) === DEMO_KEY || /DEMO REVIEWER/i.test(String((req.body && req.body.billName) || "")) ? { demo: true } : {}),
       ...(req.body && req.body.billName ? { startName: String(req.body.billName).slice(0, 120) } : {}),
       ...(Number(req.body && req.body.designs) > 0 ? { startDesigns: Number(req.body.designs), startPcs: Number(req.body.pcs) || 0 } : {}),
     };
@@ -382,7 +384,7 @@ async function finalizeOrder(db, { ref, chat, msg, extra, text, mobile, billName
       const cur = (await docRef.get()).data() || {};
       if (cur.lostAlert && !cur.lostResolved) {
         await docRef.set({ lostResolved: Date.now() }, { merge: true });
-        await tg("sendMessage", { chat_id: ORDER_GROUP, parse_mode: "HTML",
+        await tg("sendMessage", { chat_id: await orderChat(cur), parse_mode: "HTML",
           text: `✅ <b>ORDER NO. ${cur.no || serial || "?"} has arrived now</b> (${cur.selfSent ? "delivered by the cloud" : "the customer's phone sent it"}) — see the order above.` }).catch(() => {});
       }
   } catch (e) { logger.warn("late arrive note", { ref, error: e.message }); }
@@ -474,7 +476,7 @@ async function tgPhotos(chat, photos, captions) {
 
 async function selfDeliver(db, ref, o) {
   const items = o.items || [];
-  const chat = String(ORDER_GROUP);
+  const chat = await orderChat(o);
   const extra = [];
   // photos, 10 per album, from Drive (the phone's marked copies are lost —
   // the caption carries the colour pick and pieces)
@@ -728,6 +730,13 @@ async function tg(method, body) {
     });
     const j = await r.json().catch(() => ({}));
     if (!j.ok) logger.warn("tg " + method, { code: j.error_code, desc: j.description, chat: body && body.chat_id });
+    // 26-Oct: the owner has not started the bot yet → his demo copy goes to the app group
+    if (!j.ok && body && String(body.chat_id) === String(OWNER_CHAT) && method !== "sendChatAction") {
+      const b2 = { ...body, chat_id: APP_CHAT };
+      if (typeof b2.text === "string") b2.text = "🧪 DEMO (reviewer) — press Start on @Aknzonesales_bot to get these privately\n" + b2.text;
+      if (typeof b2.caption === "string" && !b2.caption.startsWith("🧪")) b2.caption = "🧪 DEMO · " + b2.caption;
+      return tg(method, b2);
+    }
     return j;
   } catch (e) {
     logger.warn("tg " + method, { error: e.message });
@@ -1027,7 +1036,7 @@ exports.registerOrder = onRequest(
       const cur = (await docRef.get()).data() || {};
       if (cur.lostAlert && !cur.lostResolved) {
         await docRef.set({ lostResolved: Date.now() }, { merge: true });
-        await tg("sendMessage", { chat_id: ORDER_GROUP, parse_mode: "HTML",
+        await tg("sendMessage", { chat_id: await orderChat(cur), parse_mode: "HTML",
           text: `✅ <b>ORDER NO. ${cur.no || serial || "?"} has arrived now</b> (${cur.selfSent ? "delivered by the cloud" : "the customer's phone sent it"}) — see the order above.` }).catch(() => {});
       }
     } catch (e) { logger.warn("late arrive note", { ref, error: e.message }); }
@@ -2545,6 +2554,25 @@ exports.pruneLiveParties = onRequest(
  * group. Unpaid after 24 h → a reminder in the Party order group.
  */
 const ORDER_GROUP = -1004395901098; // owner 21-Oct: group became a supergroup on 20-Oct (old -5370195204)
+
+// Owner 26-Oct: a store reviewer's order (the demo login) never reaches the
+// order group — only real orders do. It goes to the owner privately; until he
+// has pressed Start on the bot once (PEER_ID_INVALID) the "Akn zone app"
+// group gets it instead.
+const OWNER_CHAT = 6796003742;
+const APP_CHAT = -5434766255;
+const isDemoOrder = (o) => !!o && (o.demo === true || o.startMobile === DEMO_KEY
+  || custKey(o.pCust && o.pCust.mobile) === DEMO_KEY
+  || /DEMO REVIEWER/i.test(String((o.pCust && o.pCust.billName) || o.startName || "")));
+let demoChatCache = { at: 0, chat: String(APP_CHAT) };
+async function demoChat() {
+  if (Date.now() - demoChatCache.at < 10 * 60e3) return demoChatCache.chat;
+  // getChat answers ok even before the owner pressed Start — only a real send probe tells
+  const g = await tg("sendChatAction", { chat_id: OWNER_CHAT, action: "typing" });
+  demoChatCache = { at: Date.now(), chat: String(g.ok ? OWNER_CHAT : APP_CHAT) };
+  return demoChatCache.chat;
+}
+const orderChat = async (o) => (isDemoOrder(o) ? demoChat() : String(ORDER_GROUP));
 const ADV_PROMPT = "This should be a payment screenshot (UPI app like GPay/PhonePe/Paytm/BHIM, or a bank app NEFT/RTGS/IMPS). " +
   "Return JSON: amount (number, rupees paid), date (YYYY-MM-DD of the payment as shown), time (HH:MM 24-hour as shown), " +
   "txnId (the bank's UPI Ref No. / UTR / RRN — usually 12 digits; NOT the app's own id that starts with letters like T2610… or the PhonePe/GPay transaction id when a UTR is also shown), " +
@@ -2714,6 +2742,7 @@ exports.advanceReminder = onSchedule(
       const a = d.data();
       if (a.reminded || Date.now() - (a.at || 0) < 24 * 3600e3) continue;
       if (String(d.id).startsWith("AKNTEST-")) continue; // owner's ₹5 payment trial
+      if (custKey(a.mobile) === DEMO_KEY) continue; // 26-Oct: store reviewer's demo order
       await tg("sendMessage", { chat_id: ORDER_GROUP,
         text: `⏳ NEW CUSTOMER has not paid the 10% token yet\n${a.billName || "-"} · ${a.mobile || "-"}\nOrder approx ${inr(a.total)} · token ${inr(a.due)}\nPlease call them.` });
       await d.ref.set({ reminded: Date.now() }, { merge: true });
@@ -3670,7 +3699,7 @@ exports.opsNudges = onSchedule(
     //    and the same list to the owner's app group)
     if ((window(11) || window(17)) && marks["B" + h] !== today) {
       const open = (await db.collection("bbapp_orders").where("status", "in", ["received", "getting_ready"]).get()).docs
-        .map((d) => ({ id: d.id, ...d.data() })).filter((o) => o.serial && !o.addOnTo && !o.cancelled && !/SYNTHETICS \(SURAT\)/i.test(o.billName || ""));
+        .map((d) => ({ id: d.id, ...d.data() })).filter((o) => !isDemoOrder(o) && o.serial && !o.addOnTo && !o.cancelled && !/SYNTHETICS \(SURAT\)/i.test(o.billName || ""));
       const lines = [], late = [];
       for (const o of open) {
         const st = o.statusAt && o.statusAt.toMillis ? o.statusAt.toMillis() : (o.at && o.at.toMillis ? o.at.toMillis() : now);
@@ -3696,7 +3725,7 @@ exports.opsNudges = onSchedule(
       const q = await db.collection("bbapp_orders").where("at", "<", new Date(now - 45 * 60e3)).where("at", ">", new Date(now - 3 * 86400e3)).get();
       for (const d of q.docs) {
         const o = d.data();
-        if (o.status || o.msg || o.lostAlert || !o.no) continue;
+        if (o.status || o.msg || o.lostAlert || !o.no || isDemoOrder(o)) continue;
         await d.ref.set({ lostAlert: now }, { merge: true });
         const who = o.startName ? `${escH(o.startName)}${o.startMobile ? " · " + o.startMobile : ""}${o.startDesigns ? " · " + o.startDesigns + " designs / " + (o.startPcs || "?") + " pcs" : ""}` : "customer unknown (older app)";
         await tg("sendMessage", { chat_id: ORDER_GROUP, parse_mode: "HTML",
@@ -4553,7 +4582,8 @@ exports.orderRelay = onRequest(
     if (!["album", "details", "no", "dots"].includes(kind)) return bad("bad kind");
     const pc = pcOk(req);
     const dry = pc && b.dry === true;
-    const chat = pc && /^-?\d{5,16}$/.test(String(b.testChat || "")) ? String(b.testChat) : String(ORDER_GROUP);
+    let chat = pc && /^-?\d{5,16}$/.test(String(b.testChat || "")) ? String(b.testChat) : String(ORDER_GROUP);
+    let relayOrder = null;
 
     let photos = [];
     if (kind === "album") {
@@ -4578,6 +4608,7 @@ exports.orderRelay = onRequest(
     try {
       no = await db.runTransaction(async (tx) => {
         const o = await tx.get(doc);
+        relayOrder = o.exists ? o.data() : null;
         if (!o.exists) { if (dry) return null; throw new Error("404"); }
         const at = o.get("at");
         if (!pc && at && at.toMillis && Date.now() - at.toMillis() > 14 * 86400e3) throw new Error("410");
@@ -4600,6 +4631,13 @@ exports.orderRelay = onRequest(
       const code = Number(e.message) || 500;
       if (code === 500) logger.warn("orderRelay ref", { ref, error: e.message });
       return res.status(code).json({ ok: false, description: code === 404 ? "unknown order" : code === 410 ? "order too old" : code === 429 ? "order send budget used" : "server busy" });
+    }
+
+    // Owner 26-Oct: a store reviewer's (demo) order goes to the owner
+    // privately — never to the order group.
+    if (!(pc && b.testChat) && (isDemoOrder(relayOrder) || (kind === "details" && /DEMO REVIEWER/i.test(text)))) {
+      chat = await demoChat();
+      if (!dry && !isDemoOrder(relayOrder)) await doc.set({ demo: true }, { merge: true }).catch(() => {});
     }
 
     // Owner 25-Oct: photos are HELD in the cloud — the group sees the order
