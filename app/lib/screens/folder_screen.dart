@@ -535,8 +535,8 @@ class _PhotoCardProxy extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     // Owner 26-Oct: the modelling photo flashes when this design is opened —
     // fetch it while the tile is on screen so the flash is instant.
-    final model = ref.watch(modelPicsProvider).value?[modelKey(photo.designNumber)];
-    if (model != null && model.isNotEmpty) warmModelPic(model.first);
+    final model = modelPicsOf(ref.watch(modelPicsProvider).value, photo.designNumber);
+    if (model.isNotEmpty) warmModelPic(model.first);
     // Same tile as everywhere else: one DO SELECTION box, no round icons.
     return PhotoCard(
       photo: photo,

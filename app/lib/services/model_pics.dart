@@ -24,3 +24,22 @@ final modelPicsProvider = FutureProvider<Map<String, List<String>>>((ref) async 
 
 /// Same key the shop uses: letters + digits of the design number ("N10022", "5938").
 String modelKey(String? design) => (design ?? '').toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
+
+/// Owner 26-Oct: "1444 (A)" is design 1444 — the bracket is not part of the
+/// number. Exact key first ("1444A", when such a photo exists), then the
+/// number before the bracket / space / dash, then the leading digits.
+List<String> modelPicsOf(Map<String, List<String>>? all, String? design) {
+  if (all == null || all.isEmpty || design == null) return const [];
+  final d = design.toUpperCase().trim();
+  final keys = <String>{
+    modelKey(d),
+    modelKey(d.replaceAll(RegExp(r'\(.*?\)'), '')),
+    modelKey(d.split(RegExp(r'[\s(\-/]')).first),
+    RegExp(r'^[A-Z]*\d+').stringMatch(modelKey(d)) ?? '',
+  };
+  for (final k in keys) {
+    final v = k.isEmpty ? null : all[k];
+    if (v != null && v.isNotEmpty) return v;
+  }
+  return const [];
+}

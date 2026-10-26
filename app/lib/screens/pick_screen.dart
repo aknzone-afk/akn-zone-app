@@ -60,7 +60,7 @@ class _PickScreenState extends ConsumerState<PickScreen> {
     } catch (_) {
       return;
     }
-    final pics = all[modelKey(design)] ?? const <String>[];
+    final pics = modelPicsOf(all, design);
     if (pics.isEmpty || !mounted) return;
     await showModelPic(context, pics,
         autoClose: Duration(milliseconds: kModelFlashMs),
@@ -804,7 +804,7 @@ class _PickScreenState extends ConsumerState<PickScreen> {
                   ),
                   // Owner 26-Oct: the modelling photo (12 X 18) of this design.
                   Builder(builder: (context) {
-                    final pics = ref.watch(modelPicsProvider).value?[modelKey(photo.designNumber)] ?? const <String>[];
+                    final pics = modelPicsOf(ref.watch(modelPicsProvider).value, photo.designNumber);
                     if (pics.isEmpty) return const SizedBox.shrink();
                     warmModelPic(pics.first); // first tap = instant
                     // Thumbnail of the photo first, the words beside it; the
