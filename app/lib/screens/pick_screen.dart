@@ -13,6 +13,7 @@ import '../models/photo.dart';
 import '../providers/providers.dart';
 import '../widgets/bar_button.dart';
 import '../widgets/pick_preview.dart';
+import '../services/model_pics.dart';
 import '../services/photo_freshness.dart';
 import '../services/picks_service.dart';
 import '../services/pieces_service.dart';
@@ -78,6 +79,53 @@ class _PickScreenState extends ConsumerState<PickScreen> {
         ],
       ),
     );
+  }
+
+  /// Owner 26-Oct: the modelling photo full screen — closes by itself after
+  /// a short look (or with the ✕), tap the button again to see it again.
+  Future<void> _showModel(BuildContext context, List<String> pics) async {
+    final nav = Navigator.of(context);
+    var open = true;
+    final timer = Timer(const Duration(milliseconds: 2500), () {
+      if (open) nav.maybePop();
+    });
+    await showGeneralDialog<void>(
+      context: context,
+      barrierDismissible: true,
+      barrierLabel: 'close',
+      barrierColor: Colors.black87,
+      pageBuilder: (ctx, _, __) => SafeArea(
+        child: Stack(children: [
+          Positioned.fill(
+            child: PageView(children: [
+              for (final u in pics)
+                InteractiveViewer(
+                  child: Center(
+                    child: CachedNetworkImage(
+                      imageUrl: u,
+                      fit: BoxFit.contain,
+                      placeholder: (_, __) => const Center(child: CircularProgressIndicator(color: Colors.white)),
+                      errorWidget: (_, __, ___) => const Center(
+                          child: Text('Photo not available', style: TextStyle(color: Colors.white70))),
+                    ),
+                  ),
+                ),
+            ]),
+          ),
+          Positioned(
+            top: 8,
+            right: 8,
+            child: IconButton.filled(
+              style: IconButton.styleFrom(backgroundColor: Colors.black54),
+              icon: const Icon(Icons.close_rounded, color: Colors.white, size: 30),
+              onPressed: () => Navigator.of(ctx).pop(),
+            ),
+          ),
+        ]),
+      ),
+    );
+    open = false;
+    timer.cancel();
   }
 
   Photo? get _photo =>
@@ -775,6 +823,25 @@ class _PickScreenState extends ConsumerState<PickScreen> {
             ),
           ]),
                   ),
+                  // Owner 26-Oct: the modelling photo (12 X 18) of this design.
+                  Builder(builder: (context) {
+                    final pics = ref.watch(modelPicsProvider).value?[modelKey(photo.designNumber)] ?? const <String>[];
+                    if (pics.isEmpty) return const SizedBox.shrink();
+                    return Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 6, 12, 4),
+                      child: SizedBox(
+                        width: double.infinity,
+                        height: 50,
+                        child: FilledButton.icon(
+                          style: FilledButton.styleFrom(backgroundColor: const Color(0xFF7A1B2F)),
+                          icon: const Icon(Icons.person_rounded),
+                          label: Text(t('SEE MODELLING PIC', 'मॉडलिंग फ़ोटो देखें'),
+                              style: const TextStyle(fontWeight: FontWeight.w800, letterSpacing: 0.6)),
+                          onPressed: () => _showModel(context, pics),
+                        ),
+                      ),
+                    );
+                  }),
                 ]);
               }),
             ),
