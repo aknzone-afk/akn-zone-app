@@ -4337,6 +4337,11 @@ async function partySale(db, name) {
  * Daman / Silvassa included) or within 150 km of Surat (Nandurbar side, or
  * the phone's own location) waits for the owner; everyone else is approved
  * by the bot. Returns why ("Gujarat 395…" / "location 85 km") or "". */
+/** The pincode printed on the Aadhaar, from the KYC note "Aadhaar shows 360055". */
+function aadhaarPin(kyc) {
+  for (const x of kyc || []) { const m = /Aadhaar shows (\d{6})/.exec(String(x)); if (m) return m[1]; }
+  return "";
+}
 function nearSurat(pincode, loc, city) {
   if (/RANCHI/i.test(String(city || ""))) return "Ranchi";
   const p = String(pincode || "").replace(/\D/g, "");
