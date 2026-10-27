@@ -3359,14 +3359,21 @@ exports.accountSignup = onRequest(
     // Owner 14-Oct 10:00: never auto-approve unverified places — GST or an
     // Aadhaar address must confirm the details (PAN has no address).
     const clean = !kyc.some((x) => String(x).startsWith("⚠️"));
-    const auto = india && destSale < 500000 && clean && (doc === "gst" || doc === "aadhaar") && (c.loc === undefined || !!validLoc(c.loc));
+    // Owner 27-Oct: auto-approve EVERYONE except sign-ups within ~200 km of
+    // Surat (address pincode / Aadhaar-GST pincode, or the phone's location)
+    // — those the owner decides himself. KYC must still be clean.
+    // (also the pincode the Aadhaar itself shows, when it differs)
+    const near = nearSurat(cust.pincode, c.loc) || nearSurat(aadhaarPin(kyc), null);
+    const auto = india && !near; // KYC notes stay on the group card; payment comes before dispatch anyway
+    void clean;
     const kycDocName = doc;
     const status = !india || auto ? "approved" : "pending";
     await ref.set({ status, kind: india ? "new" : "foreign", cust, kyc, kycDoc: kycDocName, abroadDirect, pinSale: india ? pinSale : null, destSale: india ? destSale : null,
-      kycPath, verifiedAt: Date.now(), at: Date.now(),
-      ...(auto ? { approvedAt: Date.now(), approvedBy: "bot (city sales under ₹5 lakh)" } : {}),
+      kycPath, verifiedAt: Date.now(), at: Date.now(), nearSurat: !!near,
+      ...(auto ? { approvedAt: Date.now(), approvedBy: "bot (outside 200 km of Surat)" } : {}),
       log: admin.firestore.FieldValue.arrayUnion({ a: india ? "🆕 signed up" : "🌍 signed up", by: "app", at: Date.now() },
-        ...(auto ? [{ a: `✅ auto-approved — ${String(cust.bookingPlace || "city").toUpperCase()} sales under ₹5 lakh`, by: "bot", at: Date.now() + 1 }] : [])) }, { merge: true });
+        ...(auto ? [{ a: "✅ auto-approved — outside 200 km of Surat", by: "bot", at: Date.now() + 1 }]
+          : near ? [{ a: `⏳ within 200 km of Surat (${near}) — owner decides`, by: "bot", at: Date.now() + 1 }] : [])) }, { merge: true });
     if (auto && kycPath) await admin.storage().bucket().file(kycPath).delete().catch(() => {});
     await saveLoc(ref, req, c.loc);
     await accPost(db, key);
@@ -3907,6 +3914,30 @@ exports.opsNudges = onSchedule(
       } catch (e) { logger.warn("cart nudge", { error: e.message }); }
     }
 
+    // L. owner 27-Oct: pending sign-ups that the new rule approves (outside
+    //    200 km of Surat, clean KYC, not put on Waiting by the owner) —
+    //    the ones waiting from before the rule, and any that slip through.
+    try {
+      const pend = (await db.collection("bbapp_accounts").where("status", "==", "pending").get()).docs;
+      for (const d of pend) {
+        const a = d.data();
+        if (a.held || a.kind !== "new" || d.id === DEMO_KEY) continue;
+        const near = nearSurat((a.cust || {}).pincode, a.loc) || nearSurat(aadhaarPin(a.kyc), null);
+        if (near) { if (!a.nearSurat) await d.ref.set({ nearSurat: true }, { merge: true }); continue; }
+        await d.ref.set({ status: "approved", approvedAt: now, approvedBy: "bot (outside 200 km of Surat)", nearSurat: false,
+          log: admin.firestore.FieldValue.arrayUnion({ a: "✅ auto-approved — outside 200 km of Surat", by: "bot", at: now }) }, { merge: true });
+        const fresh = (await d.ref.get()).data() || {};
+        if (fresh.msg && fresh.msg.id) {
+          await tg("editMessageText", { chat_id: fresh.msg.chat, message_id: fresh.msg.id, text: accText(d.id, fresh),
+            parse_mode: "HTML", reply_markup: accKeyboard(d.id, fresh.status) }).catch(() => {});
+        }
+        await pushTo(db, d.id, "✅ Your B.B Synthetics account is approved — now you can open the app and start ordering.");
+        if (fresh.kycPath) { await admin.storage().bucket().file(fresh.kycPath).delete().catch(() => {}); await d.ref.set({ kycPath: null }, { merge: true }); }
+        for (const x of fresh.idMsgs || []) await tg("deleteMessage", { chat_id: x.chat, message_id: x.id }).catch(() => {});
+        if ((fresh.idMsgs || []).length) await d.ref.set({ idMsgs: [] }, { merge: true });
+      }
+    } catch (e) { logger.warn("auto approve pending", { error: e.message }); }
+
     // K. owner 27-Oct (5): existing Tally customers who have the app but
     //    never ordered in it -> ONE push, ever (marked per account).
     if (window(11) && marks["K"] !== today) {
@@ -4298,6 +4329,29 @@ async function partySale(db, name) {
 
 /** Owner 15-Oct: the shop's location (phone GPS, optional). Not shared ->
  *  the city the internet connection shows (approximate). */
+/** Owner 27-Oct: is this sign-up within ~200 km of Surat? Pincode prefixes of
+ * South Gujarat up to Vadodara / Anand / Nadiad / Godhra, Daman, Silvassa,
+ * Nashik, Dhule, Nandurbar-Jalgaon, Palghar — plus the phone's own location.
+ * Returns why ("pincode 395…" / "location 85 km") or "" when far away. */
+const NEAR_SURAT_PIN = ["387", "388", "389", "390", "391", "392", "393", "394", "395", "396", "401", "422", "423", "424", "425"];
+/** The pincode printed on the Aadhaar, from the KYC note "Aadhaar shows 360055". */
+function aadhaarPin(kyc) {
+  for (const x of kyc || []) { const m = /Aadhaar shows (\d{6})/.exec(String(x)); if (m) return m[1]; }
+  return "";
+}
+function nearSurat(pincode, loc) {
+  const p = String(pincode || "").replace(/\D/g, "");
+  if (p.length === 6 && NEAR_SURAT_PIN.includes(p.slice(0, 3))) return `pincode ${p}`;
+  const v = validLoc(loc);
+  if (v) {
+    const toRad = (x) => x * Math.PI / 180;
+    const dLat = toRad(v.lat - 21.1702), dLng = toRad(v.lng - 72.8311);
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(21.1702)) * Math.cos(toRad(v.lat)) * Math.sin(dLng / 2) ** 2;
+    const km = 2 * 6371 * Math.asin(Math.sqrt(h));
+    if (km <= 200) return `location ${Math.round(km)} km`;
+  }
+  return "";
+}
 function validLoc(l) {
   const lat = Number(l && l.lat), lng = Number(l && l.lng);
   if (!isFinite(lat) || !isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180 || (lat === 0 && lng === 0)) return null;
