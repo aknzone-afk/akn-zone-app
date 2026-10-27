@@ -3907,6 +3907,25 @@ exports.opsNudges = onSchedule(
       } catch (e) { logger.warn("cart nudge", { error: e.message }); }
     }
 
+    // K. owner 27-Oct (5): existing Tally customers who have the app but
+    //    never ordered in it -> ONE push, ever (marked per account).
+    if (window(11) && marks["K"] !== today) {
+      await mark("K");
+      try {
+        const ex = (await db.collection("bbapp_accounts").where("kind", "==", "existing").get()).docs;
+        let n = 0;
+        for (const d of ex) {
+          const a = d.data();
+          if (n >= 200 || a.status !== "approved" || d.id === DEMO_KEY || a.demo) continue;
+          if ((a.orders || 0) > 0 || a.lastOrderAt || a.appInviteAt) continue;
+          await d.ref.set({ appInviteAt: now }, { merge: true });
+          await pushTo(db, d.id, "🙏 Now order directly in the app — same rates, faster dispatch. Select designs → ORDER NOW.", "/");
+          n++;
+        }
+        if (n) logger.info("app invite push", { n });
+      } catch (e) { logger.warn("app invite", { error: e.message }); }
+    }
+
     // J. 25-Oct: verified on WhatsApp 2-20 h ago, still no account -> one
     //    WhatsApp nudge (inside the 24 h reply window), once per number / 7 d.
     try {
