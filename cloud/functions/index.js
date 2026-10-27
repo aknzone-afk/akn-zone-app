@@ -3370,10 +3370,10 @@ exports.accountSignup = onRequest(
     const status = !india || auto ? "approved" : "pending";
     await ref.set({ status, kind: india ? "new" : "foreign", cust, kyc, kycDoc: kycDocName, abroadDirect, pinSale: india ? pinSale : null, destSale: india ? destSale : null,
       kycPath, verifiedAt: Date.now(), at: Date.now(), nearSurat: !!near,
-      ...(auto ? { approvedAt: Date.now(), approvedBy: "bot (outside 200 km of Surat)" } : {}),
+      ...(auto ? { approvedAt: Date.now(), approvedBy: "bot (outside Gujarat / 150 km of Surat)" } : {}),
       log: admin.firestore.FieldValue.arrayUnion({ a: india ? "🆕 signed up" : "🌍 signed up", by: "app", at: Date.now() },
-        ...(auto ? [{ a: "✅ auto-approved — outside 200 km of Surat", by: "bot", at: Date.now() + 1 }]
-          : near ? [{ a: `⏳ within 200 km of Surat (${near}) — owner decides`, by: "bot", at: Date.now() + 1 }] : [])) }, { merge: true });
+        ...(auto ? [{ a: "✅ auto-approved — outside Gujarat / 150 km of Surat", by: "bot", at: Date.now() + 1 }]
+          : near ? [{ a: `⏳ ${near} — owner decides`, by: "bot", at: Date.now() + 1 }] : [])) }, { merge: true });
     if (auto && kycPath) await admin.storage().bucket().file(kycPath).delete().catch(() => {});
     await saveLoc(ref, req, c.loc);
     await accPost(db, key);
@@ -3924,8 +3924,8 @@ exports.opsNudges = onSchedule(
         if (a.held || a.kind !== "new" || d.id === DEMO_KEY) continue;
         const near = nearSurat((a.cust || {}).pincode, a.loc) || nearSurat(aadhaarPin(a.kyc), null);
         if (near) { if (!a.nearSurat) await d.ref.set({ nearSurat: true }, { merge: true }); continue; }
-        await d.ref.set({ status: "approved", approvedAt: now, approvedBy: "bot (outside 200 km of Surat)", nearSurat: false,
-          log: admin.firestore.FieldValue.arrayUnion({ a: "✅ auto-approved — outside 200 km of Surat", by: "bot", at: now }) }, { merge: true });
+        await d.ref.set({ status: "approved", approvedAt: now, approvedBy: "bot (outside Gujarat / 150 km of Surat)", nearSurat: false,
+          log: admin.firestore.FieldValue.arrayUnion({ a: "✅ auto-approved — outside Gujarat / 150 km of Surat", by: "bot", at: now }) }, { merge: true });
         const fresh = (await d.ref.get()).data() || {};
         if (fresh.msg && fresh.msg.id) {
           await tg("editMessageText", { chat_id: fresh.msg.chat, message_id: fresh.msg.id, text: accText(d.id, fresh),
@@ -4329,26 +4329,21 @@ async function partySale(db, name) {
 
 /** Owner 15-Oct: the shop's location (phone GPS, optional). Not shared ->
  *  the city the internet connection shows (approximate). */
-/** Owner 27-Oct: is this sign-up within ~200 km of Surat? Pincode prefixes of
- * South Gujarat up to Vadodara / Anand / Nadiad / Godhra, Daman, Silvassa,
- * Nashik, Dhule, Nandurbar-Jalgaon, Palghar — plus the phone's own location.
- * Returns why ("pincode 395…" / "location 85 km") or "" when far away. */
-const NEAR_SURAT_PIN = ["387", "388", "389", "390", "391", "392", "393", "394", "395", "396", "401", "422", "423", "424", "425"];
-/** The pincode printed on the Aadhaar, from the KYC note "Aadhaar shows 360055". */
-function aadhaarPin(kyc) {
-  for (const x of kyc || []) { const m = /Aadhaar shows (\d{6})/.exec(String(x)); if (m) return m[1]; }
-  return "";
-}
+/** Owner 27-Oct: a sign-up anywhere in GUJARAT (pincodes 36xxxx-39xxxx,
+ * Daman / Silvassa included) or within 150 km of Surat (Nandurbar side, or
+ * the phone's own location) waits for the owner; everyone else is approved
+ * by the bot. Returns why ("Gujarat 395…" / "location 85 km") or "". */
 function nearSurat(pincode, loc) {
   const p = String(pincode || "").replace(/\D/g, "");
-  if (p.length === 6 && NEAR_SURAT_PIN.includes(p.slice(0, 3))) return `pincode ${p}`;
+  if (p.length === 6 && /^3[6-9]/.test(p)) return `Gujarat ${p}`;
+  if (p.length === 6 && p.startsWith("425")) return `pincode ${p} (within 150 km)`;
   const v = validLoc(loc);
   if (v) {
     const toRad = (x) => x * Math.PI / 180;
     const dLat = toRad(v.lat - 21.1702), dLng = toRad(v.lng - 72.8311);
     const h = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(21.1702)) * Math.cos(toRad(v.lat)) * Math.sin(dLng / 2) ** 2;
     const km = 2 * 6371 * Math.asin(Math.sqrt(h));
-    if (km <= 200) return `location ${Math.round(km)} km`;
+    if (km <= 150) return `location ${Math.round(km)} km`;
   }
   return "";
 }
