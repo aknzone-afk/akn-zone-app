@@ -3363,7 +3363,7 @@ exports.accountSignup = onRequest(
     // Surat (address pincode / Aadhaar-GST pincode, or the phone's location)
     // — those the owner decides himself. KYC must still be clean.
     // (also the pincode the Aadhaar itself shows, when it differs)
-    const near = nearSurat(cust.pincode, c.loc) || nearSurat(aadhaarPin(kyc), null);
+    const near = nearSurat(cust.pincode, c.loc, cust.bookingPlace) || nearSurat(aadhaarPin(kyc), null);
     const auto = india && !near; // KYC notes stay on the group card; payment comes before dispatch anyway
     void clean;
     const kycDocName = doc;
@@ -3921,8 +3921,12 @@ exports.opsNudges = onSchedule(
       const pend = (await db.collection("bbapp_accounts").where("status", "==", "pending").get()).docs;
       for (const d of pend) {
         const a = d.data();
+        if (a.cardStale && a.msg && a.msg.id) { // card put back to Approve/Decline after an undo
+          await tg("editMessageText", { chat_id: a.msg.chat, message_id: a.msg.id, text: accText(d.id, a), parse_mode: "HTML", reply_markup: accKeyboard(d.id, a.status) }).catch(() => {});
+          await d.ref.set({ cardStale: admin.firestore.FieldValue.delete() }, { merge: true });
+        }
         if (a.held || a.kind !== "new" || d.id === DEMO_KEY) continue;
-        const near = nearSurat((a.cust || {}).pincode, a.loc) || nearSurat(aadhaarPin(a.kyc), null);
+        const near = nearSurat((a.cust || {}).pincode, a.loc, (a.cust || {}).bookingPlace) || nearSurat(aadhaarPin(a.kyc), null);
         if (near) { if (!a.nearSurat) await d.ref.set({ nearSurat: true }, { merge: true }); continue; }
         await d.ref.set({ status: "approved", approvedAt: now, approvedBy: "bot (outside Gujarat / 150 km of Surat)", nearSurat: false,
           log: admin.firestore.FieldValue.arrayUnion({ a: "✅ auto-approved — outside Gujarat / 150 km of Surat", by: "bot", at: now }) }, { merge: true });
@@ -4333,10 +4337,13 @@ async function partySale(db, name) {
  * Daman / Silvassa included) or within 150 km of Surat (Nandurbar side, or
  * the phone's own location) waits for the owner; everyone else is approved
  * by the bot. Returns why ("Gujarat 395…" / "location 85 km") or "". */
-function nearSurat(pincode, loc) {
+function nearSurat(pincode, loc, city) {
+  if (/RANCHI/i.test(String(city || ""))) return "Ranchi";
   const p = String(pincode || "").replace(/\D/g, "");
   if (p.length === 6 && /^3[6-9]/.test(p)) return `Gujarat ${p}`;
   if (p.length === 6 && p.startsWith("425")) return `pincode ${p} (within 150 km)`;
+  // Owner 27-Oct: Ranchi (pincodes 834xxx / 835xxx) is also his decision
+  if (p.length === 6 && /^83[45]/.test(p)) return `Ranchi ${p}`;
   const v = validLoc(loc);
   if (v) {
     const toRad = (x) => x * Math.PI / 180;
