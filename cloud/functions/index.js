@@ -3503,11 +3503,52 @@ exports.accountStatus = onRequest(
         }
       }
     } catch (e) { logger.warn("stats", { error: e.message }); }
+    // Owner 27-Oct (3): where customers stop — cart / order screen / below
+    // ₹30,000 / sent. Per customer (funnel.*) and per day (steps.*).
+    try {
+      const sp = req.body && req.body.stats && req.body.stats.steps;
+      if (a && sp && typeof sp === "object") {
+        const acc = {}, dayInc = {};
+        for (const [k, v] of Object.entries(sp).slice(0, 20)) {
+          const name = String(k).replace(/[^a-z_]/g, "").slice(0, 24);
+          const n = Math.min(100, Math.max(0, Math.round(Number(v) || 0)));
+          if (!name || !n) continue;
+          acc[`funnel.${name}`] = admin.firestore.FieldValue.increment(n);
+          dayInc[`steps.${name}`] = admin.firestore.FieldValue.increment(n);
+        }
+        if (Object.keys(acc).length) {
+          acc.funnelAt = Date.now();
+          await ref.set(acc, { merge: true });
+          const day = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
+          await admin.firestore().collection("bbapp_stats").doc(day).set(dayInc, { merge: true });
+        }
+      }
+    } catch (e) { logger.warn("steps", { error: e.message }); }
+    let hot = [];
+    try { hot = await hotDesigns(admin.firestore()); } catch (e) { /* never blocks the status */ }
     return res.json({ ok: true, status: (a && a.status) || "none", kind: (a && a.kind) || null,
-      party: (a && a.party) || null, cust: (a && a.cust) || null });
+      party: (a && a.party) || null, cust: (a && a.cust) || null, hot });
   },
 );
 
+
+/** Owner 27-Oct (4): this week's most-carted designs (then most-viewed) —
+ * the app shows them under the ₹30,000 bar so customers can reach it.
+ * Computed at most once an hour per instance. */
+let HOT = { at: 0, list: [] };
+async function hotDesigns(db) {
+  if (Date.now() - HOT.at < 3600e3) return HOT.list;
+  const score = {};
+  for (let i = 0; i < 7; i++) {
+    const day = new Date(Date.now() + 5.5 * 3600e3 - i * 86400e3).toISOString().slice(0, 10);
+    const d = (await db.collection("bbapp_stats").doc(day).get()).data();
+    if (!d) continue;
+    for (const [k, v] of Object.entries(d.carts || {})) score[k] = (score[k] || 0) + 5 * Number(v || 0);
+    for (const [k, v] of Object.entries(d.views || {})) score[k] = (score[k] || 0) + Number(v || 0);
+  }
+  HOT = { at: Date.now(), list: Object.entries(score).sort((x, y) => y[1] - x[1]).slice(0, 20).map(([k]) => k) };
+  return HOT.list;
+}
 
 /** Pincodes of existing Tally customers (parties.json, Sundry Debtors). */
 let PINSET = null;

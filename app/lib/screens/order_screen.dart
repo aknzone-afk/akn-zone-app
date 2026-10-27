@@ -19,6 +19,9 @@ import '../services/photo_freshness.dart';
 import '../services/marks_service.dart';
 import '../services/picks_service.dart';
 import '../services/pieces_service.dart';
+import '../config.dart' show kMinOrderValue;
+import '../services/stats_service.dart';
+import '../widgets/hot_picks.dart';
 import '../widgets/min_order_bar.dart';
 import '../widgets/pick_preview.dart';
 
@@ -88,6 +91,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
   @override
   void initState() {
     super.initState();
+    Stats.step('order_open'); // owner 27-Oct (3): funnel
     final saved =
         OrderService.savedCustomer(ref.read(sharedPreferencesProvider));
     if (saved != null) {
@@ -479,6 +483,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       return;
     }
     if (_check(photos).below) {
+      Stats.step('order_blocked'); // owner 27-Oct (3)
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(t('Minimum order is ${MinOrderBar.minLabel}. Please select a few more designs.',
               'कम से कम ${MinOrderBar.minLabel} का ऑर्डर होना चाहिए। कुछ और डिज़ाइन चुनें।'))));
@@ -918,6 +923,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       return;
     }
     HapticFeedback.mediumImpact();
+    Stats.step('order_sent'); // owner 27-Oct (3)
     // Owner: the cart empties by itself once the order is placed.
     await ref.read(favoritesProvider.notifier).clear();
     if (!mounted) return;
@@ -1102,6 +1108,8 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                             ? null
                             : '${OrderService.untilLabel(parcel.until)} (${parcel.left} of ${OrderService.kMaxAddOns} add-ons left)');
                   }),
+                  if (value.below && OrderService.activeParcel(ref.read(sharedPreferencesProvider), mobile: _mobileNow) == null)
+                    HotPicksRow(short: kMinOrderValue - value.known), // owner 27-Oct (4)
                   if (value.below)
                     Align(
                       alignment: Alignment.centerLeft,

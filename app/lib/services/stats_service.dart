@@ -34,6 +34,38 @@ class Stats {
     } catch (_) {/* counting must never break the app */}
   }
 
+  /// Owner 27-Oct: where a customer stops on the way to an order —
+  /// 'cart_open', 'cart_blocked' (below ₹30,000), 'order_open',
+  /// 'order_blocked', 'order_sent', 'hot_tap'. Counts only.
+  static Future<void> step(String name) async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      final m = await pending();
+      final sub = Map<String, dynamic>.from(m['steps'] as Map? ?? {});
+      sub[name] = ((sub[name] as num?) ?? 0) + 1;
+      m['steps'] = sub;
+      await p.setString(_k, jsonEncode(m));
+    } catch (_) {}
+  }
+
+  /// Owner 27-Oct: this week's popular designs (from the status call) —
+  /// shown under the ₹30,000 bar.
+  static const _kHot = 'hot_v1';
+  static Future<void> saveHot(List hot) async {
+    try {
+      final p = await SharedPreferences.getInstance();
+      await p.setStringList(_kHot, [for (final x in hot.take(20)) '$x']);
+    } catch (_) {}
+  }
+
+  static List<String> hot(SharedPreferences p) {
+    try {
+      return p.getStringList(_kHot) ?? const [];
+    } catch (_) {
+      return const [];
+    }
+  }
+
   /// Owner 25-Oct (point 5): the cart — how many designs, and when it last
   /// changed — goes with the status call for the "waiting in your cart" push.
   static const _kCart = 'cart_snap_v1';

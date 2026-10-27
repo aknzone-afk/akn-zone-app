@@ -12,6 +12,9 @@ import '../services/picks_service.dart';
 import '../services/pieces_service.dart';
 import '../services/whatsapp_share.dart';
 import '../widgets/bar_button.dart';
+import '../config.dart' show kMinOrderValue;
+import '../services/stats_service.dart';
+import '../widgets/hot_picks.dart';
 import '../widgets/min_order_bar.dart';
 import '../widgets/photo_grid.dart';
 import 'manual_price_screen.dart';
@@ -25,6 +28,12 @@ class FavoritesScreen extends ConsumerStatefulWidget {
 
 class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
   bool _sending = false;
+
+  @override
+  void initState() {
+    super.initState();
+    Stats.step('cart_open'); // owner 27-Oct (3): funnel
+  }
 
   /// ORDER NOW: blocked below ₹30,000 (owner: "first make it 30,000").
   void _orderNow(List<Photo> favPhotos) {
@@ -46,6 +55,7 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
       context.push('/order');
       return;
     }
+    Stats.step('cart_blocked');
     showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -273,7 +283,7 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
                           final parcel = OrderService.activeParcel(
                               ref.read(sharedPreferencesProvider),
                               mobile: OrderService.savedCustomer(ref.read(sharedPreferencesProvider))?.mobile);
-                          return MinOrderBar(
+                          final bar = MinOrderBar(
                               progress: v.progress,
                               below: v.below,
                               amount: v.known,
@@ -282,6 +292,12 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
                               addOnUntil: parcel == null
                                   ? null
                                   : '${OrderService.untilLabel(parcel.until)} (${parcel.left} of ${OrderService.kMaxAddOns} add-ons left)');
+                          // Owner 27-Oct (4): below ₹30,000 → popular designs to add
+                          if (!v.below || parcel != null) return bar;
+                          return Column(mainAxisSize: MainAxisSize.min, children: [
+                            bar,
+                            HotPicksRow(short: kMinOrderValue - v.known),
+                          ]);
                         }),
                       );
                     }),

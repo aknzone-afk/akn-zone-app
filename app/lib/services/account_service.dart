@@ -197,6 +197,7 @@ class AccountService {
     final cart = await Stats.cartSnap();
     final d = await _post('accountStatus', {'mobile': mobile, if (st.isNotEmpty) 'stats': st, if (cart != null) 'cart': cart});
     if (d != null && d['ok'] == true && st.isNotEmpty) await Stats.clear();
+    if (d != null && d['hot'] is List && (d['hot'] as List).isNotEmpty) await Stats.saveHot(d['hot'] as List);
     return d;
   }
 
