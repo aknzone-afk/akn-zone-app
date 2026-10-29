@@ -712,6 +712,44 @@ function statusKeyboard(ref, d) {
 
 /** Owner 17-Oct: ⏸ hold (toggle) and 🚫 party does not want the goods
  *  (undo only by the same person). Both written to the STATUS log. */
+/** Owner 29-Oct: bills cancelled in Tally from the cancel-bill group →
+ *  the app order (main + its add-ons) is marked "party does not want" once,
+ *  the card redrawn, and a line posted under the order. Only an order whose
+ *  bill no. is exactly that bill AND whose party matches. */
+async function partyCancels(db, cancels) {
+  let n = 0;
+  const list = (Array.isArray(cancels) ? cancels : []).slice(0, 200).filter((c) => c && c.billNo);
+  if (!list.length) return 0;
+  const snap = await db.collection("bbapp_orders").where("status", "in", ["bill_sent", "payment_received"]).get();
+  for (const c of list) {
+    const bill = normBill(c.billNo);
+    const party = normName(c.party);
+    const hits = snap.docs.filter((x) => {
+      const d = x.data();
+      if (d.cancelled || d.cancelBill === bill) return false;
+      if (normBill(d.billNo) !== bill && normBill(d.tallyBillNo) !== bill) return false;
+      const on = normName(d.ledgerName || d.billName);
+      return !party || !on || on === party || on.includes(party) || party.includes(on);
+    });
+    for (const x of hits) {
+      const at = Date.now();
+      const by = `Party (bill ${c.billNo} cancelled)`;
+      await x.ref.set({ cancelled: true, cancelledBy: by, cancelledAt: at, cancelledUid: 0, cancelBill: bill,
+        log: admin.firestore.FieldValue.arrayUnion({ a: "cancel", by, at, uid: 0 }) }, { merge: true });
+      const d = (await x.ref.get()).data() || {};
+      if (d.chat && d.msg) {
+        await tg("editMessageText", { chat_id: d.chat, message_id: d.msg, text: statusText(d, ""), parse_mode: "HTML",
+          disable_web_page_preview: true, reply_markup: statusKeyboard(x.id, d) }).catch(() => {});
+        const under = (d.relaySent && d.relaySent.no && d.relaySent.no.msg) || d.msg;
+        await tg("sendMessage", { chat_id: d.chat, reply_to_message_id: under, parse_mode: "HTML",
+          text: `🚫 <b>CANCELLED BY PARTY</b> — ORDER NO. ${d.serial || d.no || "?"} · ${escH(d.billName || "")}\nBill ${escH(c.billNo)} cancelled in Tally (Cancel bill group).` }).catch(() => {});
+      }
+      n++;
+    }
+  }
+  return n;
+}
+
 async function holdCancelTap(db, q, tag, ref) {
   const docRef = db.collection("bbapp_orders").doc(ref);
   const name = [q.from && q.from.first_name, q.from && q.from.last_name].filter(Boolean).join(" ")
@@ -1764,6 +1802,12 @@ exports.syncDispatch = onRequest(
   { region: "asia-south1", secrets: [PC_KEY, TG_TOKEN], timeoutSeconds: 120, memory: "256MiB", maxInstances: 1, invoker: "public" },
   async (req, res) => {
     if (req.method !== "POST" || !pcOk(req)) return res.status(403).json({ ok: false });
+    // Owner 29-Oct: a bill cancelled in the cancel-bill group (order bot log)
+    // -> its app order shows "🚫 CANCELLED BY PARTY" under the order.
+    let cancelled = 0;
+    try { cancelled = await partyCancels(admin.firestore(), (req.body && req.body.cancels) || []); }
+    catch (e) { logger.warn("partyCancels", { error: e.message }); }
+    if (req.body && req.body.cancelsOnly) return res.json({ ok: true, cancelled });
     const rows = (req.body && req.body.rows) || [];
     const byBill = new Map();
     for (const r of rows) if (r && r.billNo) byBill.set(normBill(r.billNo), r);
