@@ -745,9 +745,30 @@ async function partyCancels(db, cancels) {
           text: `🚫 <b>CANCELLED BY PARTY</b> — ORDER NO. ${d.serial || d.no || "?"} · ${escH(d.billName || "")}\nBill ${escH(c.billNo)} cancelled in Tally (Cancel bill group).` }).catch(() => {});
       }
       n++;
+      // Owner 29-Oct: a party's SECOND cancelled bill -> blocked from the app
+      // (the owner gets the card with ↩️ Unblock).
+      try { await blockRepeatCanceller(db, d); } catch (e) { logger.warn("cancel block", { ref: x.id, error: e.message }); }
     }
   }
   return n;
+}
+
+async function blockRepeatCanceller(db, d) {
+  const key = accKey(d.mobile || d.startMobile || (d.pCust && d.pCust.mobile));
+  if (!key) return;
+  const a = (await db.collection("bbapp_accounts").doc(key).get()).data() || {};
+  if (a.status === "blocked") return;
+  const mine = await db.collection("bbapp_orders").where("mobile", "==", d.mobile || key).get();
+  const bills = [...new Set(mine.docs.map((x) => x.data()).filter((o) => o.cancelled && o.cancelBill).map((o) => o.cancelBill))];
+  if (bills.length < 2) return;
+  await db.collection("bbapp_accounts").doc(key).set({ status: "blocked", blockedBy: "bot (2 cancelled orders)", blockedAt: Date.now(),
+    log: admin.firestore.FieldValue.arrayUnion({ a: "🚫 blocked — 2nd cancelled order", by: `bot (bills ${bills.join(", ")})`, at: Date.now() }) }, { merge: true });
+  const chat = await approvalsChat(db);
+  if (chat) {
+    await tg("sendMessage", { chat_id: chat, parse_mode: "HTML",
+      text: `🚫 <b>BLOCKED from the app</b> — ${escH(d.billName || a.party || "")} · ${key}\nCancelled orders twice: bills ${escH(bills.join(", "))}.`,
+      reply_markup: { inline_keyboard: [[{ text: "↩️ Unblock", callback_data: `a|unb|${key}` }]] } }).catch(() => {});
+  }
 }
 
 async function holdCancelTap(db, q, tag, ref) {
