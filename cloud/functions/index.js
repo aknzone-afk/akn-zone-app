@@ -22,6 +22,29 @@ const { readOrderPhoto } = require("./orderVision");
 
 // Own FREE key (BBSynRenamer project) — never spends AKN Chat's daily free quota.
 const GEMINI_API_KEY = defineSecret("BBAPP_GEMINI_KEY");
+// Owner 29-Oct: a second Gemini key — when one key is out of quota (429)
+// every Gemini call (here and in orderVision) is retried on the other; a
+// spent key is skipped for 15 minutes.
+const GEMINI_KEY2 = defineSecret("BBAPP_GEMINI_KEY2");
+const GEM_SPENT = new Map(); // key -> until (ms)
+const _fetch = globalThis.fetch;
+globalThis.fetch = async (url, opts) => {
+  const h = opts && opts.headers;
+  const k0 = h && !(h instanceof Headers) ? h["x-goog-api-key"] : null;
+  if (!k0 || !/generativelanguage\.googleapis\.com/.test(String(url))) return _fetch(url, opts);
+  let keys = [k0];
+  try { const a = GEMINI_API_KEY.value(), b = GEMINI_KEY2.value(); keys = [...new Set([k0, a, b].filter(Boolean))]; } catch (e) { /* function without the 2nd key */ }
+  const now = Date.now();
+  const live = keys.filter((k) => !(GEM_SPENT.get(k) > now));
+  const order = live.length ? live : keys;
+  let r = null;
+  for (const k of order) {
+    r = await _fetch(url, { ...opts, headers: { ...h, "x-goog-api-key": k } });
+    if (r.status !== 429 && r.status !== 403) return r;
+    GEM_SPENT.set(k, Date.now() + 15 * 60e3);
+  }
+  return r;
+};
 // Apple push key "AKN Push" (Key ID YS956XB4FC, team DWJM58G45V) — iPhone
 // push goes straight to Apple (APNs), owner 11-Oct-2026.
 const APNS_KEY = defineSecret("BBAPP_APNS_KEY");
@@ -74,7 +97,7 @@ function custKey(raw) {
 exports.readMarks = onRequest(
   {
     region: "asia-south1",
-    secrets: [GEMINI_API_KEY],
+    secrets: [GEMINI_API_KEY, GEMINI_KEY2],
     timeoutSeconds: 120,
     memory: "512MiB",
     maxInstances: 5,
@@ -141,7 +164,7 @@ const BOX_SCHEMA = { type: "object", properties: {
   designNo: { type: ["string", "null"] }, price: { type: ["number", "null"] } }, required: ["sarees"] };
 
 exports.detectSarees = onRequest(
-  { region: "asia-south1", secrets: [GEMINI_API_KEY, PC_KEY], timeoutSeconds: 120, memory: "512MiB", maxInstances: 5, invoker: "public" },
+  { region: "asia-south1", secrets: [GEMINI_API_KEY, GEMINI_KEY2, PC_KEY], timeoutSeconds: 120, memory: "512MiB", maxInstances: 5, invoker: "public" },
   async (req, res) => {
     if (req.method !== "POST") return res.status(405).json({ ok: false });
     if (!pcOk(req)) return res.status(403).json({ ok: false });
@@ -898,7 +921,7 @@ async function tg(method, body) {
 }
 
 exports.tgWebhook = onRequest(
-  { region: "asia-south1", secrets: [TG_TOKEN, TG_SECRET, GEMINI_API_KEY, APNS_KEY], timeoutSeconds: 120, memory: "256MiB", maxInstances: 3, invoker: "public" },
+  { region: "asia-south1", secrets: [TG_TOKEN, TG_SECRET, GEMINI_API_KEY, GEMINI_KEY2, APNS_KEY], timeoutSeconds: 120, memory: "256MiB", maxInstances: 3, invoker: "public" },
   async (req, res) => {
     if (req.get("x-telegram-bot-api-secret-token") !== TG_SECRET.value().trim()) return res.status(403).send("no");
     const u = req.body || {};
@@ -1865,7 +1888,7 @@ exports.billImage = onRequest(
 
 /** App: party's payment screenshot → posted under the order → Payment received. */
 exports.paymentProof = onRequest(
-  { region: "asia-south1", secrets: [TG_TOKEN, GEMINI_API_KEY, APNS_KEY], timeoutSeconds: 60, memory: "512MiB", maxInstances: 3, invoker: "public", cors: true },
+  { region: "asia-south1", secrets: [TG_TOKEN, GEMINI_API_KEY, GEMINI_KEY2, APNS_KEY], timeoutSeconds: 60, memory: "512MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
     if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
     const ref = String((req.body && req.body.ref) || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
@@ -2250,7 +2273,7 @@ async function chatOpen(db, d) {
 }
 
 exports.chatSend = onRequest(
-  { region: "asia-south1", secrets: [TG_TOKEN, GEMINI_API_KEY, APNS_KEY, PC_KEY], timeoutSeconds: 60, memory: "512MiB", maxInstances: 3, invoker: "public", cors: true },
+  { region: "asia-south1", secrets: [TG_TOKEN, GEMINI_API_KEY, GEMINI_KEY2, APNS_KEY, PC_KEY], timeoutSeconds: 60, memory: "512MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
     if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
     // Owner 29-Oct: shop PC only — check a screenshot the customer already
@@ -2868,7 +2891,7 @@ exports.advanceStart = onRequest(
 );
 
 exports.advanceProof = onRequest(
-  { region: "asia-south1", secrets: [GEMINI_API_KEY], timeoutSeconds: 120, memory: "512MiB", maxInstances: 3, invoker: "public", cors: true },
+  { region: "asia-south1", secrets: [GEMINI_API_KEY, GEMINI_KEY2], timeoutSeconds: 120, memory: "512MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
     if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
     const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
