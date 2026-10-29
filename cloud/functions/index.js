@@ -671,6 +671,8 @@ function statusText(d, fallbackPlain) {
  * "u|" = UNDO (done step) — so a double tap can never flip a step back.
  */
 const firstName = (x) => String(x || "").trim().split(/\s+/)[0] || "?";
+const CANCEL_ROW = (ref) => [{ text: "🚫 Cancel order (party said cancel)", callback_data: `x|ask|${ref}`.slice(0, 64) }];
+
 function statusKeyboard(ref, d) {
   const cur = (d && d.status) || "received";
   const ci = ORDER.indexOf(cur);
@@ -696,10 +698,12 @@ function statusKeyboard(ref, d) {
   const before = ci < ORDER.indexOf("dispatched");
   if (d && d.hold) {
     rows.push([{ text: `⏸ ON HOLD — ${firstName(d.holdBy)} ${dhm(d.holdAt || 0)} · tap to resume`.slice(0, 60), callback_data: `h|x|${ref}`.slice(0, 64) }]);
+    rows.push(CANCEL_ROW(ref));
     return { inline_keyboard: rows };
   }
   const next = STEPS.find((x) => ORDER.indexOf(x.status) === ci + 1);
-  const extra = before ? [[{ text: "⏸ Keep on hold", callback_data: `h|x|${ref}`.slice(0, 64) }]] : [];
+  // Owner 29-Oct: staff call the party; "cancel" -> 🚫 Cancel order (asks once).
+  const extra = before ? [[{ text: "⏸ Keep on hold", callback_data: `h|x|${ref}`.slice(0, 64) }], CANCEL_ROW(ref)] : [];
   if (next && next.auto) {
     const wait = next.k === "y" && d && d.payBal != null ? `💰 Closing balance ${inr(d.payBal)} · ${dmyOf(d.payChk || Date.now())}` : (next.wait || "⏳ Waiting");
     rows.push([{ text: wait, callback_data: "n" }]);
@@ -759,14 +763,16 @@ async function blockRepeatCanceller(db, d) {
   const a = (await db.collection("bbapp_accounts").doc(key).get()).data() || {};
   if (a.status === "blocked") return;
   const mine = await db.collection("bbapp_orders").where("mobile", "==", d.mobile || key).get();
-  const bills = [...new Set(mine.docs.map((x) => x.data()).filter((o) => o.cancelled && o.cancelBill).map((o) => o.cancelBill))];
+  // one cancel per bill / per main order (its add-ons are the same order)
+  const bills = [...new Set(mine.docs.map((x) => ({ id: x.id, ...x.data() })).filter((o) => o.cancelled)
+    .map((o) => o.cancelBill || o.addOnTo || o.billGroup || o.id))];
   if (bills.length < 2) return;
   await db.collection("bbapp_accounts").doc(key).set({ status: "blocked", blockedBy: "bot (2 cancelled orders)", blockedAt: Date.now(),
     log: admin.firestore.FieldValue.arrayUnion({ a: "🚫 blocked — 2nd cancelled order", by: `bot (bills ${bills.join(", ")})`, at: Date.now() }) }, { merge: true });
   const chat = await approvalsChat(db);
   if (chat) {
     await tg("sendMessage", { chat_id: chat, parse_mode: "HTML",
-      text: `🚫 <b>BLOCKED from the app</b> — ${escH(d.billName || a.party || "")} · ${key}\nCancelled orders twice: bills ${escH(bills.join(", "))}.`,
+      text: `🚫 <b>BLOCKED from the app</b> — ${escH(d.billName || a.party || "")} · ${key}\nCancelled orders twice (${escH(bills.join(", "))}).`,
       reply_markup: { inline_keyboard: [[{ text: "↩️ Unblock", callback_data: `a|unb|${key}` }]] } }).catch(() => {});
   }
 }
@@ -793,7 +799,7 @@ async function holdCancelTap(db, q, tag, ref) {
     if (!d.cancelled) {
       tx.set(docRef, { cancelled: true, cancelledBy: name, cancelledAt: at, cancelledUid: uid, hold: del, holdBy: del, holdAt: del,
         log: admin.firestore.FieldValue.arrayUnion({ a: "cancel", by: name, at, uid }) }, { merge: true });
-      return { ok: true, msg: "🚫 Marked: party does not want the goods" };
+      return { ok: true, msg: "🚫 Order cancelled — party does not want the goods", cancel: true };
     }
     if (d.cancelledUid && d.cancelledUid !== uid) return { ok: false, msg: `Only ${d.cancelledBy} can undo this.` };
     tx.set(docRef, { cancelled: del, cancelledBy: del, cancelledAt: del, cancelledUid: del,
@@ -807,6 +813,7 @@ async function holdCancelTap(db, q, tag, ref) {
       text: statusText(fresh, q.message.text), parse_mode: "HTML", disable_web_page_preview: true,
       reply_markup: statusKeyboard(ref, fresh) });
     await adoptCard(db, ref, fresh, q);
+    if (verdict.cancel) { try { await blockRepeatCanceller(db, fresh); } catch (e) { logger.warn("cancel block", { ref, error: e.message }); } }
   }
 }
 
@@ -892,6 +899,17 @@ exports.tgWebhook = onRequest(
         }
         if (tag === "m" && ref) {
           await moneyReceivedTap(db, q, ref);
+          return res.status(200).send("ok");
+        }
+        if (tag === "x" && (k === "ask" || k === "no") && ref && q.message) {
+          // Owner 29-Oct: a cancel is asked once — Yes / No in place of the buttons.
+          const d0 = (await db.collection("bbapp_orders").doc(ref).get()).data() || {};
+          const kb = k === "ask" && !d0.cancelled
+            ? { inline_keyboard: [[{ text: "✅ YES — party cancelled", callback_data: `x|x|${ref}`.slice(0, 64) },
+              { text: "✖ No", callback_data: `x|no|${ref}`.slice(0, 64) }]] }
+            : statusKeyboard(ref, d0);
+          await tg("answerCallbackQuery", { callback_query_id: q.id, text: k === "ask" ? "Party said cancel? Tap YES to cancel this order." : "" });
+          await tg("editMessageReplyMarkup", { chat_id: q.message.chat.id, message_id: q.message.message_id, reply_markup: kb });
           return res.status(200).send("ok");
         }
         if ((tag === "h" || tag === "x") && ref) {
