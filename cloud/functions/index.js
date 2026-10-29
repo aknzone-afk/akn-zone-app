@@ -506,7 +506,7 @@ async function selfDeliver(db, ref, o) {
     });
     if (photos.length) extra.push(...await tgPhotos(chat, photos, caps));
   }
-  let text = o.pText || "";
+  let text = withPartyLines(o.pText || "", o.startMobile || (o.pCust && o.pCust.mobile), o.startName);
   if (!text) {
     text = `📦 ${items.length} designs · ${o.startPcs || "?"} pcs\n👤 Bill Name: ${escH(o.startName || "?")}\n📱 Mobile: ${o.startMobile || "?"}`;
   }
@@ -4337,6 +4337,33 @@ async function partySale(db, name) {
  * Daman / Silvassa included) or within 150 km of Surat (Nandurbar side, or
  * the phone's own location) waits for the owner; everyone else is approved
  * by the bot. Returns why ("Gujarat 395…" / "location 85 km") or "". */
+/** Owner 29-Oct: under an OLD customer's Booking Place line add
+ *   📱 Mobile: 98xxxxxxxx
+ *   👥 Group: YOUTUBE        (the party's Tally ledger group = agent)
+ * Group comes from parties.json (by mobile, matched on the bill name).
+ * NEW customers already show their mobile; text without the Booking
+ * Place line or already carrying "Group:" is returned unchanged. */
+function withPartyLines(text, mobile, billName) {
+  const t = String(text || "");
+  if (!t || /NEW CUSTOMER/.test(t) || /👥 <b>Group:<\/b>/.test(t)) return t;
+  const lines = t.split("\n");
+  const i = lines.findIndex((l) => /Booking Place:/.test(l));
+  if (i < 0) return t;
+  const mob = custKey(mobile);
+  let group = "";
+  try {
+    if (!PARTIES) PARTIES = require("./parties.json");
+    const recs = (mob && PARTIES[mob]) || [];
+    const name = String(billName || "").trim().toUpperCase()
+      || ((/Bill Name:<\/b>\s*(.+)$/.exec(lines.find((l) => /Bill Name:/.test(l)) || "") || [])[1] || "").trim().toUpperCase();
+    const hit = recs.find((r) => String(r.name || "").toUpperCase() === name) || (recs.length === 1 ? recs[0] : null);
+    group = hit && hit.group ? String(hit.group) : "";
+  } catch (e) { /* list missing — mobile still shown */ }
+  const add = [`📱 <b>Mobile:</b> ${mob || "-"}`, `👥 <b>Group:</b> ${escH(group || "not found in Tally")}`];
+  lines.splice(i + 1, 0, ...add);
+  return lines.join("\n");
+}
+
 /** The pincode printed on the Aadhaar, from the KYC note "Aadhaar shows 360055". */
 function aadhaarPin(kyc) {
   for (const x of kyc || []) { const m = /Aadhaar shows (\d{6})/.exec(String(x)); if (m) return m[1]; }
@@ -4781,6 +4808,14 @@ exports.orderRelay = onRequest(
         logger.warn("relay hold", { ref, error: e.message });
         return res.status(503).json({ ok: false, description: "server busy" });
       }
+    }
+    // Owner 29-Oct: an OLD customer's order shows the mobile + the party's
+    // Tally group (agent / YOUTUBE …) in the order group — every order.
+    if (kind === "details") {
+      const ro = relayOrder || {};
+      let mob = ro.startMobile || (ro.pCust && ro.pCust.mobile) || "";
+      if (!mob) { try { mob = await mobileForIp(db, ip); } catch (e) { /* unknown */ } }
+      text = withPartyLines(text, mob, ro.startName || (ro.pCust && ro.pCust.billName));
     }
     if (kind === "details" && !dry) {
       try {
