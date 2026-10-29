@@ -800,7 +800,9 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
       _checkNetCountry();
     }
     return _Page(children: [
-      const _Wordmark(),
+      // Owner 29-Oct: no reviewer button for customers — store reviewers
+      // long-press the logo (told in the review notes).
+      GestureDetector(onLongPress: _reviewerLogin, child: const _Wordmark()),
       const SizedBox(height: 26),
       const Text('Welcome to B.B Synthetics',
           textAlign: TextAlign.center,
@@ -843,10 +845,6 @@ class _OnboardingFlowState extends State<OnboardingFlow> with WidgetsBindingObse
       TextButton(
         onPressed: () => launchUrl(Uri.parse(kPrivacyUrl), mode: LaunchMode.externalApplication),
         child: const Text('Privacy policy', style: TextStyle(fontSize: 12.5)),
-      ),
-      TextButton(
-        onPressed: _reviewerLogin,
-        child: const Text('Store reviewer login', style: TextStyle(fontSize: 12.5)),
       ),
     ]);
   }
