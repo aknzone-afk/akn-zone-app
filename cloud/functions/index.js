@@ -474,6 +474,33 @@ async function tgPhotos(chat, photos, captions) {
   return Array.isArray(r) ? r.map((m) => m.message_id) : [r.message_id];
 }
 
+/** Owner 29-Oct: details are in the group but ORDER NO. / dots never came
+ *  (phone closed) — post the missing ones and link the order (once). */
+async function finishOrder(db, ref, o) {
+  const docRef = db.collection("bbapp_orders").doc(ref);
+  const won = await db.runTransaction(async (t) => {
+    const cur = (await t.get(docRef)).data() || {};
+    if (cur.finishing && Date.now() - cur.finishing < 10 * 60e3) return false;
+    t.set(docRef, { finishing: Date.now() }, { merge: true });
+    return true;
+  });
+  if (!won) return;
+  const rs = o.relaySent || {};
+  const chat = rs.details.chat;
+  const extra = [];
+  for (const [k, text] of [["no", `<b>ORDER NO. ${o.no == null ? "-" : o.no}</b>`], ["dots", ".\n."]]) {
+    if (rs[k]) { extra.push(rs[k].msg); continue; }
+    const r = await tg("sendMessage", { chat_id: chat, text, ...(k === "no" ? { parse_mode: "HTML" } : {}) });
+    if (!r.ok) throw new Error(`tg ${k}: ${r.description}`);
+    extra.push(r.result.message_id);
+    await docRef.set({ relaySent: { [k]: { msg: r.result.message_id, chat, at: Date.now(), by: "cloud" } } }, { merge: true });
+  }
+  if (!o.msg) {
+    await finalizeOrder(db, { ref, chat, msg: rs.details.msg, extra, text: rs.details.text || o.pText || "", mobile: o.startMobile || (o.pCust && o.pCust.mobile) || "",
+      billName: o.startName || "", serial: o.no, addOnTo: o.pAddOnTo || null, cust: o.pCust });
+  }
+}
+
 async function selfDeliver(db, ref, o) {
   const items = o.items || [];
   const chat = await orderChat(o);
@@ -720,7 +747,19 @@ async function holdCancelTap(db, q, tag, ref) {
     await tg("editMessageText", { chat_id: q.message.chat.id, message_id: q.message.message_id,
       text: statusText(fresh, q.message.text), parse_mode: "HTML", disable_web_page_preview: true,
       reply_markup: statusKeyboard(ref, fresh) });
+    await adoptCard(db, ref, fresh, q);
   }
+}
+
+/** Owner 29-Oct (order 678): the card staff tap IS the order's card — later
+ *  steps (bill, payment…) update that one, replies to it reach the order. */
+async function adoptCard(db, ref, fresh, q) {
+  try {
+    const id = q.message.message_id, chat = String(q.message.chat.id);
+    if (fresh.msg === id || (fresh.chat && String(fresh.chat) !== chat)) return;
+    await db.collection("bbapp_orders").doc(ref).set({ msg: id, chat }, { merge: true });
+    await db.collection("bbapp_msgmap").doc(`${chat}_${id}`).set({ ref });
+  } catch (e) { logger.warn("adoptCard", { ref, error: e.message }); }
 }
 
 async function tg(method, body) {
@@ -868,6 +907,7 @@ exports.tgWebhook = onRequest(
               disable_web_page_preview: true,
               reply_markup: statusKeyboard(ref, fresh),
             });
+            await adoptCard(db, ref, fresh, q);
           } else if (verdict.redraw && q.message) {
             // Old-style or stale buttons → today's buttons (only if they differ;
             // Telegram refuses an edit that changes nothing).
@@ -4067,6 +4107,14 @@ exports.orderSweep = onSchedule(
     const q = await db.collection("bbapp_orders").where("placed", ">", now - 3 * 86400e3).get();
     for (const doc of q.docs) {
       const o = doc.data();
+      const rs = o.relaySent || {};
+      // Owner 29-Oct (order 678): the details reached the group but the phone
+      // closed before ORDER NO. + dots — the cloud finishes the order.
+      if (rs.details && !(rs.no && rs.dots) && !o.selfSent && !(o.relay && o.relay.last && now - o.relay.last < 5 * 60e3)) {
+        try { await finishOrder(db, doc.id, o); } catch (e) { logger.warn("orderSweep finish", { ref: doc.id, error: e.message }); }
+        continue;
+      }
+      if (rs.details) continue; // never a second details message
       if (o.msg || o.status || now - o.placed < 3 * 60e3) continue;
       if (o.sweeping && now - o.sweeping < 15 * 60e3) continue;
       if (o.relay && o.relay.last && now - o.relay.last < 5 * 60e3) continue; // the phone is still sending
@@ -4768,6 +4816,10 @@ exports.orderRelay = onRequest(
         const ms = (r.msgs || 0) + (kind === "album" ? 0 : 1);
         if (o.get("selfSent")) return { self: true, msg: o.get("msg"), chat: o.get("chat") };
         if (o.get("sweeping") && Date.now() - o.get("sweeping") < 15 * 60e3) throw new Error("503");
+        // Owner 29-Oct (order 678): the phone lost the reply and sent the
+        // details again — each of details / ORDER NO. / dots posts ONCE.
+        const done = !dry && kind !== "album" && (o.get("relaySent") || {})[kind];
+        if (done) return { again: done };
         if (!pc && (ph > RELAY_MAX_PHOTOS || ms > RELAY_MAX_MSGS)) throw new Error("429");
         if (!dry) tx.set(doc, { relay: { photos: ph, msgs: ms, ip, last: Date.now() } }, { merge: true });
         return { no: o.get("no") };
@@ -4777,6 +4829,7 @@ exports.orderRelay = onRequest(
       if (no && no.self) {
         return res.json(kind === "details" ? { ok: true, result: { message_id: no.msg, chat: { id: Number(no.chat) } } } : { ok: true, result: {} });
       }
+      if (no && no.again) return res.json({ ok: true, result: { message_id: no.again.msg, chat: { id: Number(no.again.chat) } } });
       no = no ? no.no : null;
     } catch (e) {
       const code = Number(e.message) || 500;
@@ -4864,6 +4917,10 @@ exports.orderRelay = onRequest(
       }
       const j = await r.json().catch(() => ({ ok: false, description: "bad Telegram reply" }));
       if (!j.ok) logger.warn("orderRelay tg " + method, { ref, code: j.error_code, desc: j.description });
+      if (j.ok && kind !== "album" && j.result && j.result.message_id) {
+        await doc.set({ relaySent: { [kind]: { msg: j.result.message_id, chat: String(chat), at: Date.now(),
+          ...(kind === "details" ? { text } : {}) } } }, { merge: true }).catch((e) => logger.warn("relaySent", { ref, error: e.message }));
+      }
       // Never pass Telegram's 401/404 (token problems) through as-is.
       const st = j.ok ? 200 : (r.status === 400 || r.status === 429 ? r.status : 502);
       return res.status(st).json(j);
