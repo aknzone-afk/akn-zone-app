@@ -671,7 +671,16 @@ function statusText(d, fallbackPlain) {
  * "u|" = UNDO (done step) — so a double tap can never flip a step back.
  */
 const firstName = (x) => String(x || "").trim().split(/\s+/)[0] || "?";
-const CANCEL_ROW = (ref) => [{ text: "🚫 Cancel order (party said cancel)", callback_data: `x|ask|${ref}`.slice(0, 64) }];
+// Owner 29-Oct: who may cancel (Telegram user ids; Ram Lakhan's account
+// shows as "Ram Yadav"). Any name with "Lakhan" is let in too.
+// Ramlakhan is added by the owner replying "CANCEL ACCESS" to one of his messages.
+const CANCEL_OWNER = 6796003742;
+async function canCancel(db, u) {
+  if (!u) return false;
+  if (Number(u.id) === CANCEL_OWNER) return true;
+  const s = (await db.collection("bbapp_settings").doc("cancelers").get()).data() || {};
+  return (s.uids || []).map(Number).includes(Number(u.id));
+}
 
 function statusKeyboard(ref, d) {
   const cur = (d && d.status) || "received";
@@ -698,12 +707,11 @@ function statusKeyboard(ref, d) {
   const before = ci < ORDER.indexOf("dispatched");
   if (d && d.hold) {
     rows.push([{ text: `⏸ ON HOLD — ${firstName(d.holdBy)} ${dhm(d.holdAt || 0)} · tap to resume`.slice(0, 60), callback_data: `h|x|${ref}`.slice(0, 64) }]);
-    rows.push(CANCEL_ROW(ref));
     return { inline_keyboard: rows };
   }
   const next = STEPS.find((x) => ORDER.indexOf(x.status) === ci + 1);
-  // Owner 29-Oct: staff call the party; "cancel" -> 🚫 Cancel order (asks once).
-  const extra = before ? [[{ text: "⏸ Keep on hold", callback_data: `h|x|${ref}`.slice(0, 64) }], CANCEL_ROW(ref)] : [];
+  // Owner 29-Oct: cancel = Akshay / Ramlakhan REPLY "CANCEL" to the order (no button — a group shows buttons to all).
+  const extra = before ? [[{ text: "⏸ Keep on hold", callback_data: `h|x|${ref}`.slice(0, 64) }]] : [];
   if (next && next.auto) {
     const wait = next.k === "y" && d && d.payBal != null ? `💰 Closing balance ${inr(d.payBal)} · ${dmyOf(d.payChk || Date.now())}` : (next.wait || "⏳ Waiting");
     rows.push([{ text: wait, callback_data: "n" }]);
@@ -755,6 +763,46 @@ async function partyCancels(db, cancels) {
     }
   }
   return n;
+}
+
+/** Owner 29-Oct: Akshay / Ramlakhan reply "CANCEL" to an order message →
+ *  the order is cancelled (party does not want). Anyone else: refused.
+ *  The owner replying "CANCEL ACCESS" (or "… REMOVE") to someone's message
+ *  gives / takes that person the right. Never reaches the customer's chat. */
+async function cancelByReply(db, m) {
+  const say = (text) => tg("sendMessage", { chat_id: m.chat.id, reply_to_message_id: m.message_id, text });
+  const t = String(m.text || "").toUpperCase();
+  if (/ACCESS/.test(t)) {
+    if (!m.from || Number(m.from.id) !== CANCEL_OWNER) return say("⛔ Only Akshay Nahata can give cancel access.");
+    const who = m.reply_to_message.from;
+    if (!who || who.is_bot) return say("Reply CANCEL ACCESS to a message written by that person.");
+    const ref = db.collection("bbapp_settings").doc("cancelers");
+    const cur = ((await ref.get()).data() || {}).uids || [];
+    const off = /REMOVE/.test(t);
+    const uids = off ? cur.filter((x) => Number(x) !== Number(who.id)) : [...new Set([...cur.map(Number), Number(who.id)])];
+    await ref.set({ uids, names: { [String(who.id)]: [who.first_name, who.last_name].filter(Boolean).join(" ") }, at: Date.now() }, { merge: true });
+    return say(off ? `✅ ${who.first_name || "This person"} can no longer cancel orders.` : `✅ ${who.first_name || "This person"} can now cancel orders (reply CANCEL to an order).`);
+  }
+  if (!(await canCancel(db, m.from))) return say("⛔ Only Akshay Nahata or Ramlakhan can cancel an order.");
+  const map = await db.collection("bbapp_msgmap").doc(`${m.chat.id}_${m.reply_to_message.message_id}`).get();
+  if (!map.exists) return say("Reply CANCEL to the order's message (the card or ORDER NO.).");
+  const ref = map.get("ref");
+  const docRef = db.collection("bbapp_orders").doc(ref);
+  const d0 = (await docRef.get()).data() || {};
+  if (d0.cancelled) return say(`ORDER NO. ${d0.serial || d0.no || "?"} is already cancelled.`);
+  if (ORDER.indexOf(d0.status || "received") >= ORDER.indexOf("dispatched")) return say("⛔ This order is already dispatched — it cannot be cancelled here.");
+  const by = [m.from.first_name, m.from.last_name].filter(Boolean).join(" ") || "staff";
+  const at = Date.now();
+  const del = admin.firestore.FieldValue.delete();
+  await docRef.set({ cancelled: true, cancelledBy: by, cancelledAt: at, cancelledUid: m.from.id, hold: del, holdBy: del, holdAt: del,
+    log: admin.firestore.FieldValue.arrayUnion({ a: "cancel", by, at, uid: m.from.id }) }, { merge: true });
+  const d = (await docRef.get()).data() || {};
+  if (d.chat && d.msg) {
+    await tg("editMessageText", { chat_id: d.chat, message_id: d.msg, text: statusText(d, ""), parse_mode: "HTML",
+      disable_web_page_preview: true, reply_markup: statusKeyboard(ref, d) }).catch(() => {});
+  }
+  await say(`🚫 ORDER NO. ${d.serial || d.no || "?"} ${d.billName || ""} — CANCELLED BY PARTY (by ${by}).`);
+  try { await blockRepeatCanceller(db, d); } catch (e) { logger.warn("cancel block", { ref, error: e.message }); }
 }
 
 async function blockRepeatCanceller(db, d) {
@@ -899,6 +947,12 @@ exports.tgWebhook = onRequest(
         }
         if (tag === "m" && ref) {
           await moneyReceivedTap(db, q, ref);
+          return res.status(200).send("ok");
+        }
+        // Owner 29-Oct: only Akshay Nahata + Ram Lakhan may cancel an order.
+        if (tag === "x" && ref && !(await canCancel(db, q.from))) {
+          await tg("answerCallbackQuery", { callback_query_id: q.id, show_alert: true,
+            text: "Only Akshay Nahata or Ram Lakhan can cancel an order. Please tell them." });
           return res.status(200).send("ok");
         }
         if (tag === "x" && (k === "ask" || k === "no") && ref && q.message) {
@@ -1056,6 +1110,9 @@ exports.tgWebhook = onRequest(
         }
         await tg("sendMessage", { chat_id: u.message.chat.id, reply_to_message_id: u.message.message_id,
           text: m.length >= 7 ? `✅ ${m} reset — removed from ${freed} phone lock(s).` : "Send: /reset 98xxxxxxxx" });
+      } else if (u.message && u.message.reply_to_message && !(u.message.from && u.message.from.is_bot)
+                 && /^\s*(cancel|cancle|cancell?ed|कैंसिल|कैंसल|रद्द)(\s+access(\s+remove)?)?\s*[.!]*\s*$/i.test(String(u.message.text || ""))) {
+        await cancelByReply(db, u.message);
       } else if (u.message && u.message.reply_to_message && !(u.message.from && u.message.from.is_bot)
                  && (u.message.text || u.message.photo || u.message.document)) {
         // A staff reply to an order message (or to a party's chat message)
