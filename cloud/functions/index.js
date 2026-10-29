@@ -788,6 +788,35 @@ async function partyCancels(db, cancels) {
   return n;
 }
 
+async function linkTallyBills(db, rows) {
+  const all = (await db.collection("bbapp_orders").get()).docs.map((x) => ({ id: x.id, ref: x.ref, ...x.data() }));
+  const used = new Set(all.flatMap((o) => [normBill(o.billNo), normBill(o.tallyBillNo)]).filter(Boolean));
+  const pcsOf = (o) => { const m = /(\d+)\s*pcs/i.exec(String(o.text || o.pText || "")); return m ? Number(m[1]) : 0; };
+  const atOf = (o) => (o.at && o.at.toMillis ? o.at.toMillis() : Number(o.at) || 0);
+  let n = 0;
+  for (const m of all) {
+    if (!["received", "getting_ready"].includes(m.status || "received") || m.cancelled || m.addOnTo || isDemoOrder(m)) continue;
+    const adds = all.filter((a) => a.addOnTo === m.id && !a.cancelled);
+    const pcs = pcsOf(m) + adds.reduce((t, a) => t + pcsOf(a), 0);
+    if (!pcs || !atOf(m)) continue;
+    const from = new Date(atOf(m) + 5.5 * 3600e3 - 86400e3).toISOString().slice(0, 10);
+    const party = normName(m.ledgerName || m.billName);
+    const fit = rows.filter((r) => r && r.billNo && r.billDate && r.billDate >= from && normName(r.party) === party
+      && !used.has(normBill(r.billNo)) && Math.abs(Number(r.qty) - pcs) <= Math.max(3, pcs * 0.3));
+    if (fit.length !== 1) continue; // none, or two bills could fit -> leave it to the staff
+    const r = fit[0];
+    used.add(normBill(r.billNo));
+    const sentAt = Date.parse(`${r.billDate}T00:00:00+05:30`);
+    for (const o of [m, ...adds]) {
+      await autoStep(db, o.id, "b", `Tally bill ${r.billNo}`, { billNo: String(r.billNo), tallyBillNo: String(r.billNo),
+        billGroup: m.id, billSentAt: sentAt, billAuto: true });
+    }
+    logger.info("linkTallyBills", { ref: m.id, no: m.serial || m.no, bill: r.billNo, pcs, qty: r.qty });
+    n++;
+  }
+  return n;
+}
+
 /** Owner 29-Oct: Akshay / Ramlakhan reply "CANCEL" to an order message →
  *  the order is cancelled (party does not want). Anyone else: refused.
  *  The owner replying "CANCEL ACCESS" (or "… REMOVE") to someone's message
@@ -1959,6 +1988,14 @@ exports.syncDispatch = onRequest(
       return cand[0];
     };
     const db = admin.firestore();
+    // Owner 29-Oct (Neeraj Singh, order 641): the bill was made in Tally but
+    // never sent through the Bill group -> the order sat at "Maal nikalna",
+    // screenshots were not checked, dispatch never ticked. A main order still
+    // open whose party has exactly ONE fitting Tally bill in Daily Parcels
+    // (same party, billed on/after the order day, pieces within 30%, bill not
+    // on any other order) gets that bill — add-ons ride along.
+    let linked = 0;
+    try { linked = await linkTallyBills(db, rows); } catch (e) { logger.warn("linkTallyBills", { error: e.message }); }
     const snap = await db.collection("bbapp_orders").where("status", "in", ["bill_sent", "payment_received", "dispatched", "bilty"]).get();
     for (const doc of snap.docs) {
       const d = doc.data();
