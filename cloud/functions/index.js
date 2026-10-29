@@ -1365,7 +1365,7 @@ async function handleBillPhoto(db, m) {
 const inr = (n) => "₹" + Math.round(Number(n) || 0).toLocaleString("en-IN");
 
 const PAY_PROMPT = "This should be a payment screenshot (UPI app like GPay/PhonePe/Paytm/BHIM, or a bank app NEFT/RTGS/IMPS). " +
-  "Return JSON: amount (number, rupees paid), date (YYYY-MM-DD of the payment as shown), time (HH:MM 24-hour as shown), " +
+  "Return JSON: amount (number, rupees paid), date (YYYY-MM-DD of the payment as shown), time (HH:MM 24-hour as shown), yearShown (true ONLY if a 4- or 2-digit YEAR is printed in the payment date; false when it shows just day + month like '29 Oct'), " +
   "txnId (the bank's UPI Ref No. / UTR / RRN — usually 12 digits; NOT the app's own id that starts with letters like T2610… or the PhonePe/GPay transaction id when a UTR is also shown), " +
   "refs (EVERY reference / transaction / UTR / RRN number shown on the screenshot, as strings), " +
   "success (true only if it clearly says successful/completed/paid), " +
@@ -1373,11 +1373,30 @@ const PAY_PROMPT = "This should be a payment screenshot (UPI app like GPay/Phone
   "payeeVpa (the RECEIVER's UPI id, e.g. vyapar.173947529358@hdfcbank, if shown), payeeAccount (the receiver's bank account number if shown), " +
   "payeeBank (the receiver's bank name or IFSC if shown, e.g. 'HDFC Bank' / 'Bank of India' / BKID0002703). Use null when not shown. If it is not a payment screenshot, amount = null.";
 const PAY_SCHEMA = { type: "object", properties: {
-  amount: { type: ["number", "null"] }, date: { type: ["string", "null"] }, time: { type: ["string", "null"] },
+  amount: { type: ["number", "null"] }, date: { type: ["string", "null"] }, time: { type: ["string", "null"] }, yearShown: { type: ["boolean", "null"] },
   txnId: { type: ["string", "null"] }, success: { type: ["boolean", "null"] }, payee: { type: ["string", "null"] },
   refs: { type: ["array", "null"], items: { type: "string" } }, payerVpa: { type: ["string", "null"] },
   payeeVpa: { type: ["string", "null"] }, payeeAccount: { type: ["string", "null"] }, payeeBank: { type: ["string", "null"] } },
   required: ["amount"] };
+/** Owner 29-Oct (Seema, Paytm "29 Oct, 02:16 PM"): a slip with no year was
+ *  read as 2024 and refused as "before the bill". No year printed → this
+ *  year (last year only when that would be a future date). */
+function slipDate(p, nowMs = Date.now()) {
+  const d = String((p && p.date) || "");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return null;
+  const today = new Date(nowMs + 5.5 * 3600e3).toISOString().slice(0, 10);
+  if (p.yearShown === true && d.slice(0, 4) === today.slice(0, 4)) return d;
+  const y = Number(today.slice(0, 4));
+  const thisYear = `${y}${d.slice(4)}`;
+  if (p.yearShown === true) {
+    // a year IS printed but not this one: keep it, unless it is the same
+    // day-month within the last 60 days (a misread year, e.g. 2024 for 2026)
+    const age = (Date.parse(today) - Date.parse(thisYear)) / 86400e3;
+    return age >= 0 && age <= 60 ? thisYear : d;
+  }
+  return thisYear <= today ? thisYear : `${y - 1}${d.slice(4)}`;
+}
+
 /** Owner 24-Oct: which of OUR banks the money landed in (from the screenshot). */
 function ourBank(p) {
   const s = [p.payeeVpa, p.payeeAccount, p.payeeBank, p.payee].map((x) => String(x || "").toUpperCase()).join(" ");
@@ -1425,7 +1444,7 @@ async function checkPayment(db, ref, img, notes) {
   const sentAt = m.billSentAt || (m.billAt && m.billAt.toMillis ? m.billAt.toMillis() : 0);
   const nowIst = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
   const tm = /^\d{1,2}:\d{2}$/.test(String(p.time || "")) ? String(p.time).padStart(5, "0") : null;
-  const dt = /^\d{4}-\d{2}-\d{2}$/.test(String(p.date || "")) ? p.date : (tm ? nowIst : null);
+  const dt = slipDate(p) || (tm ? nowIst : null);
   const paidAt = dt ? Date.parse(`${dt}T${tm || "23:59"}:00+05:30`) : NaN;
   if (!isNaN(paidAt) && sentAt && paidAt < Math.floor(sentAt / 60000) * 60000) {
     const when = new Date(sentAt + 5.5 * 3600e3).toISOString().slice(0, 16).replace("T", " ");
@@ -2091,9 +2110,23 @@ async function chatOpen(db, d) {
 }
 
 exports.chatSend = onRequest(
-  { region: "asia-south1", secrets: [TG_TOKEN, GEMINI_API_KEY, APNS_KEY], timeoutSeconds: 60, memory: "512MiB", maxInstances: 3, invoker: "public", cors: true },
+  { region: "asia-south1", secrets: [TG_TOKEN, GEMINI_API_KEY, APNS_KEY, PC_KEY], timeoutSeconds: 60, memory: "512MiB", maxInstances: 3, invoker: "public", cors: true },
   async (req, res) => {
     if (req.method !== "POST" || !appOk(req)) return res.status(403).json({ ok: false });
+    // Owner 29-Oct: shop PC only — check a screenshot the customer already
+    // sent again (after a reading fix), without adding it to the chat twice.
+    if (pcOk(req) && req.body && req.body.recheck) {
+      const db = admin.firestore();
+      const row = (await db.collection("bbapp_chat").doc(String(req.body.recheck)).get()).data();
+      if (!row || !row.storagePath) return res.json({ ok: false, error: "no stored screenshot" });
+      const [img] = await admin.storage().bucket().file(row.storagePath).download();
+      const d = (await db.collection("bbapp_orders").doc(row.ref).get()).data() || {};
+      if ((d.status || "received") !== "bill_sent") return res.json({ ok: false, error: "status " + d.status });
+      const notes = [];
+      const paid = await checkPayment(db, row.ref, img, notes);
+      await receiptsPost(db, row.ref, d, img, "💰 Payment screenshot (checked again)", notes).catch((e) => logger.warn("receiptsPost", { error: e.message }));
+      return res.json({ ok: true, paid, notes });
+    }
     const ip = String(req.get("x-forwarded-for") || req.ip || "").split(",")[0].trim();
     if (limited("c:" + ip)) return res.status(429).json({ ok: false });
     const ref = String((req.body && req.body.ref) || "").replace(/[^A-Z0-9-]/gi, "").slice(0, 40);
@@ -2617,14 +2650,14 @@ async function demoChat() {
 }
 const orderChat = async (o) => (isDemoOrder(o) ? demoChat() : String(ORDER_GROUP));
 const ADV_PROMPT = "This should be a payment screenshot (UPI app like GPay/PhonePe/Paytm/BHIM, or a bank app NEFT/RTGS/IMPS). " +
-  "Return JSON: amount (number, rupees paid), date (YYYY-MM-DD of the payment as shown), time (HH:MM 24-hour as shown), " +
+  "Return JSON: amount (number, rupees paid), date (YYYY-MM-DD of the payment as shown), time (HH:MM 24-hour as shown), yearShown (true ONLY if a 4- or 2-digit YEAR is printed in the payment date; false when it shows just day + month like '29 Oct'), " +
   "txnId (the bank's UPI Ref No. / UTR / RRN — usually 12 digits; NOT the app's own id that starts with letters like T2610… or the PhonePe/GPay transaction id when a UTR is also shown), " +
   "refs (EVERY reference / transaction / UTR / RRN number shown on the screenshot, as strings), " +
   "success (true only if it clearly says successful/completed/paid), " +
   "payee (the RECEIVER's name exactly as shown), payeeAccount (receiver's UPI id or account number, as shown). Use null when not shown. " +
   "If it is not a payment screenshot, amount = null.";
 const ADV_SCHEMA = { type: "object", properties: {
-  amount: { type: ["number", "null"] }, date: { type: ["string", "null"] }, time: { type: ["string", "null"] },
+  amount: { type: ["number", "null"] }, date: { type: ["string", "null"] }, time: { type: ["string", "null"] }, yearShown: { type: ["boolean", "null"] },
   txnId: { type: ["string", "null"] }, refs: { type: ["array", "null"], items: { type: "string" } },
   success: { type: ["boolean", "null"] }, payee: { type: ["string", "null"] },
   payeeAccount: { type: ["string", "null"] } }, required: ["amount"] };
@@ -2658,7 +2691,7 @@ function parseUpiText(t) {
     if (tm[3] === "AM" && h === 12) h = 0;
     if (h < 24) time = `${String(h).padStart(2, "0")}:${tm[2]}`;
   }
-  return { amount, date, time, txnId: refs[0], refs, success: true, payee: "B B SYNTHETICS",
+  return { amount, date, yearShown: !!date, time, txnId: refs[0], refs, success: true, payee: "B B SYNTHETICS",
     payeeAccount: flat.includes("173947529358") ? "vyapar.173947529358@hdfcbank" : null, via: "phone-ocr" };
 }
 
@@ -2734,8 +2767,8 @@ exports.advanceProof = onRequest(
       return fail("Please pay the token only to our HDFC QR / UPI id on this page (vyapar.173947529358@hdfcbank) — not to another bank account.");
     }
     const tm = /^\d{1,2}:\d{2}$/.test(String(p.time || "")) ? String(p.time).padStart(5, "0") : null;
-    const dt = /^\d{4}-\d{2}-\d{2}$/.test(String(p.date || "")) ? p.date
-      : (tm ? new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10) : null);
+    const dt = slipDate(p)
+      || (tm ? new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10) : null);
     const paidAt = dt ? Date.parse(`${dt}T${tm || "23:59"}:00+05:30`) : NaN;
     if (!isNaN(paidAt) && paidAt < Math.floor((a.orderAt || 0) / 60000) * 60000 - 10 * 60e3) {
       return fail("This screenshot is from before your order. Please send the screenshot of the payment you made now.");
