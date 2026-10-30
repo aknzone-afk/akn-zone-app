@@ -1831,11 +1831,40 @@ exports.convertQueue = onRequest(
       const o = (await db.collection("bbapp_orders").doc(doc.id).get()).data() || {};
       if (o.cancelled) { await doc.ref.set({ sentAt: Date.now(), skipped: "cancelled" }, { merge: true }); continue; }
       const acc = (await db.collection("bbapp_accounts").doc(accKey(o.mobile) || "-").get()).data() || {};
-      const party = String(o.ledgerName || (acc.kind === "existing" && acc.party) || o.billName || "").trim();
+      // Owner 30-Oct (Sadhana, OP878): the name ON THE BILL first — the login's
+      // linked party (CARE AND CURE SOLUTIONS) is not the bill's party, and the
+      // Sales-bill bot rightly refused "OP878 CARE AND CURE SOLUTIONS".
+      const party = String(c.party || o.ledgerName || o.billName || (acc.kind === "existing" && acc.party) || "").trim();
       await doc.ref.set({ sentAt: Date.now(), party }, { merge: true });
       items.push({ ref: doc.id, bill: c.bill, party, paid: c.paid, total: c.total, serial: c.serial });
     }
     return res.json({ ok: true, items });
+  },
+);
+
+/** Owner 30-Oct: ANY optional bill whose party's Tally closing balance is
+ *  under Rs 100 (screenshot or not, app or not) goes regular + prints. The
+ *  shop PC's ledger sweep (op_sweep.py, 3x a day) sends them here; they join
+ *  the same convert queue (the Sales-bill bot checks bill + party again). */
+exports.convertAdd = onRequest(
+  { region: "asia-south1", secrets: [PC_KEY], timeoutSeconds: 30, memory: "256MiB", maxInstances: 1, invoker: "public" },
+  async (req, res) => {
+    if (req.method !== "POST" || !pcOk(req)) return res.status(403).json({ ok: false });
+    const db = admin.firestore();
+    const items = Array.isArray(req.body && req.body.items) ? req.body.items.slice(0, 30) : [];
+    const known = new Set((await db.collection("bbapp_convert").get()).docs.map((x) => normBill(x.get("bill"))));
+    let added = 0;
+    for (const it of items) {
+      const bill = normBill(it && it.bill);
+      const party = String((it && it.party) || "").trim().slice(0, 120);
+      if (!/^OP\d+$/.test(bill) || !party || known.has(bill)) continue;
+      await db.collection("bbapp_convert").doc(`T-${bill}`).set({ bill, party,
+        paid: `Tally closing balance ${inr(Math.max(0, Math.round(Number(it.balance) || 0)))}`, total: "", serial: null,
+        at: Date.now(), sentAt: null, by: "tally-sweep" });
+      known.add(bill);
+      added++;
+    }
+    return res.json({ ok: true, added });
   },
 );
 
