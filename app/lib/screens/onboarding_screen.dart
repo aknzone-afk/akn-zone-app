@@ -1282,7 +1282,9 @@ class _SignupFormState extends State<_SignupForm> {
       setState(() {
         _gstChecking = false;
         _gstOk = false;
-        _gstNote = '✗ This GST number could not be verified — correct it, or use PAN instead.';
+        _gstNote = r?['reason'] == 'limit'
+            ? '✗ GST check limit reached (4 numbers). Please call the shop, or use PAN instead.'
+            : '✗ This GST number could not be verified — correct it, or use PAN instead.';
       });
       return;
     }

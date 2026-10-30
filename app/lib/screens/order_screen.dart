@@ -190,8 +190,11 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         // Owner 12-Oct: GST not verified → remove it; goods can be taken
         // without GST.
         _gstOk = false;
-        _gstNote = '✗ This GST number could not be verified. Please correct it, '
-            'or remove it — you can order without GST.';
+        _gstNote = why == 'limit'
+            ? '✗ GST check limit reached (4 numbers). Please call the shop, '
+                'or remove it — you can order without GST.'
+            : '✗ This GST number could not be verified. Please correct it, '
+                'or remove it — you can order without GST.';
       });
       return;
     }

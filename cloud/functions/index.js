@@ -2769,6 +2769,24 @@ exports.gstLookup = onRequest(
     const g = String((req.body && req.body.gstin) || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
     if (!/^\d{2}[A-Z]{5}\d{4}[A-Z][0-9A-Z]Z[0-9A-Z]$/.test(g)) return res.json({ ok: true, found: false, reason: "format" });
     const db = admin.firestore();
+    // Owner 30-Oct: one customer may check at most 4 different GST numbers
+    // (30 days); the 5th is refused so nobody can drain the GST-search quota.
+    // By mobile (app sends it); older apps without one are counted by IP for a day.
+    const mob = String((req.body && req.body.mobile) || "").replace(/\D/g, "").slice(-10);
+    const who = /^\d{10}$/.test(mob) ? mob : "ip_" + ip.replace(/[^0-9a-fA-F.:]/g, "").replace(/[.:]/g, "_");
+    const span = /^\d{10}$/.test(mob) ? 30 * 86400e3 : 86400e3;
+    const useRef = db.collection("bbapp_gstuse").doc(who);
+    const allowed = await db.runTransaction(async (tx) => {
+      const used = (((await tx.get(useRef)).data() || {}).list || []).filter((x) => Date.now() - (x.at || 0) < span);
+      if (used.some((x) => x.g === g)) return true;
+      if (used.length >= 4) return false;
+      tx.set(useRef, { list: [...used, { g, at: Date.now() }], at: Date.now() });
+      return true;
+    });
+    if (!allowed) {
+      logger.warn("gst limit", { who, g });
+      return res.json({ ok: true, found: false, reason: "limit" });
+    }
     const c = await db.collection("bbapp_gst").doc(g).get();
     if (c.exists && Date.now() - (c.get("at") || 0) < 30 * 86400e3) return res.json({ ok: true, found: true, ...c.get("info") });
     let info = null, notFound = false;

@@ -381,8 +381,17 @@ class OrderService {
   /// GST portal details for a GSTIN (owner 12-Oct). Null = could not ask.
   static Future<Map<String, dynamic>?> gstLookup(Dio dio, String gstin) async {
     try {
+      // Owner 30-Oct: the cloud allows 4 different GST numbers per mobile.
+      var mobile = '';
+      try {
+        final p = await SharedPreferences.getInstance();
+        for (final k in ['account_v1', 'account_code_v1']) {
+          final s = p.getString(k);
+          if (s != null && mobile.isEmpty) mobile = '${(jsonDecode(s) as Map)['mobile'] ?? ''}';
+        }
+      } catch (_) {}
       final res = await dio.post<dynamic>('$_cloud/gstLookup',
-          data: {'gstin': gstin},
+          data: {'gstin': gstin, if (mobile.isNotEmpty) 'mobile': mobile},
           options: Options(
               headers: {'x-app-key': 'akn-zone-app-v3'},
               contentType: Headers.jsonContentType,
