@@ -3684,15 +3684,19 @@ exports.accountSignup = onRequest(
     // — those the owner decides himself. KYC must still be clean.
     // (also the pincode the Aadhaar itself shows, when it differs)
     const near = nearSurat(cust.pincode, c.loc, cust.bookingPlace) || nearSurat(aadhaarPin(kyc), null);
-    const auto = india && !near; // KYC notes stay on the group card; payment comes before dispatch anyway
+    // Owner 30-Oct: "Surat" written anywhere in the sign-up = blocked at once.
+    const surat = india ? suratWritten(cust, c.kycText) : "";
+    const auto = india && !near && !surat; // KYC notes stay on the group card; payment comes before dispatch anyway
     void clean;
     const kycDocName = doc;
-    const status = !india || auto ? "approved" : "pending";
+    const status = surat ? "blocked" : !india || auto ? "approved" : "pending";
     await ref.set({ status, kind: india ? "new" : "foreign", cust, kyc, kycDoc: kycDocName, abroadDirect, pinSale: india ? pinSale : null, destSale: india ? destSale : null,
-      kycPath, verifiedAt: Date.now(), at: Date.now(), nearSurat: !!near,
+      kycPath, verifiedAt: Date.now(), at: Date.now(), nearSurat: !!(near || surat),
       ...(auto ? { approvedAt: Date.now(), approvedBy: "bot (outside Gujarat / 150 km of Surat)" } : {}),
+      ...(surat ? { blockedBy: `bot (Surat in ${surat})`, blockedAt: Date.now() } : {}),
       log: admin.firestore.FieldValue.arrayUnion({ a: india ? "🆕 signed up" : "🌍 signed up", by: "app", at: Date.now() },
-        ...(auto ? [{ a: "✅ auto-approved — outside Gujarat / 150 km of Surat", by: "bot", at: Date.now() + 1 }]
+        ...(surat ? [{ a: `🚫 auto-blocked — "Surat" in ${surat}`, by: "bot", at: Date.now() + 1 }]
+          : auto ? [{ a: "✅ auto-approved — outside Gujarat / 150 km of Surat", by: "bot", at: Date.now() + 1 }]
           : near ? [{ a: `⏳ ${near} — owner decides`, by: "bot", at: Date.now() + 1 }] : [])) }, { merge: true });
     if (auto && kycPath) await admin.storage().bucket().file(kycPath).delete().catch(() => {});
     await saveLoc(ref, req, c.loc);
@@ -4695,6 +4699,16 @@ function withPartyLines(text, mobile, billName) {
 /** The pincode printed on the Aadhaar, from the KYC note "Aadhaar shows 360055". */
 function aadhaarPin(kyc) {
   for (const x of kyc || []) { const m = /Aadhaar shows (\d{6})/.exec(String(x)); if (m) return m[1]; }
+  return "";
+}
+/** Owner 30-Oct: which sign-up field has the word SURAT (or सूरत) — "" when none.
+ *  Whole word only (SURATGARH, Rajasthan, is not Surat). The transport is
+ *  skipped: many transporters carry "Surat" in their own name. */
+function suratWritten(cust, kycText) {
+  const re = /(^|[^A-Z])SURAT(?![A-Z])|सूरत/i;
+  const f = { "bill name": cust.billName, address: cust.address, destination: cust.bookingPlace,
+    city: cust.city, "GST address": cust.gstAddress, note: cust.bizNote, "Aadhaar address": kycText };
+  for (const [k, v] of Object.entries(f)) if (re.test(String(v || ""))) return k;
   return "";
 }
 function nearSurat(pincode, loc, city) {
