@@ -4360,10 +4360,24 @@ exports.opsNudges = onSchedule(
  *  the cloud itself: photos from Drive with the same captions, then the
  *  details, ORDER NO. and dots, exactly like the app does. */
 exports.orderSweep = onSchedule(
-  { region: "asia-south1", schedule: "every 3 minutes", secrets: [TG_TOKEN, APNS_KEY], timeoutSeconds: 540, memory: "1GiB" },
+  { region: "asia-south1", schedule: "every 3 minutes", secrets: [TG_TOKEN, TG_SECRET, APNS_KEY], timeoutSeconds: 540, memory: "1GiB" },
   async () => {
     const db = admin.firestore();
     const now = Date.now();
+    // 5-Nov: the bot's webhook was removed / re-set with a wrong secret from
+    // outside (leaked key) -> every button died. Re-point it to tgWebhook with
+    // our secret whenever it is off or Telegram reports a fresh 401/403.
+    try {
+      const tg = `https://api.telegram.org/bot${TG_TOKEN.value()}`;
+      const w = ((await (await fetch(`${tg}/getWebhookInfo`)).json()) || {}).result || {};
+      const ours = "https://asia-south1-akn-chat-a7dd8.cloudfunctions.net/tgWebhook";
+      const badErr = /40[13]/.test(w.last_error_message || "") && now / 1000 - (w.last_error_date || 0) < 600;
+      if (w.url !== ours || badErr) {
+        const r = await (await fetch(`${tg}/setWebhook`, { method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: ours, secret_token: TG_SECRET.value().trim(), allowed_updates: ["message", "callback_query"] }) })).json();
+        logger.error("tg webhook repaired", { was: w.url || "(none)", err: w.last_error_message || "", ok: r.ok });
+      }
+    } catch (e) { logger.warn("webhook check", { error: e.message }); }
     // 25-Oct (order 660): an OLD app (no placeOrder) that sent photos but
     // never the details -> one alert at any hour, 20 min after the number
     try {
