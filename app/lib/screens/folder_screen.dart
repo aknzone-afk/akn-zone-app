@@ -1,3 +1,4 @@
+import 'pick_screen.dart' show pickNavIds;
 import 'dart:math';
 
 import 'package:catalog_app/widgets/caps_text.dart';
@@ -149,11 +150,13 @@ class _FolderScreenState extends ConsumerState<FolderScreen> {
                     childAspectRatio: 0.66,
                   ),
                   itemCount: filteredDirect.length,
-                  itemBuilder: (context, i) => _GridTile(
+                  itemBuilder: (context, i) {
+                    return _GridTile(
                     photo: filteredDirect[i],
                     siblingIds:
                         filteredDirect.map((p) => p.id).toList(growable: false),
-                  ),
+                  );
+                  },
                 ),
               ),
             ],
@@ -537,6 +540,7 @@ class _PhotoCardProxy extends ConsumerWidget {
     // fetch it while the tile is on screen so the flash is instant.
     final model = modelPicsOf(ref.watch(modelPicsProvider).value, photo.designNumber);
     if (model.isNotEmpty) warmModelPic(model.first);
+    pickNavIds = siblingIds; // owner 9-Nov: ◀ / ▶ in the pick screen walk this folder
     // Same tile as everywhere else: one DO SELECTION box, no round icons.
     return PhotoCard(
       photo: photo,

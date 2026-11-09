@@ -19,6 +19,10 @@ import '../services/photo_freshness.dart';
 import '../services/picks_service.dart';
 import '../services/pieces_service.dart';
 
+/// Owner 9-Nov: the designs the customer was browsing (grid / folder), in
+/// order — the pick screen's ◀ / ▶ buttons and swipe move through them.
+List<String> pickNavIds = const [];
+
 /// TAP-TO-SELECT: tap a saree = +1 of that colour, tap the background = +1 SET
 /// (one of every colour), long-press a number = pick / type any quantity.
 class PickScreen extends ConsumerStatefulWidget {
@@ -520,19 +524,19 @@ class _PickScreenState extends ConsumerState<PickScreen> {
 
   bool _closing = false; // DONE / back already running
 
-  Future<void> _done({bool leaving = false}) async {
+  Future<void> _done({bool leaving = false, bool pop = true}) async {
     // Tester 13-Oct: a 2nd tap re-ran this with a stale cart snapshot and
     // toggled the design OUT of the cart (pick wiped).
     if (_closing) return;
     _closing = true;
     try {
-      await _finish(leaving: leaving);
+      await _finish(leaving: leaving, pop: pop);
     } finally {
       _closing = false;
     }
   }
 
-  Future<void> _finish({required bool leaving}) async {
+  Future<void> _finish({required bool leaving, bool pop = true}) async {
     final favs = ref.read(favoritesProvider);
     if (_s.isEmpty) {
       // Owner 11-Oct: nothing selected (no piece, no SET) = it can't be in the cart.
@@ -544,7 +548,7 @@ class _PickScreenState extends ConsumerState<PickScreen> {
       if (favs.contains(widget.photoId)) {
         await ref.read(favoritesProvider.notifier).toggle(widget.photoId); // also clears its pick
       }
-      if (mounted) context.pop();
+      if (mounted && pop) context.pop();
       return;
     }
     // SET TO SET only (below ₹310): every colour exactly the SET number.
@@ -564,7 +568,84 @@ class _PickScreenState extends ConsumerState<PickScreen> {
     if (!ref.read(favoritesProvider).contains(widget.photoId)) {
       await ref.read(favoritesProvider.notifier).toggle(widget.photoId);
     }
-    if (mounted) context.pop();
+    if (mounted && pop) context.pop();
+  }
+
+  /// Owner 9-Nov: ◀ / ▶ (or a swipe) = the previous / next design of the
+  /// list the customer came from. A changed selection is saved first, the
+  /// same as DONE (an untouched design stays as it was).
+  List<String> get _navIds => pickNavIds.contains(widget.photoId)
+      ? pickNavIds
+      : ref.read(photosProvider).map((p) => p.id).toList(growable: false);
+
+  Photo? _navPhoto(int dir) {
+    final ids = _navIds;
+    final i = ids.indexOf(widget.photoId);
+    if (i < 0 || i + dir < 0 || i + dir >= ids.length) return null;
+    final id = ids[i + dir];
+    return ref.read(photosProvider).where((p) => p.id == id).firstOrNull;
+  }
+
+  bool _moving = false;
+  Future<void> _go(int dir) async {
+    if (_moving || _closing) return;
+    final next = _navPhoto(dir);
+    if (next == null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          duration: const Duration(seconds: 1),
+          content: Text(dir > 0 ? t('This is the last design', 'यह आख़िरी डिज़ाइन है')
+              : t('This is the first design', 'यह पहला डिज़ाइन है'))));
+      return;
+    }
+    _moving = true;
+    try {
+      if (_undo.isNotEmpty || _dirty) {
+        // Nothing selected after changes = out of the cart, like going back.
+        await _done(leaving: true, pop: false);
+      }
+      precacheImage(CachedNetworkImageProvider(next.detailUrl(), cacheManager: photoCacheManager), context);
+      if (mounted) context.pushReplacement('/pick/${Uri.encodeComponent(next.id)}');
+    } finally {
+      _moving = false;
+    }
+  }
+
+  Widget _navBar() {
+    Widget btn(int dir) {
+      final p = _navPhoto(dir);
+      final no = (p?.designNumber ?? '').toUpperCase();
+      final label = no.isNotEmpty ? no : (dir < 0 ? t('PREVIOUS', 'पिछला') : t('NEXT', 'अगला'));
+      return Expanded(
+        child: SizedBox(
+          height: 56,
+          child: OutlinedButton(
+            style: OutlinedButton.styleFrom(
+              foregroundColor: Colors.white,
+              disabledForegroundColor: Colors.white24,
+              side: BorderSide(color: p == null ? Colors.white12 : Colors.white54, width: 1.5),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+              padding: const EdgeInsets.symmetric(horizontal: 8),
+            ),
+            onPressed: p == null ? null : () => _go(dir),
+            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              if (dir < 0) const Icon(Icons.chevron_left_rounded, size: 32),
+              Flexible(
+                child: Text(label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w900, letterSpacing: 0.5)),
+              ),
+              if (dir > 0) const Icon(Icons.chevron_right_rounded, size: 32),
+            ]),
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+      child: Row(children: [btn(-1), const SizedBox(width: 12), btn(1)]),
+    );
   }
 
   @override
@@ -649,7 +730,7 @@ class _PickScreenState extends ConsumerState<PickScreen> {
                 }
                 var iw = outer.maxWidth;
                 var ih = iw / a;
-                final room = outer.maxHeight - 56 - 66;
+                final room = outer.maxHeight - 56 - 66 - 64; // 64 = ◀ / ▶ bar
                 if (ih > room) {
                   ih = math.max(80.0, room);
                   iw = ih * a;
@@ -838,6 +919,19 @@ class _PickScreenState extends ConsumerState<PickScreen> {
                       ),
                     );
                   }),
+                  // Owner 9-Nov: the empty black space = ◀ / ▶ buttons, and a
+                  // swipe left / right there opens the next / previous design.
+                  Expanded(
+                    child: GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onHorizontalDragEnd: (d) {
+                        final v = d.primaryVelocity ?? 0;
+                        if (v.abs() < 250) return;
+                        _go(v < 0 ? 1 : -1);
+                      },
+                      child: Align(alignment: Alignment.topCenter, child: _navBar()),
+                    ),
+                  ),
                 ]);
               }),
             ),

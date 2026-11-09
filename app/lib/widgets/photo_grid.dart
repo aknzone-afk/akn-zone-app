@@ -1,3 +1,4 @@
+import '../screens/pick_screen.dart' show pickNavIds;
 import 'package:catalog_app/widgets/caps_text.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -39,6 +40,7 @@ class PhotoGrid extends ConsumerWidget {
     final selectionMode = !removeMode && selection.isNotEmpty;
 
     final allIds = photos.map((p) => p.id).toList(growable: false);
+    pickNavIds = allIds; // owner 9-Nov: ◀ / ▶ in the pick screen walk this list
     WidgetsBinding.instance
         .addPostFrameCallback((_) => prioritizePriceCheck(allIds));
     final urls = photos.map((p) => p.thumbUrl()).toList(growable: false);
