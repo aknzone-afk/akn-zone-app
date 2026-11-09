@@ -72,7 +72,23 @@ class Stats {
   static Future<void> cart(int n) async {
     try {
       final p = await SharedPreferences.getInstance();
-      await p.setString(_kCart, jsonEncode({'n': n, 'at': DateTime.now().millisecondsSinceEpoch}));
+      // the value is re-sent from the cart screen; 0 designs = ₹0
+      await p.setString(_kCart, jsonEncode({'n': n, 'at': DateTime.now().millisecondsSinceEpoch, if (n == 0) 'v': 0}));
+    } catch (_) {}
+  }
+
+  /// Owner 9-Nov: the cart's ₹ value (seen on the cart screen) rides along, so
+  /// the reminder can say "add ₹X more to reach ₹30,000". Keeps 'at'.
+  static int _lastV = -1;
+  static Future<void> cartValue(int v) async {
+    if (v == _lastV) return;
+    _lastV = v;
+    try {
+      final p = await SharedPreferences.getInstance();
+      final m = jsonDecode(p.getString(_kCart) ?? 'null');
+      if (m is! Map<String, dynamic>) return;
+      m['v'] = v;
+      await p.setString(_kCart, jsonEncode(m));
     } catch (_) {}
   }
 

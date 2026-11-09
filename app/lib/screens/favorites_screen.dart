@@ -277,6 +277,8 @@ class _FavoritesScreenState extends ConsumerState<FavoritesScreen> {
                         final n = marks[p.id] ?? count;
                         return (price: p.price, qty: n ?? 1, sure: n != null);
                       }));
+                      // ignore: discarded_futures
+                      Stats.cartValue(v.known);
                       return Padding(
                         padding: const EdgeInsets.only(top: 6),
                         child: Builder(builder: (_) {

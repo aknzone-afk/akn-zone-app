@@ -3276,6 +3276,15 @@ exports.advanceImage = onRequest(
  * bbapp_accounts/{key}: key = 10-digit Indian mobile or full foreign number.
  * /block 98xxxxxxxx, /unblock 98xxxxxxxx in any group with the bot.
  */
+/** Owner 9-Nov: the cart reminder names the customer's own ₹ gap to ₹30,000. */
+function cartNudgeText(a, min = 30000) {
+  const n = Number(a.cartN) || 0, v = Number(a.cartV) || 0;
+  const ds = `${n} design${n === 1 ? "" : "s"}`;
+  if (v > 0 && v < min) return `🛒 ${inr(v)} (${ds}) in your cart — add ${inr(min - v)} more and your order is ready to send.`;
+  if (v >= min) return `🛒 Your ${inr(v)} order (${ds}) is ready in the cart — tap ORDER NOW and we start packing today.`;
+  return `🛒 ${ds} waiting in your cart — tap ORDER NOW and we start packing today.`;
+}
+
 function accKey(raw) {
   let d = String(raw || "").replace(/\D/g, "");
   if (d.length === 12 && d.startsWith("91")) d = d.slice(2);
@@ -3809,7 +3818,10 @@ exports.accountStatus = onRequest(
       const cart = req.body && req.body.cart;
       if (a && cart && typeof cart === "object") {
         const n = Math.max(0, Math.min(999, Math.round(Number(cart.n) || 0)));
-        await ref.set({ cartN: n, cartAt: Math.max(0, Number(cart.at) || 0), cartSeen: Date.now() }, { merge: true });
+        // 9-Nov: cart ₹ value (from the cart screen) for "add ₹X more" reminders
+        const v = Number(cart.v);
+        const cv = Number.isFinite(v) && v >= 0 ? { cartV: Math.min(10000000, Math.round(v)) } : {};
+        await ref.set({ cartN: n, cartAt: Math.max(0, Number(cart.at) || 0), cartSeen: Date.now(), ...cv }, { merge: true });
       }
     } catch (e) { logger.warn("cart snap", { error: e.message }); }
     // 25-Oct: what customers look at / put in the cart (design no. -> count),
@@ -4232,7 +4244,7 @@ exports.opsNudges = onSchedule(
           if ((a.lastOrderAt || 0) > a.cartAt) continue;
           if (a.cartRemAt && now - a.cartRemAt < 3 * 86400e3) continue;
           await d.ref.set({ cartRemAt: now }, { merge: true });
-          await pushTo(db, d.id, `🛒 ${a.cartN} design${a.cartN === 1 ? "" : "s"} waiting in your cart — tap ORDER NOW and we start packing today.`, "/favorites");
+          await pushTo(db, d.id, cartNudgeText(a), "/favorites");
           n++;
         }
       } catch (e) { logger.warn("cart nudge", { error: e.message }); }
