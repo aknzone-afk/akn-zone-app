@@ -613,8 +613,8 @@ class _PickScreenState extends ConsumerState<PickScreen> {
   Widget _navBar() {
     Widget btn(int dir) {
       final p = _navPhoto(dir);
-      final no = (p?.designNumber ?? '').toUpperCase();
-      final label = no.isNotEmpty ? no : (dir < 0 ? t('PREVIOUS', 'पिछला') : t('NEXT', 'अगला'));
+      // Owner 9-Nov: plain PREVIOUS / NEXT words, no design numbers.
+      final label = dir < 0 ? 'PREVIOUS' : 'NEXT';
       return Expanded(
         child: SizedBox(
           height: 56,
@@ -730,7 +730,12 @@ class _PickScreenState extends ConsumerState<PickScreen> {
                 }
                 var iw = outer.maxWidth;
                 var ih = iw / a;
-                final room = outer.maxHeight - 56 - 66 - 64; // 64 = ◀ / ▶ bar
+                // Owner 9-Nov: a tall photo pushed the PREVIOUS / NEXT bar off
+                // the screen — keep room for every row under the photo: SET
+                // bar 64, UNDO row 72, modelling-pic row 62 (when shown),
+                // PREVIOUS / NEXT bar 72.
+                final hasModel = modelPicsOf(ref.watch(modelPicsProvider).value, photo.designNumber).isNotEmpty;
+                final room = outer.maxHeight - 64 - 72 - (hasModel ? 62 : 0) - 72;
                 if (ih > room) {
                   ih = math.max(80.0, room);
                   iw = ih * a;
