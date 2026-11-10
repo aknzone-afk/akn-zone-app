@@ -4064,6 +4064,18 @@ exports.opsNudges = onSchedule(
     const today = dmyOf(now);
     const ageH = (ms) => Math.round((now - ms) / 3600e3);
     const ageTxt = (ms) => { const hh = ageH(ms); return hh >= 48 ? `${Math.round(hh / 24)} d` : `${hh} h`; };
+    // working hours (IST 10:00-20:00, Sundays off) elapsed between two instants
+    const workHours = (a, b) => {
+      if (!a || b <= a) return 0;
+      let total = 0; const dayMs = 86400e3, off = 5.5 * 3600e3;
+      let d = Math.floor((a + off) / dayMs) * dayMs - off; // IST-midnight (epoch) of a's day
+      for (; d < b; d += dayMs) {
+        if (new Date(d + off).getUTCDay() === 0) continue; // Sunday off
+        const s = Math.max(a, d + 10 * 3600e3), e = Math.min(b, d + 20 * 3600e3);
+        if (e > s) total += e - s;
+      }
+      return total / 3600e3;
+    };
     const marks = (await db.collection("bbapp_settings").doc("nudges").get()).data() || {};
     const mark = (k) => db.collection("bbapp_settings").doc("nudges").set({ [k]: today }, { merge: true });
     const window = (hour) => h === hour && mi < 30;
@@ -4104,6 +4116,28 @@ exports.opsNudges = onSchedule(
       }
       await mark("B" + h);
     }
+
+    // M. owner 9-Nov: order->bill takes ~26 h typical (worst 9 days). An app
+    //    order still unbilled 4 WORKING hours after it was placed (IST
+    //    10:00-20:00, Sundays off) -> ONE short line into the staff order group,
+    //    at most once per order per day. Cards are never forwarded, and the
+    //    "Akn zone app" approvals group (appChat) is never used for this.
+    try {
+      const istDow = new Date(now + 5.5 * 3600e3).getUTCDay();
+      if (h >= 10 && h < 20 && istDow !== 0) {
+        const open = (await db.collection("bbapp_orders").where("status", "in", ["received", "getting_ready"]).get()).docs
+          .map((d) => ({ id: d.id, ...d.data() }))
+          .filter((o) => !isDemoOrder(o) && o.serial && !o.addOnTo && !o.cancelled && !o.hold && !/SYNTHETICS \(SURAT\)/i.test(o.billName || ""));
+        for (const o of open) {
+          if (o.billNudge === today) continue;
+          const ordered = o.at && o.at.toMillis ? o.at.toMillis() : (o.statusAt && o.statusAt.toMillis ? o.statusAt.toMillis() : 0);
+          if (!ordered || workHours(ordered, now) < 4) continue;
+          await db.collection("bbapp_orders").doc(o.id).set({ billNudge: today }, { merge: true });
+          await tg("sendMessage", { chat_id: ORDER_GROUP, parse_mode: "HTML",
+            text: `🧾 <b>ORDER NO. ${o.serial} ${escH(o.billName)}</b> — placed ${ageTxt(ordered)} ago, still no bill. Please make the bill.` }).catch(() => {});
+        }
+      }
+    } catch (e) { logger.warn("bill-delay nudge", { error: e.message }); }
 
     // H. 25-Oct: an order number was taken but the order never finished
     //    arriving (phone closed / no signal mid-send) — tell staff once, with
