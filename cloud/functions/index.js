@@ -4129,9 +4129,12 @@ exports.opsNudges = onSchedule(
           .map((d) => ({ id: d.id, ...d.data() }))
           .filter((o) => !isDemoOrder(o) && o.serial && !o.addOnTo && !o.cancelled && !o.hold && !/SYNTHETICS \(SURAT\)/i.test(o.billName || ""));
         for (const o of open) {
-          if (o.billNudge === today) continue;
+          // 14-Nov: it sent 17 separate lines at once for old orders. Now: one
+          // alert per order EVER, and only for orders under 24 h old — older
+          // ones are already listed (one message) by section B at 11:00/17:00.
+          if (o.billNudge) continue;
           const ordered = o.at && o.at.toMillis ? o.at.toMillis() : (o.statusAt && o.statusAt.toMillis ? o.statusAt.toMillis() : 0);
-          if (!ordered || workHours(ordered, now) < 4) continue;
+          if (!ordered || now - ordered > 24 * 3600e3 || workHours(ordered, now) < 4) continue;
           await db.collection("bbapp_orders").doc(o.id).set({ billNudge: today }, { merge: true });
           await tg("sendMessage", { chat_id: ORDER_GROUP, parse_mode: "HTML",
             text: `🧾 <b>ORDER NO. ${o.serial} ${escH(o.billName)}</b> — placed ${ageTxt(ordered)} ago, still no bill. Please make the bill.` }).catch(() => {});
