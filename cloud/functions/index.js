@@ -2296,7 +2296,7 @@ async function mirrorToAknChat(db, o, m) {
 /** Staff reply typed in AKN Chat's "AKN App" tab → the customer's app chat. */
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 exports.aknChatOut = onDocumentCreated(
-  { document: "chats/{chatId}/messages/{msgId}", region: "asia-south1", memory: "256MiB", maxInstances: 3, secrets: [APNS_KEY] },
+  { document: "chats/{chatId}/messages/{msgId}", region: "asia-south1", memory: "256MiB", cpu: 0.333, concurrency: 1, maxInstances: 3, secrets: [APNS_KEY] },
   async (event) => {
     const { chatId, msgId } = event.params;
     if (!chatId.endsWith("_" + AKZ_PNID)) return;
@@ -3057,7 +3057,7 @@ exports.advanceProof = onRequest(
 );
 
 exports.advanceReminder = onSchedule(
-  { region: "asia-south1", schedule: "every 60 minutes", secrets: [TG_TOKEN], timeoutSeconds: 120, memory: "256MiB" },
+  { region: "asia-south1", schedule: "every 60 minutes", secrets: [TG_TOKEN], timeoutSeconds: 120, memory: "256MiB", cpu: 0.333, concurrency: 1 },
   async () => {
     const db = admin.firestore();
     const snap = await db.collection("bbapp_advances").where("state", "==", "pending").get();
@@ -4054,7 +4054,7 @@ function kycLines(a, c) {
  *  ONLY to approved accounts (never pending / declined / blocked). */
 /** Owner 20-Oct: staff + customer nudges (see each block). Every 30 min, 9-21 IST. */
 exports.opsNudges = onSchedule(
-  { region: "asia-south1", schedule: "every 30 minutes", secrets: [TG_TOKEN, APNS_KEY, WA_TOKEN], timeoutSeconds: 300, memory: "256MiB" },
+  { region: "asia-south1", schedule: "every 30 minutes", secrets: [TG_TOKEN, APNS_KEY, WA_TOKEN], timeoutSeconds: 300, memory: "256MiB", cpu: 0.333, concurrency: 1 },
   async () => {
     const db = admin.firestore();
     const now = Date.now();
@@ -4488,7 +4488,7 @@ const RATE_IOS = "https://apps.apple.com/app/id6776107523";
 /** Owner 25-Oct: Sunday 8 PM — the week's most viewed / most carted designs
  *  (from the phones' counts), active customers and orders, to the app group. */
 exports.weeklyHotReport = onSchedule(
-  { region: "asia-south1", schedule: "0 20 * * 0", timeZone: "Asia/Kolkata", secrets: [TG_TOKEN], timeoutSeconds: 120, memory: "256MiB" },
+  { region: "asia-south1", schedule: "0 20 * * 0", timeZone: "Asia/Kolkata", secrets: [TG_TOKEN], timeoutSeconds: 120, memory: "256MiB", cpu: 0.333, concurrency: 1 },
   async () => {
     const db = admin.firestore();
     const chat = await approvalsChat(db);
@@ -4521,7 +4521,7 @@ exports.weeklyHotReport = onSchedule(
 );
 
 exports.dailyDesignPush = onSchedule(
-  { region: "asia-south1", schedule: "0 21 * * *", timeZone: "Asia/Kolkata", secrets: [APNS_KEY], timeoutSeconds: 300, memory: "256MiB" },
+  { region: "asia-south1", schedule: "0 21 * * *", timeZone: "Asia/Kolkata", secrets: [APNS_KEY], timeoutSeconds: 300, memory: "256MiB", cpu: 0.333, concurrency: 1 },
   async () => {
     const db = admin.firestore();
     // Owner 15-Oct: tell how many designs came today (Daily Update history);
@@ -4573,7 +4573,7 @@ async function setAccStatus(db, key, st, by) {
 }
 
 exports.sheetSync = onSchedule(
-  { region: "asia-south1", schedule: "every 15 minutes", timeZone: "Asia/Kolkata", secrets: [TG_TOKEN], timeoutSeconds: 120, memory: "256MiB" },
+  { region: "asia-south1", schedule: "every 15 minutes", timeZone: "Asia/Kolkata", secrets: [TG_TOKEN], timeoutSeconds: 120, memory: "256MiB", cpu: 0.333, concurrency: 1 },
   async () => {
     const db = admin.firestore();
     const cfgRef = db.collection("bbapp_settings").doc("sheet");
