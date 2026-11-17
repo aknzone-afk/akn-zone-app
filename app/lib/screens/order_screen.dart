@@ -182,34 +182,50 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       _gstNote = 'Checking GST number…';
       _gstOk = true;
     });
-    final r = await OrderService.gstLookup(ref.read(dioProvider), g);
-    if (!mounted || _gstLooked != g) return;
+    // Owner 17-Nov: never block on a busy server — 3 tries; then a GST with
+    // a correct check digit is accepted as typed (same rule as sign-up).
+    Map<String, dynamic>? r;
+    for (var i = 0; i < 3; i++) {
+      r = await OrderService.gstLookup(ref.read(dioProvider), g);
+      if (!mounted || _gstLooked != g) return;
+      if (r != null) break;
+      await Future<void>.delayed(Duration(seconds: 2 + i * 2));
+      if (!mounted || _gstLooked != g) return;
+    }
     if (r == null || r['found'] != true) {
-      final why = r?['reason'];
+      final why = r == null ? 'unreachable' : '${r['reason'] ?? ''}';
+      if (why != 'format') {
+        setState(() {
+          _gstOk = true;
+          _gstNote = '✓ GST number accepted.';
+        });
+        return;
+      }
       setState(() {
         // Owner 12-Oct: GST not verified → remove it; goods can be taken
         // without GST.
         _gstOk = false;
         _gstNote = why == 'limit'
-            ? '✗ GST check limit reached (4 numbers). Please call the shop, '
+            ? '✗ GST check limit reached (5 numbers). Please call the shop, '
                 'or remove it — you can order without GST.'
             : '✗ This GST number could not be verified. Please correct it, '
                 'or remove it — you can order without GST.';
       });
       return;
     }
-    final status = '${r['status'] ?? ''}';
-    final name = '${r['tradeName'] ?? ''}'.isNotEmpty ? '${r['tradeName']}' : '${r['legalName'] ?? ''}';
+    final res = r; // non-null here
+    final status = '${res['status'] ?? ''}';
+    final name = '${res['tradeName'] ?? ''}'.isNotEmpty ? '${res['tradeName']}' : '${res['legalName'] ?? ''}';
     setState(() {
       if (name.isNotEmpty) _billName.text = name;
-      if ('${r['address'] ?? ''}'.isNotEmpty) _address.text = '${r['address']}';
-      if ('${r['pin'] ?? ''}'.isNotEmpty) _pincode.text = '${r['pin']}';
-      if ('${r['city'] ?? ''}'.isNotEmpty && _bookingPlace.text.trim().isEmpty) {
-        _bookingPlace.text = '${r['city']}';
+      if ('${res['address'] ?? ''}'.isNotEmpty) _address.text = '${res['address']}';
+      if ('${res['pin'] ?? ''}'.isNotEmpty) _pincode.text = '${res['pin']}';
+      if ('${res['city'] ?? ''}'.isNotEmpty && _bookingPlace.text.trim().isEmpty) {
+        _bookingPlace.text = '${res['city']}';
       }
       _gstOk = status.toLowerCase() == 'active' || status.isEmpty;
       _gstNote = _gstOk
-          ? '✓ GST verified — ${r['legalName']}. Details filled; change anything if needed.'
+          ? '✓ GST verified — ${res['legalName']}. Details filled; change anything if needed.'
           : '✗ This GST number is $status on the GST portal. Please correct it, '
               'or remove it — you can order without GST.';
     });

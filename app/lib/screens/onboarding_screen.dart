@@ -1276,32 +1276,46 @@ class _SignupFormState extends State<_SignupForm> {
       _gstOk = false;
       _gstNote = 'Checking GST number…';
     });
-    final r = await OrderService.gstLookup(AccountService.dio, g);
-    if (!mounted || _gstLooked != g) return;
+    // Owner 17-Nov: sign-up must never get stuck on the GST check. Busy
+    // server → try 3 times; still no answer (or the 5-number limit) → a GST
+    // number whose check digit is right is accepted as typed, and the customer
+    // fills bill name / address. The shop sees the GST on the approval card.
+    Map<String, dynamic>? r;
+    for (var i = 0; i < 3; i++) {
+      r = await OrderService.gstLookup(AccountService.dio, g);
+      if (!mounted || _gstLooked != g) return;
+      if (r != null) break; // an answer (even "limit") - no point retrying
+      await Future<void>.delayed(Duration(seconds: 2 + i * 2));
+      if (!mounted || _gstLooked != g) return;
+    }
     if (r == null || r['found'] != true) {
+      final reason = r == null ? 'unreachable' : '${r['reason'] ?? ''}';
       setState(() {
         _gstChecking = false;
-        _gstOk = false;
-        _gstNote = r?['reason'] == 'limit'
-            ? '✗ GST check limit reached (4 numbers). Please call the shop, or use PAN instead.'
-            : '✗ This GST number could not be verified — correct it, or use PAN instead.';
+        _pan.text = g.substring(2, 12); // PAN is inside the GST number
+        // A correct-format GST that the portal simply did not answer for is fine.
+        _gstOk = reason != 'format';
+        _gstNote = _gstOk
+            ? '✓ GST number accepted. Please fill your bill name and address below.'
+            : '✗ This GST number is not correct — please check it, or use PAN instead.';
       });
       return;
     }
-    final status = '${r['status'] ?? ''}';
-    final name = '${r['tradeName'] ?? ''}'.isNotEmpty ? '${r['tradeName']}' : '${r['legalName'] ?? ''}';
+    final res = r; // non-null here (the block above returned otherwise)
+    final status = '${res['status'] ?? ''}';
+    final name = '${res['tradeName'] ?? ''}'.isNotEmpty ? '${res['tradeName']}' : '${res['legalName'] ?? ''}';
     setState(() {
       _gstChecking = false;
       if (name.isNotEmpty) _bill.text = name;
       _pan.text = g.substring(2, 12); // PAN is inside the GST number
-      if ('${r['address'] ?? ''}'.isNotEmpty) _address.text = '${r['address']}';
-      if ('${r['pin'] ?? ''}'.isNotEmpty) _pin.text = '${r['pin']}';
-      if ('${r['city'] ?? ''}'.isNotEmpty && _place.text.trim().isEmpty) {
-        _place.text = '${r['city']}';
+      if ('${res['address'] ?? ''}'.isNotEmpty) _address.text = '${res['address']}';
+      if ('${res['pin'] ?? ''}'.isNotEmpty) _pin.text = '${res['pin']}';
+      if ('${res['city'] ?? ''}'.isNotEmpty && _place.text.trim().isEmpty) {
+        _place.text = '${res['city']}';
       }
       _gstOk = status.toLowerCase() == 'active' || status.isEmpty;
       _gstNote = _gstOk
-          ? '✓ GST verified — ${r['legalName'] ?? name}. Details filled; change anything if needed.'
+          ? '✓ GST verified — ${res['legalName'] ?? name}. Details filled; change anything if needed.'
           : '✗ This GST number is $status on the GST portal — correct it, or use PAN instead.';
     });
   }
