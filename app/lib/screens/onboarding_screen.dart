@@ -1296,11 +1296,14 @@ class _SignupFormState extends State<_SignupForm> {
         // A correct-format GST that the portal simply did not answer for is fine.
         // wrong number (bad format, or the GST portal says it does not exist) = stop;
         // portal / server did not answer = let them in
-        _gstOk = reason != 'format' && reason != 'notfound';
+        _gstOk = reason != 'format' && reason != 'notfound' && reason != 'limit';
         _gstNote = _gstOk
             ? '✓ GST number accepted. Please fill your bill name and address below.'
-            : '✗ This GST number is not correct — please check it, or use PAN instead.';
+            : reason == 'limit'
+                ? '✗ Only 1 GST number can be checked per mobile. Please call the shop, or use PAN instead.'
+                : '✗ This GST number is not correct — please check it and type it again, or use PAN instead.';
       });
+      _gstLooked = null; // typing it again (or correcting it) checks again
       return;
     }
     final res = r; // non-null here (the block above returned otherwise)

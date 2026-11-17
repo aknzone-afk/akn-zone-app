@@ -381,7 +381,7 @@ class OrderService {
   /// GST portal details for a GSTIN (owner 12-Oct). Null = could not ask.
   static Future<Map<String, dynamic>?> gstLookup(Dio dio, String gstin) async {
     try {
-      // Owner 30-Oct: the cloud allows 4 different GST numbers per mobile.
+      // Owner 17-Nov: the cloud allows 1 verified GST number per mobile.
       var mobile = '';
       try {
         final p = await SharedPreferences.getInstance();

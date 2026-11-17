@@ -194,7 +194,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     }
     if (r == null || r['found'] != true) {
       final why = r == null ? 'unreachable' : '${r['reason'] ?? ''}';
-      if (why != 'format' && why != 'notfound') {
+      if (why != 'format' && why != 'notfound' && why != 'limit') {
         setState(() {
           _gstOk = true;
           _gstNote = '✓ GST number accepted.';
@@ -206,11 +206,12 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         // without GST.
         _gstOk = false;
         _gstNote = why == 'limit'
-            ? '✗ GST check limit reached (5 numbers). Please call the shop, '
+            ? '✗ Only 1 GST number can be checked per mobile. Please call the shop, '
                 'or remove it — you can order without GST.'
             : '✗ This GST number could not be verified. Please correct it, '
                 'or remove it — you can order without GST.';
       });
+      _gstLooked = null; // typing it again (or correcting it) checks again
       return;
     }
     final res = r; // non-null here
