@@ -194,7 +194,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     }
     if (r == null || r['found'] != true) {
       final why = r == null ? 'unreachable' : '${r['reason'] ?? ''}';
-      if (why != 'format') {
+      if (why != 'format' && why != 'notfound') {
         setState(() {
           _gstOk = true;
           _gstNote = '✓ GST number accepted.';

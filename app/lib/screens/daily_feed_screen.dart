@@ -64,7 +64,7 @@ class DailyDay {
   List<String> get ids => [for (final it in items) it.id];
 }
 
-const _kCloud = 'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net';
+const _kCloud = 'https://asia-south2-akn-chat-a7dd8.cloudfunctions.net';
 
 List<DailyDay> _parse(String body) {
   final j = jsonDecode(body) as Map<String, dynamic>;

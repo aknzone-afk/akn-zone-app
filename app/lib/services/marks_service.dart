@@ -29,7 +29,7 @@ class MarksNotifier extends StateNotifier<Map<String, int>> {
   final EditService _edits;
   static const _kKey = 'marks_v1';
   static const _url =
-      'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net/readMarks';
+      'https://asia-south2-akn-chat-a7dd8.cloudfunctions.net/readMarks';
 
   /// photoId → "editMillis:pieces"
   Map<String, String> _store = {};

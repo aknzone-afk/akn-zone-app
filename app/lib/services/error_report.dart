@@ -12,7 +12,7 @@ void reportAppError(String error, StackTrace? stack) {
   _sent++;
   final lines = (stack?.toString() ?? '').split('\n').take(25).join('\n');
   _dio
-      .post<dynamic>('https://asia-south1-akn-chat-a7dd8.cloudfunctions.net/appError',
+      .post<dynamic>('https://asia-south2-akn-chat-a7dd8.cloudfunctions.net/appError',
           data: {
             'error': error.length > 1500 ? error.substring(0, 1500) : error,
             'stack': lines,

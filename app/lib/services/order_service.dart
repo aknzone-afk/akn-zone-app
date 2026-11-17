@@ -259,7 +259,7 @@ class OrderService {
 
   // ───────────────────────── old customer ─────────────────────────
 
-  static const _cloud = 'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net';
+  static const _cloud = 'https://asia-south2-akn-chat-a7dd8.cloudfunctions.net';
 
   /// New customer: the same checks the shop's NewPartyBot does before it makes
   /// the Tally ledger (owner 11-Oct-2026). Null = could not check (never blocks).
@@ -374,7 +374,7 @@ class OrderService {
   }
 
   static const _lookupUrl =
-      'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net/lookupParty';
+      'https://asia-south2-akn-chat-a7dd8.cloudfunctions.net/lookupParty';
 
   /// Parties in Tally that have this mobile (same lookup as the DAILY
   /// CUSTOMER desk). Throws on network trouble.
@@ -820,7 +820,7 @@ class OrderService {
   }
 
   static const kOrderRelayUrl =
-      'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net/orderRelay';
+      'https://asia-south2-akn-chat-a7dd8.cloudfunctions.net/orderRelay';
 
   /// The shop's on/off switch (order-config `enabled`); true when unreadable
   /// and never cached, so an outage never blocks a send.
@@ -877,7 +877,7 @@ class OrderService {
       // Owner 11-Oct: an add-on order gets the NEXT serial too (ORDER NO. 3, 4…).
       if (order.serial == null) {
         final res = await dio.post<dynamic>(
-          'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net/nextOrderNo',
+          'https://asia-south2-akn-chat-a7dd8.cloudfunctions.net/nextOrderNo',
           // 25-Oct: who is ordering goes with the number, so an order that
           // never finishes sending (phone closed, no signal) is not a mystery.
           data: {'ref': order.number, 'mobile': order.customer.mobile, 'billName': order.customer.billName,

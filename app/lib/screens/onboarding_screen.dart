@@ -1294,7 +1294,9 @@ class _SignupFormState extends State<_SignupForm> {
         _gstChecking = false;
         _pan.text = g.substring(2, 12); // PAN is inside the GST number
         // A correct-format GST that the portal simply did not answer for is fine.
-        _gstOk = reason != 'format';
+        // wrong number (bad format, or the GST portal says it does not exist) = stop;
+        // portal / server did not answer = let them in
+        _gstOk = reason != 'format' && reason != 'notfound';
         _gstNote = _gstOk
             ? '✓ GST number accepted. Please fill your bill name and address below.'
             : '✗ This GST number is not correct — please check it, or use PAN instead.';

@@ -23,7 +23,7 @@ class ChatMsg {
 }
 
 class ChatService {
-  static const _cloud = 'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net';
+  static const _cloud = 'https://asia-south2-akn-chat-a7dd8.cloudfunctions.net';
   static const _hdr = {'x-app-key': 'akn-zone-app-v3'};
   static const _kSeen = 'chat_seen_v1';
 

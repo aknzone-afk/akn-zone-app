@@ -14,7 +14,7 @@ import 'chat_service.dart';
 /// Messaging (free) in the AKN Chat Firebase project; the cloud sends to the
 /// device tokens registered here for this phone's customer mobiles.
 class PushService {
-  static const _cloud = 'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net';
+  static const _cloud = 'https://asia-south2-akn-chat-a7dd8.cloudfunctions.net';
   static const _kSent = 'push_registered_v1';
   static const _kAsked = 'push_perm_asked_v1'; // times the OS prompt was shown
   static const _kAskedAt = 'push_perm_asked_at_v1';

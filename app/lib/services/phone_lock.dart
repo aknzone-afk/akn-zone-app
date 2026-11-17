@@ -40,7 +40,7 @@ class PhoneLock {
     final id = await phoneId();
     try {
       final res = await dio.post<dynamic>(
-        'https://asia-south1-akn-chat-a7dd8.cloudfunctions.net/phoneLock',
+        'https://asia-south2-akn-chat-a7dd8.cloudfunctions.net/phoneLock',
         data: {'device': id, 'mobile': mobile, if (peek) 'peek': true},
         options: Options(
             headers: {'x-app-key': 'akn-zone-app-v3'},
