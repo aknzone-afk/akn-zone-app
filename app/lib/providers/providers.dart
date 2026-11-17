@@ -26,6 +26,7 @@ import '../services/price_ocr.dart';
 import '../services/seed_loader.dart';
 import '../services/share_service.dart';
 import '../services/picks_service.dart';
+import '../services/region_fallback.dart';
 
 /// Initialised once in main.dart via [ProviderScope.overrides].
 final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
@@ -40,6 +41,7 @@ final dioProvider = Provider<Dio>((ref) {
     sendTimeout: const Duration(seconds: 20),
     headers: {'User-Agent': 'Mozilla/5.0 (Android) CatalogApp/1.0'},
   ));
+  withRegionFallback(dio);
   dio.interceptors.add(InterceptorsWrapper(
     onError: (e, handler) async {
       final shouldRetry = e.type == DioExceptionType.connectionTimeout ||

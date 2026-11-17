@@ -13,6 +13,7 @@ import 'catalog_service.dart';
 import 'drive_scraper.dart';
 import 'local_cache.dart';
 import 'seed_loader.dart';
+import 'region_fallback.dart';
 
 /// Unique task name registered with WorkManager.
 const String kBackgroundTaskName = 'catalog_periodic_refresh';
@@ -45,7 +46,7 @@ void backgroundCallbackDispatcher() {
     // background too (app closed) — every task run tries, never throws.
     try {
       final prefs = await SharedPreferences.getInstance();
-      await OrderService.retryPending(prefs, Dio());
+      await OrderService.retryPending(prefs, withRegionFallback(Dio()));
     } catch (_) {}
     if (taskName == kChatTaskName) {
       try {
@@ -53,7 +54,7 @@ void backgroundCallbackDispatcher() {
         // Real push registered → the phone already rang for every message;
         // this 15-min check is only the fallback for phones without push.
         if (prefs.getString('push_registered_v1') == null) {
-          await ChatService.notifyNew(prefs, Dio(), (t, b) => NotificationService.instance.showNow(t, b));
+          await ChatService.notifyNew(prefs, withRegionFallback(Dio()), (t, b) => NotificationService.instance.showNow(t, b));
         }
       } catch (_) {}
       return true;

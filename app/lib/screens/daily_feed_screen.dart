@@ -13,6 +13,7 @@ import '../services/drive_urls.dart';
 import '../services/photo_freshness.dart' show photoCacheManager;
 import '../widgets/caps_text.dart';
 import '../widgets/photo_grid.dart';
+import '../services/region_fallback.dart';
 
 /// Owner 15-Oct: DAILY UPDATE like the WhatsApp broadcast — one bubble per
 /// day ("15 Oct · 12 new designs"), newest at the bottom; a day opens as a
@@ -81,7 +82,7 @@ List<DailyDay> _parse(String body) {
 /// minute or two ago), GitHub Pages only when the cloud does not answer.
 final dailyFeedProvider = FutureProvider<List<DailyDay>>((ref) async {
   try {
-    final r = await Dio().get<String>('$_kCloud/dailyFeed',
+    final r = await withRegionFallback(Dio()).get<String>('$_kCloud/dailyFeed',
         options: Options(
             responseType: ResponseType.plain,
             headers: const {'x-app-key': 'akn-zone-app-v3', 'Cache-Control': 'no-store'},

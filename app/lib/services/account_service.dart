@@ -9,6 +9,7 @@ import '../models/order.dart';
 import 'chat_service.dart';
 import 'order_service.dart';
 import 'stats_service.dart';
+import 'region_fallback.dart';
 
 /// Owner 14-Oct: customer ONBOARDING. Before the catalog every customer
 /// verifies their mobile on WhatsApp ("AKN LOGIN <code>" to the shop's
@@ -33,11 +34,11 @@ class AccountService {
   /// The shop's WhatsApp number (AKN Chat bot).
   static const kShopWhatsApp = '917016638059';
 
-  static final Dio dio = Dio(BaseOptions(
+  static final Dio dio = withRegionFallback(Dio(BaseOptions(
     connectTimeout: const Duration(seconds: 10),
     receiveTimeout: const Duration(seconds: 20),
     sendTimeout: const Duration(seconds: 60),
-  ));
+  )));
 
   // ───────────────────────── saved account ─────────────────────────
 

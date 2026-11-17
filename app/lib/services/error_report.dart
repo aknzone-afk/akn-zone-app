@@ -1,11 +1,12 @@
 import 'dart:io';
 
 import 'package:dio/dio.dart';
+import 'region_fallback.dart';
 
 /// Sends an app error to the shop's cloud (bbapp_errors) so it can be fixed
 /// without asking the customer. Never throws; at most 20 reports per run.
 int _sent = 0;
-final _dio = Dio();
+final _dio = withRegionFallback(Dio());
 
 void reportAppError(String error, StackTrace? stack) {
   if (_sent >= 20) return;
