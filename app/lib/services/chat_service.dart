@@ -102,7 +102,8 @@ class ChatService {
           data: {...body, 'mobile': mobile, 'device': await PhoneLock.phoneId()},
           options: Options(headers: _hdr, contentType: Headers.jsonContentType,
               receiveTimeout: Duration(seconds: secs),
-              validateStatus: (s) => s != null && s < 500));
+              // 429 (busy / rate limit) is an error: the region fallback then tries the next region
+              validateStatus: (s) => s != null && s < 500 && s != 429));
       final d = res.data is String ? jsonDecode(res.data as String) : res.data;
       if (d is! Map) return null;
       if (d['error'] == 'not linked' && i == 0 && _relinked.add(mobile)) {

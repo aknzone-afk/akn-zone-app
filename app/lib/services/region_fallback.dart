@@ -7,10 +7,11 @@ import 'package:dio/dio.dart';
 /// farther away). When one refuses (429 / 5xx) or does not answer, the SAME
 /// request goes to the next one.
 const kCloudPrimary = 'asia-south2-akn-chat-a7dd8.cloudfunctions.net';
+// 18-Nov: Singapore was never brought up (Google could not initialise it), so
+// a call there only added a 404 and a delay. Delhi first, Mumbai as the backup.
 const _kCloudChain = [
   'asia-south2-akn-chat-a7dd8.cloudfunctions.net',
   'asia-south1-akn-chat-a7dd8.cloudfunctions.net',
-  'asia-southeast1-akn-chat-a7dd8.cloudfunctions.net',
 ];
 
 bool _retryable(DioException e) {

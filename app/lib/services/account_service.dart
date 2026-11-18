@@ -128,7 +128,8 @@ class AccountService {
               headers: _hdr,
               contentType: Headers.jsonContentType,
               receiveTimeout: Duration(seconds: secs),
-              validateStatus: (s) => s != null && s < 500));
+              // 429 (busy / rate limit) is an error: the region fallback then tries the next region
+              validateStatus: (s) => s != null && s < 500 && s != 429));
       final d = res.data is String ? jsonDecode(res.data as String) : res.data;
       // Store review: keep this device's key — needed to delete the account.
       if (d is Map && '${d['devKey'] ?? ''}'.length >= 16) {
