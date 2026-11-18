@@ -168,10 +168,10 @@ void _syncCatalogueOnce(WidgetRef ref) {
 
 /// Owner 18-Nov: opened from the Daily Update notification the page can be
 /// the only one on the stack — BACK must still land on the home page.
-Widget _backToHome(BuildContext context) => IconButton(
+Widget _backToHome(BuildContext context, [String to = '/']) => IconButton(
       icon: const Icon(Icons.arrow_back_ios_new_rounded),
       tooltip: 'Back',
-      onPressed: () => context.canPop() ? context.pop() : context.go('/'),
+      onPressed: () => context.canPop() ? context.pop() : context.go(to),
     );
 
 class DailyFeedScreen extends ConsumerStatefulWidget {
@@ -299,11 +299,17 @@ class DailyDayScreen extends ConsumerWidget {
     final day = days.where((d) => d.date == date).firstOrNull;
     final r = day == null ? (photos: const <Photo>[], missing: 0) : _photosFor(ref, day.items);
     if (r.missing > 0) _syncCatalogueOnce(ref);
-    return Scaffold(
-      appBar: AppBar(leading: _backToHome(context), title: UText(_label(date))),
-      body: r.photos.isEmpty ? const Center(child: Text('No designs for this day.')) : PhotoGrid(photos: r.photos),
-      // Owner 18-Nov: ticking designs here must show ADD TO CART, like a folder.
-      bottomNavigationBar: const SelectionBottomBar(),
+    // Owner 18-Nov: BACK from a day always returns to the DAILY UPDATE list
+    // (Yesterday / before that …), even when this day was opened directly.
+    return PopScope(
+      canPop: context.canPop(),
+      onPopInvokedWithResult: (didPop, _) { if (!didPop) context.go('/daily'); },
+      child: Scaffold(
+        appBar: AppBar(leading: _backToHome(context, '/daily'), title: UText(_label(date))),
+        body: r.photos.isEmpty ? const Center(child: Text('No designs for this day.')) : PhotoGrid(photos: r.photos),
+        // Owner 18-Nov: ticking designs here must show ADD TO CART, like a folder.
+        bottomNavigationBar: const SelectionBottomBar(),
+      ),
     );
   }
 }
