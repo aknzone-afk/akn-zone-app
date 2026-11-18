@@ -1535,14 +1535,10 @@ class _SignupFormState extends State<_SignupForm> {
   /// A valid GST number is filled in (it may still be checking).
   bool get _hasGst => gstValid(_gst.text);
 
-  /// Owner 18-Nov: Aadhaar / PAN / business proof are optional — shown only
-  /// when the customer taps "Add … (optional)".
-  bool _showOptional = false;
-
   /// Which ID this sign-up uses: GST, else PAN, else Aadhaar.
   String get _idUsed {
     if (_hasGst) return 'gst';
-    return 'aadhaar'; // without GST: an Aadhaar photo if the customer chose to add one (optional since 18-Nov)
+    return 'aadhaar'; // owner 15-Oct: without GST, Aadhaar is compulsory
   }
 
   /// PAN / Aadhaar card photo; the number is read from it on the phone.
@@ -1593,9 +1589,14 @@ class _SignupFormState extends State<_SignupForm> {
         if (!_gstOk) return 'This GST number could not be verified — correct it, or clear it and use PAN / Aadhaar.';
         return null;
       case 'aadhaar':
-        // Owner 18-Nov: "nothing must stop him entering the app - only the
-        // location is checked". Aadhaar / PAN / shop photos are optional; an
-        // unreadable one is simply not sent.
+        if (_aadhaarPhoto == null) return 'No GST? Please add photos of your Aadhaar card — front and back.';
+        if (!aadhaarValid(_aadhaar.text)) return 'Could not read the Aadhaar number from the photo — please take a clear, straight photo.';
+        if (!_aadhaarBothSides) {
+          return _aadhaarPhoto2 == null
+              ? 'Please add the Aadhaar $_aadhaarMissingSide too — we need both sides.'
+              : 'Could not read the address on the Aadhaar — please take a clearer photo of the BACK side.';
+        }
+        if (_panPhoto != null && !panValid(_pan.text)) return 'Could not read the PAN card — take a clear photo, or remove it (PAN is optional).';
         return null;
     }
     return null;
@@ -1689,8 +1690,15 @@ class _SignupFormState extends State<_SignupForm> {
     FocusScope.of(context).unfocus();
     final okFields = _formKey.currentState?.validate() ?? false;
     final idErr = _idError();
-    // Owner 18-Nov: the business proof is optional too.
-    const String? bizErr = null;
+    final bizErr = !_needCard
+        ? null
+        : _proofKind == null
+            ? 'Please choose: Existing business or New startup.'
+            : (_proofKind == 'existing' && _cardPhoto == null)
+                ? 'Please add a business photo.'
+                : (_proofKind == 'startup' && _proofVideo == null)
+                    ? 'Please record your live video.'
+                    : null;
     setState(() {
       _photoErr = idErr;
       _bizErr = bizErr;
@@ -1715,11 +1723,11 @@ class _SignupFormState extends State<_SignupForm> {
         kycDoc = 'pan';
         taxId = _norm(_pan.text);
         photo = _panPhoto;
-      } else if (_aadhaarPhoto != null && aadhaarValid(_aadhaar.text)) {
+      } else {
         kycDoc = 'aadhaar';
         taxId = _aadhaar.text.replaceAll(RegExp(r'\D'), '');
         photo = _aadhaarPhoto;
-      } // else: no ID at all — the cloud approves by location only
+      }
     }
     final cust = <String, dynamic>{
       'contact': _contact.text.trim(),
@@ -1870,10 +1878,10 @@ class _SignupFormState extends State<_SignupForm> {
               const SizedBox(height: 14),
               if (_india) ...[
                 // Owner 14-Oct: three boxes — GST, PAN, Aadhaar. One is enough.
-                const Text('GST number (if you have one)',
+                const Text('Your ID — fill any one *',
                     style: TextStyle(fontWeight: FontWeight.w800, fontSize: 15, color: _dark)),
                 const SizedBox(height: 4),
-                const Text('GST number fills your details by itself. No GST? No problem — just fill your details below.',
+                const Text('GST number fills your details by itself. No GST? Add a PAN or Aadhaar card photo.',
                     style: TextStyle(fontSize: 12.5, color: Colors.black54)),
                 const SizedBox(height: 10),
                 TextField(
@@ -1897,19 +1905,10 @@ class _SignupFormState extends State<_SignupForm> {
                             color: _gstChecking ? Colors.black54 : (_gstOk ? _green : _red))),
                   ),
                 const SizedBox(height: 12),
-                if (!_hasGst && !_showOptional)
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton.icon(
-                      onPressed: () => setState(() => _showOptional = true),
-                      icon: const Icon(Icons.add_rounded, size: 20),
-                      label: const Text('Add Aadhaar / PAN / shop photo (optional)'),
-                    ),
-                  ),
-                if (!_hasGst && _showOptional) ...[
+                if (!_hasGst) ...[
                   const Padding(
                     padding: EdgeInsets.symmetric(vertical: 8),
-                    child: Text('Optional — you can sign up without these:',
+                    child: Text('No GST? Aadhaar card FRONT and BACK photos are compulsory (PAN is optional):',
                         style: TextStyle(fontWeight: FontWeight.w700)),
                   ),
                   _aadhaarPhotos(),
@@ -2029,7 +2028,7 @@ class _SignupFormState extends State<_SignupForm> {
                 _usualTransports(),
               ],
               // Owner 15-Oct: no business-type question; without GST a business proof photo.
-              if (_needCard && _showOptional) ...[
+              if (_needCard) ...[
                 const SizedBox(height: 18),
                 _cardBox(),
                 if (_bizErr != null)
