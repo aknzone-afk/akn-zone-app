@@ -17,6 +17,7 @@ import '../services/device_binding.dart';
 import '../services/push_service.dart';
 import 'onboarding_screen.dart';
 import '../theme.dart';
+import '../services/region_fallback.dart';
 
 const String _kPhone = 'access_phone';
 
@@ -92,11 +93,25 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   /// (works even with the customer sheet switched off). Offline = let in.
   static Future<bool> _belowMinBuild() async {
     try {
-      final c = HttpClient()..connectionTimeout = const Duration(seconds: 6);
-      final rq = await c.getUrl(Uri.parse('$kAppConfigUrl?t=${DateTime.now().millisecondsSinceEpoch ~/ 300000}'));
-      final rs = await rq.close().timeout(const Duration(seconds: 8));
-      final j = jsonDecode(await rs.transform(utf8.decoder).join()) as Map<String, dynamic>;
-      c.close();
+      // 18-Nov: GitHub Pages unreachable on some networks -> statically.io copy.
+      final u0 = Uri.parse('$kAppConfigUrl?t=${DateTime.now().millisecondsSinceEpoch ~/ 300000}');
+      Map<String, dynamic>? got;
+      for (final u in [u0, Uri.parse(dataMirrorUrl(u0) ?? u0.toString())]) {
+        final c = HttpClient()..connectionTimeout = const Duration(seconds: 6);
+        try {
+          final rq = await c.getUrl(u);
+          final rs = await rq.close().timeout(const Duration(seconds: 8));
+          if (rs.statusCode != 200) continue;
+          got = jsonDecode(await rs.transform(utf8.decoder).join()) as Map<String, dynamic>;
+          break;
+        } catch (_) {
+          // try the next copy
+        } finally {
+          c.close();
+        }
+      }
+      final j = got;
+      if (j == null) throw const SocketException('app-config unreachable');
       // Owner's LIVE TEST (₹5 token, no minimum) — on/off from the website.
       final prefs = await SharedPreferences.getInstance();
       await prefs.setBool('live_test_v1', false); // owner 14-Oct: app is live

@@ -25,6 +25,7 @@ import '../services/push_service.dart';
 import '../services/transport_info.dart';
 import '../theme.dart';
 import 'tutorial_screen.dart';
+import '../services/region_fallback.dart';
 
 const _green = Color(0xFF1B8E3A);
 const _dark = Color(0xFF1B1A18);
@@ -1861,7 +1862,7 @@ class _SignupFormState extends State<_SignupForm> {
                 label: const Text('WATCH VIDEO: HOW TO SIGN UP', style: TextStyle(fontWeight: FontWeight.w800)),
                 onPressed: () async {
                   final p = await SharedPreferences.getInstance();
-                  await Tutorial.refresh(p, Dio());
+                  await Tutorial.refresh(p, withRegionFallback(Dio()));
                   if (!context.mounted) return;
                   await Navigator.of(context)
                       .push(MaterialPageRoute<void>(builder: (_) => const TutorialScreen(signup: true)));

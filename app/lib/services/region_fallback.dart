@@ -23,6 +23,17 @@ bool _retryable(DioException e) {
       e.type == DioExceptionType.unknown;
 }
 
+/// Owner 18-Nov: some mobile networks (Jio / Airtel) intermittently cannot
+/// even look up aknzone-afk.github.io ("Failed host lookup") — the catalog,
+/// prices and settings then never load and the app looks dead. The same files
+/// are served by the statically.io CDN straight from the GitHub repo (jsDelivr refuses repos > 50 MB).
+const kDataHost = 'aknzone-afk.github.io';
+const kDataPrefix = '/akn-zone-data/';
+String? dataMirrorUrl(Uri u) {
+  if (u.host != kDataHost || !u.path.startsWith(kDataPrefix)) return null;
+  return 'https://cdn.statically.io/gh/aknzone-afk/akn-zone-data@main/${u.path.substring(kDataPrefix.length)}';
+}
+
 class RegionFallback extends Interceptor {
   RegionFallback(this._dio);
   final Dio _dio;
@@ -30,6 +41,17 @@ class RegionFallback extends Interceptor {
   @override
   Future<void> onError(DioException err, ErrorInterceptorHandler handler) async {
     final o = err.requestOptions;
+    // GitHub Pages unreachable → same file from statically.io (once).
+    final mirror = dataMirrorUrl(o.uri);
+    if (mirror != null && o.extra['dataMirror'] != true && _retryable(err)) {
+      try {
+        final r = await _dio.fetch<dynamic>(o.copyWith(
+            path: mirror, baseUrl: '', queryParameters: const {}, extra: {...o.extra, 'dataMirror': true}));
+        return handler.resolve(r);
+      } catch (_) {
+        return handler.next(err);
+      }
+    }
     final at = _kCloudChain.indexOf(o.uri.host);
     // a retry this interceptor itself sent: its loop below handles the chain
     if (o.extra['regionFallback'] == true) return handler.next(err);

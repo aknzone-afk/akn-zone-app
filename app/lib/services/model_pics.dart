@@ -4,12 +4,13 @@ import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../config.dart';
+import 'region_fallback.dart';
 
 /// Owner 26-Oct: modelling photos (the 12 X 18 printing files, published by
 /// the shop PC as app/model.json → {design no.: ["model/5938.jpg", …]}).
 final modelPicsProvider = FutureProvider<Map<String, List<String>>>((ref) async {
   try {
-    final r = await Dio().get<String>('$kDataBase/app/model.json?t=${DateTime.now().millisecondsSinceEpoch ~/ 1800000}',
+    final r = await withRegionFallback(Dio()).get<String>('$kDataBase/app/model.json?t=${DateTime.now().millisecondsSinceEpoch ~/ 1800000}',
         options: Options(responseType: ResponseType.plain, receiveTimeout: const Duration(seconds: 15)));
     final j = jsonDecode(r.data ?? '{}') as Map<String, dynamic>;
     final m = (j['m'] as Map?) ?? const {};

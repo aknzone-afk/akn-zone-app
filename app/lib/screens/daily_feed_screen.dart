@@ -90,7 +90,7 @@ final dailyFeedProvider = FutureProvider<List<DailyDay>>((ref) async {
     final days = _parse(r.data ?? '{}');
     if (days.isNotEmpty) return days;
   } catch (_) {/* fall back to the published copy */}
-  final r = await Dio().get<String>('$kDataBase/app/daily-feed.json?t=${DateTime.now().millisecondsSinceEpoch}',
+  final r = await withRegionFallback(Dio()).get<String>('$kDataBase/app/daily-feed.json?t=${DateTime.now().millisecondsSinceEpoch}',
       options: Options(responseType: ResponseType.plain, receiveTimeout: const Duration(seconds: 20)));
   return _parse(r.data ?? '{}');
 });
