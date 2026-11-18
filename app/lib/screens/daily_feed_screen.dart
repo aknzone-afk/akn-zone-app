@@ -13,6 +13,7 @@ import '../services/drive_urls.dart';
 import '../services/photo_freshness.dart' show photoCacheManager;
 import '../widgets/caps_text.dart';
 import '../widgets/photo_grid.dart';
+import 'share_bar.dart' show SelectionBottomBar;
 import '../services/region_fallback.dart';
 
 /// Owner 15-Oct: DAILY UPDATE like the WhatsApp broadcast — one bubble per
@@ -164,6 +165,15 @@ void _syncCatalogueOnce(WidgetRef ref) {
   });
 }
 
+
+/// Owner 18-Nov: opened from the Daily Update notification the page can be
+/// the only one on the stack — BACK must still land on the home page.
+Widget _backToHome(BuildContext context) => IconButton(
+      icon: const Icon(Icons.arrow_back_ios_new_rounded),
+      tooltip: 'Back',
+      onPressed: () => context.canPop() ? context.pop() : context.go('/'),
+    );
+
 class DailyFeedScreen extends ConsumerStatefulWidget {
   const DailyFeedScreen({super.key});
 
@@ -181,8 +191,11 @@ class _DailyFeedScreenState extends ConsumerState<DailyFeedScreen> {
   @override
   Widget build(BuildContext context) {
     final feed = ref.watch(dailyFeedProvider);
-    return Scaffold(
-      appBar: AppBar(title: const UText('DAILY UPDATE')),
+    return PopScope(
+      canPop: context.canPop(),
+      onPopInvokedWithResult: (didPop, _) { if (!didPop) context.go('/'); },
+      child: Scaffold(
+      appBar: AppBar(leading: _backToHome(context), title: const UText('DAILY UPDATE')),
       body: feed.when(
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (_, __) => Center(
@@ -204,6 +217,7 @@ class _DailyFeedScreenState extends ConsumerState<DailyFeedScreen> {
           );
         },
       ),
+    ),
     );
   }
 }
@@ -286,8 +300,10 @@ class DailyDayScreen extends ConsumerWidget {
     final r = day == null ? (photos: const <Photo>[], missing: 0) : _photosFor(ref, day.items);
     if (r.missing > 0) _syncCatalogueOnce(ref);
     return Scaffold(
-      appBar: AppBar(title: UText(_label(date))),
+      appBar: AppBar(leading: _backToHome(context), title: UText(_label(date))),
       body: r.photos.isEmpty ? const Center(child: Text('No designs for this day.')) : PhotoGrid(photos: r.photos),
+      // Owner 18-Nov: ticking designs here must show ADD TO CART, like a folder.
+      bottomNavigationBar: const SelectionBottomBar(),
     );
   }
 }
