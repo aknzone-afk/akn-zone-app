@@ -14,6 +14,21 @@ class MainActivity : FlutterActivity() {
     private val channel = "com.bbsynthetics.catalog_app/share"
     private val authority = "com.bbsynthetics.catalog_app.shareprovider"
 
+    /**
+     * 19-Nov-2026: tapping a push while the app is CLOSED copies the push's data into the
+     * launch intent, and Flutter takes the extra named "route" as the first page. The 9 PM
+     * "new designs" push sends route = "daily" (no leading slash); go_router's matcher threw
+     * a RangeError on it and the app opened on a dead grey screen (2-7 error reports a day).
+     * The Dart side opens the right page from the push itself (PushService -> getInitialMessage),
+     * so a launch that comes from a push simply starts at home. Web / aknzone links are not
+     * touched: they carry no FCM message id.
+     */
+    override fun getInitialRoute(): String? {
+        val x = intent?.extras
+        if (x != null && (x.containsKey("google.message_id") || x.containsKey("message_id"))) return "/"
+        return super.getInitialRoute()
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channel)

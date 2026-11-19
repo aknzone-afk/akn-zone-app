@@ -94,7 +94,9 @@ Future<void> main() async {
   // ignore: unawaited_futures
   PushService.init((route) => WidgetsBinding.instance.addPostFrameCallback((_) =>
       // Owner 14-Oct: the 9 PM push opens the DAILY UPDATE folder.
-      route == 'daily' ? _openDailyUpdate(kDailyUpdateFolder) : openChat()));
+      // 19-Nov: the server also sends "/daily" ("new designs since your last order",
+      // the welcome push) — that opened the chat instead of DAILY UPDATE.
+      route == 'daily' || route == '/daily' ? _openDailyUpdate(kDailyUpdateFolder) : openChat()));
 
   // Cold-launched by tapping the notification → open the folder after frame 1.
   if (launchPayload != null && launchPayload.isNotEmpty) {
