@@ -30,9 +30,28 @@ bool _retryable(DioException e) {
 /// are served by the statically.io CDN straight from the GitHub repo (jsDelivr refuses repos > 50 MB).
 const kDataHost = 'aknzone-afk.github.io';
 const kDataPrefix = '/akn-zone-data/';
+
+/// 19-Nov: statically.io stalled on every file above a few KB (no body for 40 s)
+/// and serves copies up to a day old. The copies now, in this order:
+///  1. our own cloud address (`appData` — the host the app's API uses, so if the
+///     app works at all it can reach it; reads GitHub server-side, 3 min fresh;
+///     a busy Delhi falls over to Mumbai like every other call),
+///  2. GitHub's raw host (a different name than github.io),
+///  3. statically.io, last.
+List<String> dataMirrorUrls(Uri u) {
+  if (u.host != kDataHost || !u.path.startsWith(kDataPrefix)) return const [];
+  final p = u.path.substring(kDataPrefix.length);
+  return [
+    if (p.startsWith('app/')) 'https://$kCloudPrimary/appData?p=${Uri.encodeQueryComponent(p)}',
+    'https://raw.githubusercontent.com/aknzone-afk/akn-zone-data/main/$p',
+    'https://cdn.statically.io/gh/aknzone-afk/akn-zone-data@main/$p',
+  ];
+}
+
+/// The first (best) copy — for callers that try just one.
 String? dataMirrorUrl(Uri u) {
-  if (u.host != kDataHost || !u.path.startsWith(kDataPrefix)) return null;
-  return 'https://cdn.statically.io/gh/aknzone-afk/akn-zone-data@main/${u.path.substring(kDataPrefix.length)}';
+  final all = dataMirrorUrls(u);
+  return all.isEmpty ? null : all.first;
 }
 
 class RegionFallback extends Interceptor {
@@ -42,16 +61,19 @@ class RegionFallback extends Interceptor {
   @override
   Future<void> onError(DioException err, ErrorInterceptorHandler handler) async {
     final o = err.requestOptions;
-    // GitHub Pages unreachable → same file from statically.io (once).
-    final mirror = dataMirrorUrl(o.uri);
-    if (mirror != null && o.extra['dataMirror'] != true && _retryable(err)) {
-      try {
-        final r = await _dio.fetch<dynamic>(o.copyWith(
-            path: mirror, baseUrl: '', queryParameters: const {}, extra: {...o.extra, 'dataMirror': true}));
-        return handler.resolve(r);
-      } catch (_) {
-        return handler.next(err);
+    // GitHub Pages unreachable → the same file from the next copy, one after the other.
+    final mirrors = dataMirrorUrls(o.uri);
+    if (mirrors.isNotEmpty && o.extra['dataMirror'] != true && _retryable(err)) {
+      for (final mirror in mirrors) {
+        try {
+          final r = await _dio.fetch<dynamic>(o.copyWith(
+              path: mirror, baseUrl: '', queryParameters: const {}, extra: {...o.extra, 'dataMirror': true}));
+          return handler.resolve(r);
+        } catch (_) {
+          // this copy failed too — try the next one
+        }
       }
+      return handler.next(err);
     }
     final at = _kCloudChain.indexOf(o.uri.host);
     // a retry this interceptor itself sent: its loop below handles the chain
