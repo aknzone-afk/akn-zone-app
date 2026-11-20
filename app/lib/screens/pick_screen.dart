@@ -603,8 +603,9 @@ class _PickScreenState extends ConsumerState<PickScreen> {
         // Nothing selected after changes = out of the cart, like going back.
         await _done(leaving: true, pop: false);
       }
+      if (!mounted) return; // the screen was closed while the selection was being saved
       precacheImage(CachedNetworkImageProvider(next.detailUrl(), cacheManager: photoCacheManager), context);
-      if (mounted) context.pushReplacement('/pick/${Uri.encodeComponent(next.id)}');
+      context.pushReplacement('/pick/${Uri.encodeComponent(next.id)}');
     } finally {
       _moving = false;
     }

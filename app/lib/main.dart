@@ -18,6 +18,7 @@ import 'screens/daily_feed_screen.dart' show dailyFeedProvider;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  primeAppVersion(); // so every error report says which build it came from
   // Owner 12-Oct: the app must never close because of an app error — every
   // error is caught, logged to the shop's cloud, and the app keeps running.
   FlutterError.onError = (d) {

@@ -71,7 +71,13 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final refNo = (lastShop == null ? null : ChatService.refFor(prefs, lastShop.cust)) ??
         ChatService.latestRef(prefs);
     final text = _ctrl.text.trim();
-    if (refNo == null || (text.isEmpty && image == null) || _sending) return;
+    if ((text.isEmpty && image == null) || _sending) return;
+    if (refNo == null) {
+      // 20-Nov: with no order yet SEND did nothing at all — say why.
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('This chat opens after we send you a bill for payment.')));
+      return;
+    }
     setState(() => _sending = true);
     final paid = await ChatService.send(ref.read(dioProvider), refNo, text: text, image: image)
         .catchError((_) => null);

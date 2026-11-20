@@ -10,6 +10,15 @@ int _sent = 0;
 String _ver = '';
 final _dio = withRegionFallback(Dio());
 
+/// Called once at start: learn the app version BEFORE the first report. Until
+/// 3.1.55 the first report of every run went out without it (the version was
+/// looked up only after the first error), which hid which build a crash was on.
+void primeAppVersion() {
+  if (_ver.isNotEmpty) return;
+  // ignore: discarded_futures
+  PackageInfo.fromPlatform().then((i) => _ver = '${i.version}+${i.buildNumber}').catchError((_) => _ver = '?');
+}
+
 void reportAppError(String error, StackTrace? stack) {
   if (_sent >= 20) return;
   _sent++;
