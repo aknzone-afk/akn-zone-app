@@ -5,6 +5,7 @@ import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 
 import '../config.dart';
 import 'drive_urls.dart';
+import 'region_fallback.dart' show dataMirrorUrls;
 
 /// `drive.google.com/thumbnail?id=X&sz=wN` does nothing but redirect to this
 /// address on Google's image host — the same bytes and the same version tag
@@ -27,7 +28,12 @@ String? driveDirectUrl(String url) {
 /// more; anything else gets one second try.
 List<String> photoFetchOrder(String url) {
   final direct = driveDirectUrl(url);
-  return direct == null ? [url, url] : [direct, url, direct];
+  if (direct != null) return [direct, url, direct];
+  // The app's own files (the modelling photos live on GitHub Pages, which some
+  // networks cannot reach): the address itself, then its backup copies.
+  final u = Uri.tryParse(url);
+  final copies = u == null ? const <String>[] : dataMirrorUrls(u);
+  return copies.isEmpty ? [url, url] : [url, ...copies.take(2)];
 }
 
 /// Fetches through [photoFetchOrder]; the cache key stays the URL the app

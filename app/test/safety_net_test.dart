@@ -196,6 +196,12 @@ void main() {
       expect(driveDirectUrl('not a url at all'), isNull);
       expect(photoFetchOrder(drive), [direct, drive, direct]);
       expect(photoFetchOrder('https://example.com/a.jpg'), ['https://example.com/a.jpg', 'https://example.com/a.jpg']);
+      // a modelling photo (GitHub Pages): itself, then our cloud copy, then GitHub's raw host
+      expect(photoFetchOrder('https://aknzone-afk.github.io/akn-zone-data/app/model/5938.jpg'), [
+        'https://aknzone-afk.github.io/akn-zone-data/app/model/5938.jpg',
+        'https://asia-south2-akn-chat-a7dd8.cloudfunctions.net/appData?p=app%2Fmodel%2F5938.jpg',
+        'https://raw.githubusercontent.com/aknzone-afk/akn-zone-data/main/app/model/5938.jpg',
+      ]);
     });
 
     test('first address good: one request, no Drive front door', () async {
