@@ -46,7 +46,7 @@ jobs:
           # (1) the way Android starts it when a push is tapped while the app is CLOSED (the push's data
           #     arrives as intent extras; "route=daily" used to open a dead grey screen), (2) a plain start.
           script: |
-            flutter drive --driver=test_driver/shots.dart --target=integration_test/store_shots_test.dart --profile --no-dds
+            flutter drive --driver=test_driver/shots.dart --target=integration_test/store_shots_test.dart --profile --no-dds --keep-app-running
             adb shell am force-stop com.bbsynthetics.catalog_app || true
             adb shell am start -n com.bbsynthetics.catalog_app/.MainActivity --es route daily --es google.message_id smoke-test-1 || true
             sleep 45
