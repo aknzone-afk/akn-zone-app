@@ -59,6 +59,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   bool _resolving = false;
   bool _checkedForceUpdate = false;
   bool _checkedMinBuild = false;
+  bool _mustUpdate = false;
   bool _preloaded = false;
 
   @override
@@ -93,10 +94,11 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   /// (works even with the customer sheet switched off). Offline = let in.
   static Future<bool> _belowMinBuild() async {
     try {
-      // 18-Nov: GitHub Pages unreachable on some networks -> statically.io copy.
+      // 18-Nov: GitHub Pages unreachable on some networks -> the backup copies
+      // (20-Nov: our own cloud copy first, then GitHub's raw host, then statically.io).
       final u0 = Uri.parse('$kAppConfigUrl?t=${DateTime.now().millisecondsSinceEpoch ~/ 300000}');
       Map<String, dynamic>? got;
-      for (final u in [u0, Uri.parse(dataMirrorUrl(u0) ?? u0.toString())]) {
+      for (final u in [u0, ...dataMirrorUrls(u0).map(Uri.parse)]) {
         final c = HttpClient()..connectionTimeout = const Duration(seconds: 6);
         try {
           final rq = await c.getUrl(u);
@@ -120,6 +122,21 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
       final fl = (j['model_flash_ms'] as num?)?.toInt();
       if (fl != null && fl >= 0 && fl <= 5000) kModelFlashMs = fl; // 26-Oct: modelling-photo flash on open
       final min = (j[Platform.isIOS ? 'min_build_ios' : 'min_build_android'] as num?)?.toInt() ?? 0;
+      await prefs.setInt(_kMinBuildSeen, min); // for the instant check at the next start
+      final mine = int.tryParse((await PackageInfo.fromPlatform()).buildNumber) ?? 0;
+      return mine > 0 && mine < min;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static const _kMinBuildSeen = 'min_build_seen_v1';
+
+  /// The same question answered from the phone alone (the minimum build this
+  /// phone saw last time) — no network, so it never holds up the start.
+  static Future<bool> _belowMinBuildSeen() async {
+    try {
+      final min = (await SharedPreferences.getInstance()).getInt(_kMinBuildSeen) ?? 0;
       final mine = int.tryParse((await PackageInfo.fromPlatform()).buildNumber) ?? 0;
       return mine > 0 && mine < min;
     } catch (_) {
@@ -202,9 +219,25 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
   Future<void> _resolve({bool silent = false}) async {
     if (!_checkedMinBuild) {
       _checkedMinBuild = true;
-      if (await _belowMinBuild()) {
-        if (mounted) setState(() => _state = _Gate.forceUpdate);
-        return;
+      // 20-Nov: every start used to WAIT here for app-config.json (GitHub, then
+      // the backup copy) before anything was shown — a spinner for 1 s on a good
+      // network and up to 14-28 s on the networks that cannot reach GitHub.
+      // Now the phone's own memory of the minimum build decides at once, and
+      // the fresh answer is fetched while the catalogue is already on screen.
+      if (await _belowMinBuildSeen()) {
+        // looked too old last time: ask again now (the shop may have changed it)
+        if (await _belowMinBuild()) {
+          _mustUpdate = true;
+          if (mounted) setState(() => _state = _Gate.forceUpdate);
+          return;
+        }
+      } else {
+        // ignore: discarded_futures
+        _belowMinBuild().then((below) {
+          if (!below) return;
+          _mustUpdate = true; // wins over whatever the account check decides meanwhile
+          if (mounted) setState(() => _state = _Gate.forceUpdate);
+        });
       }
     }
     if (_state == _Gate.forceUpdate) return;
@@ -277,6 +310,7 @@ class _AuthGateState extends State<AuthGate> with WidgetsBindingObserver {
 
   @override
   Widget build(BuildContext context) {
+    if (_mustUpdate) return const ForceUpdateScreen();
     switch (_state) {
       case _Gate.loading:
         return const Scaffold(body: Center(child: CircularProgressIndicator()));

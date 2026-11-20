@@ -130,15 +130,29 @@ class _TutorialScreenState extends ConsumerState<TutorialScreen> {
     );
     _sub = _ctrl!.listen((v) {
       if (!mounted) return;
+      if (v.playerState == PlayerState.playing || v.playerState == PlayerState.paused ||
+          v.playerState == PlayerState.buffering) {
+        _started = true;
+      }
       if (v.playerState == PlayerState.ended && !_ended) {
         setState(() => _ended = true);
       }
       if (v.hasError && !_failed) setState(() => _failed = true);
     });
+    // 20-Nov: on a weak network the player never starts ("failed to initialize
+    // within 30 seconds", 24 reports) and CONTINUE stayed locked — after 20 s
+    // without a picture the button opens, so nobody waits in front of a black box.
+    _slow = Timer(const Duration(seconds: 20), () {
+      if (mounted && !_started && !_ended && !_failed) setState(() => _failed = true);
+    });
   }
+
+  bool _started = false;
+  Timer? _slow;
 
   @override
   void dispose() {
+    _slow?.cancel();
     _sub?.cancel();
     _ctrl?.close();
     super.dispose();

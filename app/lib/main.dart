@@ -28,6 +28,10 @@ Future<void> main() async {
     reportAppError('$e', st);
     return true; // handled — don't crash
   };
+  // 20-Nov: a part of a page that fails to build used to show as a dead GREY
+  // block — a whole page as a dead grey screen. Now a small part just leaves a
+  // gap, and a whole page says what happened with a way back to the catalogue.
+  ErrorWidget.builder = (_) => const _SoftError();
 
   // Lock app to portrait orientation. Nothing before runApp may stop the
   // catalog from showing (tester 13-Oct: a throw here = splash forever).
@@ -122,4 +126,39 @@ void _openDailyUpdate(String payload) {
   if (c == null) return;
   c.invalidate(dailyFeedProvider);
   c.invalidate(catalogProvider);
+}
+
+class _SoftError extends StatelessWidget {
+  const _SoftError();
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(builder: (context, c) {
+        final page = c.maxWidth.isFinite && c.maxHeight.isFinite && c.maxWidth > 260 && c.maxHeight > 320;
+        if (!page) return const SizedBox.shrink();
+        return Directionality(
+          textDirection: TextDirection.ltr,
+          child: ColoredBox(
+            color: const Color(0xFFFAF7F2),
+            child: Center(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () {
+                  try {
+                    appRouter.go('/');
+                  } catch (_) {}
+                },
+                child: const Padding(
+                  padding: EdgeInsets.all(32),
+                  child: Text(
+                    'This page could not open.\n\nTap here to go back to the catalogue.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                        color: Color(0xFF333333), fontSize: 16, height: 1.4, decoration: TextDecoration.none),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+      });
 }

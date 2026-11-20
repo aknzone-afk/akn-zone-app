@@ -122,6 +122,45 @@ final appRouter = GoRouter(
   ],
 );
 
+/// 20-Nov: go_router THROWS (a RangeError inside its matcher) on a location it
+/// cannot digest — "daily" from a tapped push (Android hands the push's "route"
+/// value to Flutter as the first page), or the empty location of a router that
+/// never finished starting. An exception there left the whole app on a dead
+/// grey screen that came back on every reopen, and BACK stopped working
+/// (88 + 19 error reports in three weeks). Anything unreadable now simply
+/// opens the catalogue.
+class SafeRouteParser extends RouteInformationParser<RouteMatchList> {
+  SafeRouteParser(this._inner);
+  final RouteInformationParser<RouteMatchList> _inner;
+
+  static RouteInformation _home() => RouteInformation(
+      uri: Uri.parse('/'),
+      // ignore: invalid_use_of_visible_for_testing_member
+      state: RouteInformationState<void>(type: NavigatingType.go));
+
+  @override
+  Future<RouteMatchList> parseRouteInformationWithDependencies(
+      RouteInformation routeInformation, BuildContext context) {
+    try {
+      return _inner.parseRouteInformationWithDependencies(routeInformation, context);
+    } catch (_) {
+      return _inner.parseRouteInformationWithDependencies(_home(), context);
+    }
+  }
+
+  @override
+  RouteInformation? restoreRouteInformation(RouteMatchList configuration) =>
+      _inner.restoreRouteInformation(configuration);
+}
+
+/// [appRouter] with the safe parser in front — what the app is built with.
+final RouterConfig<RouteMatchList> appRouterConfig = RouterConfig<RouteMatchList>(
+  routeInformationProvider: appRouter.routeInformationProvider,
+  routeInformationParser: SafeRouteParser(appRouter.routeInformationParser),
+  routerDelegate: appRouter.routerDelegate,
+  backButtonDispatcher: appRouter.backButtonDispatcher,
+);
+
 class CatalogApp extends ConsumerStatefulWidget {
   const CatalogApp({super.key});
 
@@ -187,7 +226,7 @@ class _CatalogAppState extends ConsumerState<CatalogApp>
       title: kAppTitle,
       theme: buildAppTheme(),
       debugShowCheckedModeBanner: false,
-      routerConfig: appRouter,
+      routerConfig: appRouterConfig,
       // Customer access gate wraps every route: force-update → OTP login →
       // approval check → catalog. A transparent no-op until the access-control
       // backend is configured (kAccessControlEnabled).

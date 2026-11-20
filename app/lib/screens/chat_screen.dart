@@ -5,7 +5,7 @@ import 'dart:typed_data';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:image_picker/image_picker.dart';
+import '../services/pick_images.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
@@ -98,7 +98,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   /// Owner 13-Oct: several payment screenshots at once — each one is read
   /// and added to the bill's payments (the cloud keeps the total).
   Future<void> _photo() async {
-    final xs = await ImagePicker().pickMultiImage(maxWidth: 1800, imageQuality: 85, limit: 10);
+    final xs = await pickImagesSafely();
     for (final x in xs) {
       if (!mounted) return;
       await _send(image: await x.readAsBytes());

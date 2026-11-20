@@ -734,7 +734,7 @@ class _PickScreenState extends ConsumerState<PickScreen> {
                 // the screen — keep room for every row under the photo: SET
                 // bar 64, UNDO row 72, modelling-pic row 62 (when shown),
                 // PREVIOUS / NEXT bar 72.
-                final hasModel = modelPicsOf(ref.watch(modelPicsProvider).value, photo.designNumber).isNotEmpty;
+                final hasModel = modelPicsOf(ref.watch(modelPicsProvider).valueOrNull, photo.designNumber).isNotEmpty;
                 final room = outer.maxHeight - 64 - 72 - (hasModel ? 62 : 0) - 72;
                 if (ih > room) {
                   ih = math.max(80.0, room);
@@ -890,7 +890,7 @@ class _PickScreenState extends ConsumerState<PickScreen> {
                   ),
                   // Owner 26-Oct: the modelling photo (12 X 18) of this design.
                   Builder(builder: (context) {
-                    final pics = modelPicsOf(ref.watch(modelPicsProvider).value, photo.designNumber);
+                    final pics = modelPicsOf(ref.watch(modelPicsProvider).valueOrNull, photo.designNumber);
                     if (pics.isEmpty) return const SizedBox.shrink();
                     warmModelPic(pics.first); // first tap = instant
                     // Thumbnail of the photo first, the words beside it; the

@@ -6,7 +6,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:image_picker/image_picker.dart';
+import '../services/pick_images.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import 'package:go_router/go_router.dart';
@@ -109,9 +109,9 @@ class _MyOrdersScreenState extends ConsumerState<MyOrdersScreen> {
   }
 
   Future<void> _sendPayment(String orderRef) async {
-    final x = await ImagePicker().pickImage(
-        source: ImageSource.gallery, maxWidth: 1800, imageQuality: 85);
-    if (x == null || !mounted) return;
+    final picked = await pickImagesSafely(multi: false);
+    if (picked.isEmpty || !mounted) return;
+    final x = picked.first;
     showDialog<void>(
         context: context,
         barrierDismissible: false,

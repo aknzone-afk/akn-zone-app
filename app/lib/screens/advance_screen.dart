@@ -4,7 +4,7 @@ import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:image_picker/image_picker.dart';
+import '../services/pick_images.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 
@@ -78,7 +78,7 @@ class _AdvanceScreenState extends ConsumerState<AdvanceScreen> {
   /// Owner 13-Oct: one or SEVERAL screenshots (₹2,000 + ₹1,000 + …) — each
   /// is read by the cloud, which adds them up; done when the total covers it.
   Future<void> _upload() async {
-    final xs = await ImagePicker().pickMultiImage(maxWidth: 1800, imageQuality: 85, limit: 10);
+    final xs = await pickImagesSafely();
     if (xs.isEmpty || !mounted) return;
     setState(() {
       _busy = true;

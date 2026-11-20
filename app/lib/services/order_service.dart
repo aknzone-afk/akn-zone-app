@@ -19,7 +19,7 @@ import 'background_refresh.dart' show BackgroundRefresh;
 import '../models/photo.dart';
 import 'drive_urls.dart';
 import 'edit_service.dart';
-import 'photo_freshness.dart' show photoCacheManager;
+import 'photo_freshness.dart' show photoCacheManager, photoFetchOrder;
 import 'picks_service.dart';
 
 /// Result of an India Post pincode lookup.
@@ -614,9 +614,18 @@ class OrderService {
     bool holdForAdvance = false,
   }) async {
     final parcel = activeParcel(prefs, mobile: customer.mobile);
+    // 20-Nov: the cloud gets the order BEFORE the photos are prepared. When a
+    // photo then could not be downloaded the customer was told "not placed,
+    // tap again" — and the second tap made a SECOND order number while the
+    // cloud still delivered the first. The same cart tried again within 20
+    // minutes now keeps the reference (and so the ORDER NO.) it already has.
+    final sig = '${customer.mobile}|${[for (final ph in photos) '${ph.id}:${qty[ph.id] ?? 1}'].join(',')}';
+    final again = _retryRef != null &&
+        _retrySig == sig &&
+        DateTime.now().millisecondsSinceEpoch - _retryAt < 20 * 60000;
     final order = Order(
       addOnTo: parcel?.number,
-      number: newOrderNumber(),
+      number: again ? _retryRef! : newOrderNumber(),
       createdAt: DateTime.now(),
       items: [
         for (final ph in photos)
@@ -639,9 +648,11 @@ class OrderService {
     // phone never finishes sending the photos, the cloud posts the order to
     // the shop itself within minutes. Offline: the normal retry path below.
     onStep?.call('Placing order…');
+    var onCloud = false;
     try {
       final no = await _placeOnCloud(prefs, dio, order);
       if (no != null) {
+        onCloud = true;
         order.serial = no;
         onStep?.call('✅ Order no. $no placed.\nNow sending the photos — please keep the app open for a minute.');
       }
@@ -661,10 +672,13 @@ class OrderService {
         if (bytes == null || bytes.isEmpty) {
           // Tester 13-Oct: 3 tries — one failed download on a weak signal
           // used to drop the design from the order without a word.
+          // 20-Nov: the image host directly first, Drive's front door second
+          // (it is the one that answers 504 / 429) — see photoFetchOrder.
+          final urls = photoFetchOrder(DriveUrls.thumbnail(ph.id, width: 1600));
           for (var attempt = 0; attempt < 3; attempt++) {
             try {
               final res = await dio.get<List<int>>(
-                DriveUrls.thumbnail(ph.id, width: 1600),
+                urls[attempt % urls.length],
                 options: Options(responseType: ResponseType.bytes),
               );
               final got = Uint8List.fromList(res.data ?? const []);
@@ -727,8 +741,14 @@ class OrderService {
       try {
         dir.deleteSync(recursive: true);
       } catch (_) {}
+      if (onCloud || again) {
+        _retryRef = order.number;
+        _retrySig = sig;
+        _retryAt = DateTime.now().millisecondsSinceEpoch;
+      }
       throw OrderPhotosMissing(missing);
     }
+    _retryRef = null;
     // New customer: held for the 10% advance (AdvanceScreen). The flag is in
     // the FIRST save, so a crash right here can never let a retry send it.
     order.awaitingAdvance = holdForAdvance;
@@ -769,6 +789,12 @@ class OrderService {
     final d = res.data is String ? jsonDecode(res.data as String) : res.data;
     return (d is Map && d['ok'] == true) ? (d['no'] as num?)?.toInt() : null;
   }
+
+  /// Reference of an order the cloud holds but whose photos failed on this
+  /// phone (see [place]); memory only — a restarted app starts clean.
+  static String? _retryRef;
+  static String _retrySig = '';
+  static int _retryAt = 0;
 
   static bool _retrying = false;
 

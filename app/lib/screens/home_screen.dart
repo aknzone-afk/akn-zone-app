@@ -32,7 +32,7 @@ class HomeScreen extends ConsumerWidget {
     final filter = ref.watch(filterProvider);
 
     // First-install loading: fullscreen collage with no app bar / nav bar.
-    if (catalogAsync.value == null && !catalogAsync.hasError) {
+    if (catalogAsync.valueOrNull == null && !catalogAsync.hasError) {
       return const Scaffold(body: LoadingCollage());
     }
     // Owner 14-Oct: up to 5 s more on the collage while the first screen of
@@ -141,7 +141,7 @@ class HomeScreen extends ConsumerWidget {
   /// to display. Subsequent refreshes (silent or pull-to-refresh) keep the
   /// previously-cached photos on screen.
   Widget _buildBody(WidgetRef ref, AsyncValue<dynamic> async) {
-    final value = async.value;
+    final value = async.valueOrNull;
     if (value == null) {
       if (async.hasError) {
         return _ErrorView(

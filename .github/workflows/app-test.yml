@@ -1,0 +1,30 @@
+# Runs the app's unit / widget tests on a cheap Linux runner (the shop PC is
+# not used for this). Started by hand:  gh workflow run app-test.yml -f path=test/safety_net_test.dart
+name: App tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      path:
+        description: "test file or folder inside app/"
+        default: "test"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: 3.41.9
+          cache: true
+      - name: flutter test
+        working-directory: app
+        run: |
+          flutter pub get
+          flutter test --reporter expanded ${{ inputs.path }}

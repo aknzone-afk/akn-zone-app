@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:dio/dio.dart';
@@ -19,6 +20,9 @@ final modelPicsProvider = FutureProvider<Map<String, List<String>>>((ref) async 
         '${e.key}'.toUpperCase(): [for (final x in (e.value as List? ?? const [])) '$kDataBase/app/$x'],
     };
   } catch (_) {
+    // 20-Nov: one failed download meant no modelling photos until the app was restarted
+    final t = Timer(const Duration(seconds: 60), ref.invalidateSelf);
+    ref.onDispose(t.cancel);
     return const {};
   }
 });

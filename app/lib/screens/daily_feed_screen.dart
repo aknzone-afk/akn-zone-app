@@ -81,9 +81,13 @@ List<DailyDay> _parse(String body) {
 
 /// Always the freshest copy: the cloud first (what the shop PC uploaded a
 /// minute or two ago), GitHub Pages only when the cloud does not answer.
+Dio _feedDio() => withRegionFallback(Dio(BaseOptions(
+    // 20-Nov: without these a half-dead network kept the DAILY UPDATE spinner turning for minutes
+    connectTimeout: const Duration(seconds: 8), sendTimeout: const Duration(seconds: 10))));
+
 final dailyFeedProvider = FutureProvider<List<DailyDay>>((ref) async {
   try {
-    final r = await withRegionFallback(Dio()).get<String>('$_kCloud/dailyFeed',
+    final r = await _feedDio().get<String>('$_kCloud/dailyFeed',
         options: Options(
             responseType: ResponseType.plain,
             headers: const {'x-app-key': 'akn-zone-app-v3', 'Cache-Control': 'no-store'},
@@ -91,21 +95,23 @@ final dailyFeedProvider = FutureProvider<List<DailyDay>>((ref) async {
     final days = _parse(r.data ?? '{}');
     if (days.isNotEmpty) return days;
   } catch (_) {/* fall back to the published copy */}
-  final r = await withRegionFallback(Dio()).get<String>('$kDataBase/app/daily-feed.json?t=${DateTime.now().millisecondsSinceEpoch}',
+  final r = await _feedDio().get<String>('$kDataBase/app/daily-feed.json?t=${DateTime.now().millisecondsSinceEpoch}',
       options: Options(responseType: ResponseType.plain, receiveTimeout: const Duration(seconds: 20)));
   return _parse(r.data ?? '{}');
 });
 
 /// How many designs came today (for the badge on the home button).
 final dailyTodayCountProvider = Provider<int>((ref) {
-  final days = ref.watch(dailyFeedProvider).value ?? const <DailyDay>[];
+  final days = ref.watch(dailyFeedProvider).valueOrNull ?? const <DailyDay>[];
   final now = DateTime.now();
   final today = '${now.year}-${now.month.toString().padLeft(2, '0')}-${now.day.toString().padLeft(2, '0')}';
   return days.where((d) => d.date == today).fold(0, (t, d) => t + d.items.length);
 });
 
 String _label(String ymd) {
-  final p = ymd.split('-').map(int.parse).toList();
+  // a link with a broken date ("/daily/abc") must not take the page down
+  final p = ymd.split('-').map((x) => int.tryParse(x) ?? 0).toList();
+  if (p.length != 3 || p[0] < 2000 || p[1] < 1 || p[1] > 12 || p[2] < 1 || p[2] > 31) return ymd;
   final d = DateTime(p[0], p[1], p[2]);
   final now = DateTime.now();
   final today = DateTime(now.year, now.month, now.day);
@@ -295,9 +301,12 @@ class DailyDayScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final days = ref.watch(dailyFeedProvider).value ?? const <DailyDay>[];
+    final feed = ref.watch(dailyFeedProvider);
+    final days = feed.valueOrNull ?? const <DailyDay>[];
     final day = days.where((d) => d.date == date).firstOrNull;
     final r = day == null ? (photos: const <Photo>[], missing: 0) : _photosFor(ref, day.items);
+    // opened straight from a link / notification: the feed is still on its way
+    final waiting = day == null && feed.isLoading;
     if (r.missing > 0) _syncCatalogueOnce(ref);
     // Owner 18-Nov: BACK from a day always returns to the DAILY UPDATE list
     // (Yesterday / before that …), even when this day was opened directly.
@@ -306,7 +315,11 @@ class DailyDayScreen extends ConsumerWidget {
       onPopInvokedWithResult: (didPop, _) { if (!didPop) context.go('/daily'); },
       child: Scaffold(
         appBar: AppBar(leading: _backToHome(context, '/daily'), title: UText(_label(date))),
-        body: r.photos.isEmpty ? const Center(child: Text('No designs for this day.')) : PhotoGrid(photos: r.photos),
+        body: waiting
+            ? const Center(child: CircularProgressIndicator())
+            : r.photos.isEmpty
+                ? const Center(child: Text('No designs for this day.'))
+                : PhotoGrid(photos: r.photos),
         // Owner 18-Nov: ticking designs here must show ADD TO CART, like a folder.
         bottomNavigationBar: const SelectionBottomBar(),
       ),

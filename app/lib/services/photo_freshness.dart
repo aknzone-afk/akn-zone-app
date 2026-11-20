@@ -6,6 +6,60 @@ import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import '../config.dart';
 import 'drive_urls.dart';
 
+/// `drive.google.com/thumbnail?id=X&sz=wN` does nothing but redirect to this
+/// address on Google's image host — the same bytes and the same version tag
+/// (checked 20-Nov-2026). Null for any other URL.
+String? driveDirectUrl(String url) {
+  final u = Uri.tryParse(url);
+  if (u == null || u.host != 'drive.google.com' || u.path != '/thumbnail') return null;
+  final id = u.queryParameters['id'] ?? '';
+  final sz = u.queryParameters['sz'] ?? '';
+  if (!RegExp(r'^[A-Za-z0-9_-]{10,}$').hasMatch(id)) return null;
+  return 'https://lh3.googleusercontent.com/d/$id${RegExp(r'^[whs]\d+$').hasMatch(sz) ? '=$sz' : ''}';
+}
+
+/// The addresses to try for one photo, in order.
+///
+/// 20-Nov: Drive's front door answered thumbnails with 504 / 429 or dropped
+/// the connection (300+ error reports in three weeks) and the tile then stayed
+/// broken. A Drive photo is now asked for at the image host directly (one
+/// round trip less for every photo), then through Drive, then direct once
+/// more; anything else gets one second try.
+List<String> photoFetchOrder(String url) {
+  final direct = driveDirectUrl(url);
+  return direct == null ? [url, url] : [direct, url, direct];
+}
+
+/// Fetches through [photoFetchOrder]; the cache key stays the URL the app
+/// asked for, so every photo already on the phone stays valid.
+class PatientFileService extends FileService {
+  PatientFileService([FileService? inner]) : _inner = inner ?? HttpFileService();
+  final FileService _inner;
+
+  @override
+  Future<FileServiceResponse> get(String url, {Map<String, String>? headers}) async {
+    final order = photoFetchOrder(url);
+    FileServiceResponse? refused;
+    Object? error;
+    StackTrace? stack;
+    for (var i = 0; i < order.length; i++) {
+      if (i > 0) await Future<void>.delayed(Duration(milliseconds: 350 * i));
+      try {
+        final r = await _inner.get(order[i], headers: headers);
+        if (r.statusCode == 200 || r.statusCode == 201 || r.statusCode == 304) return r;
+        if (r.statusCode == 404) return r; // the photo is gone from Drive — asking again changes nothing
+        refused = r; // 429 / 5xx: let the body go and try the next address
+        r.content.drain<void>().catchError((_) {});
+      } catch (e, s) {
+        error = e;
+        stack = s;
+      }
+    }
+    if (refused != null) return refused; // the cache manager reports its status as before
+    Error.throwWithStackTrace(error!, stack!);
+  }
+}
+
 class _PhotoCacheManager extends CacheManager with ImageCacheManager {
   _PhotoCacheManager()
       : super(Config(
@@ -14,6 +68,7 @@ class _PhotoCacheManager extends CacheManager with ImageCacheManager {
           // (and the prefetch re-download) most of the ~1,900 cached images.
           DefaultCacheManager.key,
           maxNrOfCacheObjects: 5000,
+          fileService: PatientFileService(),
         ));
 }
 

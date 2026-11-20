@@ -85,7 +85,7 @@ class Photo {
 
   static int _designNumberValue(Photo p) {
     final m = _digits.firstMatch(p.designNumber ?? p.filename);
-    return m == null ? -1 : int.parse(m.group(0)!);
+    return m == null ? -1 : (int.tryParse(m.group(0)!) ?? -1);
   }
 
   /// Top-level folder name (first path segment).
