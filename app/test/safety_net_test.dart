@@ -75,12 +75,30 @@ void main() {
   const direct = 'https://lh3.googleusercontent.com/d/12rFxs_9xf4Gsi9j7FCA7aW8N7fYIgAsS=w600';
 
   group('router', () {
-    testWidgets('plain go_router DOES fail on the push route "daily" (the bug)', (t) async {
-      t.binding.platformDispatcher.defaultRouteNameTestValue = 'daily';
-      addTearDown(t.binding.platformDispatcher.clearDefaultRouteNameTestValue);
-      await t.pumpWidget(MaterialApp.router(routerConfig: _router()));
-      await t.pump();
-      expect(t.takeException(), isNotNull, reason: 'if this stops failing, go_router fixed it upstream');
+    // The bug itself, asked of go_router's own parser directly. (Mounting a plain
+    // router with this start throws inside the Router's init and leaves its BACK
+    // listener registered for ever — on a phone that was the dead BACK button,
+    // "Bad state: Too many elements" / "No element"; in a test it would poison
+    // every later test of this file.)
+    testWidgets('plain go_router DOES throw on the push route "daily" (the bug)', (t) async {
+      final r = _router();
+      await t.pumpWidget(MaterialApp.router(routerConfig: _safe(r)));
+      await t.pumpAndSettle();
+      final ctx = t.element(find.text('HOME'));
+      RouteInformation bad() => RouteInformation(
+          uri: Uri.parse('daily'),
+          // ignore: invalid_use_of_visible_for_testing_member
+          state: RouteInformationState<void>(type: NavigatingType.go));
+      Object? plain;
+      try {
+        await r.routeInformationParser.parseRouteInformationWithDependencies(bad(), ctx);
+      } catch (e) {
+        plain = e;
+      }
+      expect(plain, isNotNull, reason: 'if this stops failing, go_router fixed it upstream');
+      final got = await SafeRouteParser(r.routeInformationParser).parseRouteInformationWithDependencies(bad(), ctx);
+      expect(got.uri.path, '/');
+      expect(got.isError, isFalse);
     });
 
     testWidgets('with the safe parser the same start opens the catalogue', (t) async {
