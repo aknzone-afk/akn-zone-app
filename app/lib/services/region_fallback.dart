@@ -1,4 +1,7 @@
 import 'package:dio/dio.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'phone_lock.dart';
 
 /// Owner 17-Nov: never show an error just because one Google data centre is
 /// busy. Every app cloud function runs in THREE regions, each with its own
@@ -57,6 +60,25 @@ String? dataMirrorUrl(Uri u) {
 class RegionFallback extends Interceptor {
   RegionFallback(this._dio);
   final Dio _dio;
+
+  /// 20-Nov (security): every call to our cloud says WHO is calling — the
+  /// secret this phone got when its number was verified on WhatsApp
+  /// (`x-dev-key`) and the phone's own id (`x-device`). The app key inside the
+  /// APK is public; these two are what lets the server refuse a stranger who
+  /// only knows a customer's mobile number. Never sent to any other host.
+  @override
+  Future<void> onRequest(RequestOptions options, RequestInterceptorHandler handler) async {
+    if (_kCloudChain.contains(options.uri.host)) {
+      try {
+        final key = (await SharedPreferences.getInstance()).getString('account_devkey_v1') ?? '';
+        if (key.length >= 16) options.headers['x-dev-key'] = key;
+        options.headers['x-device'] = await PhoneLock.phoneId();
+      } catch (_) {
+        // the call still goes out; the server treats it as an older app
+      }
+    }
+    handler.next(options);
+  }
 
   @override
   Future<void> onError(DioException err, ErrorInterceptorHandler handler) async {

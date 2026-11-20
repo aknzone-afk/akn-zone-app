@@ -62,6 +62,9 @@ class AccountService {
   static Future<void> clear(SharedPreferences p) async {
     await p.remove(kAccountKey);
     await p.remove(_kCodeKey);
+    // 20-Nov (security): the key belongs to the number that is logging out —
+    // it must not travel with the next number's calls.
+    await p.remove(_kDevKey);
   }
 
   /// The account's mobile as the cloud's customer key (for push).
