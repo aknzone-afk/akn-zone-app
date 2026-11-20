@@ -42,7 +42,22 @@ jobs:
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
           working-directory: app
-          script: flutter drive --driver=test_driver/shots.dart --target=integration_test/store_shots_test.dart --profile --no-dds
+          # 20-Nov-2026: after the screenshots, the same installed app is started twice more by hand:
+          # (1) the way Android starts it when a push is tapped while the app is CLOSED (the push's data
+          #     arrives as intent extras; "route=daily" used to open a dead grey screen), (2) a plain start.
+          script: |
+            flutter drive --driver=test_driver/shots.dart --target=integration_test/store_shots_test.dart --profile --no-dds
+            adb shell am force-stop com.bbsynthetics.catalog_app || true
+            adb shell am start -n com.bbsynthetics.catalog_app/.MainActivity --es route daily --es google.message_id smoke-test-1 || true
+            sleep 45
+            adb exec-out screencap -p > screenshots/zz_push_tap_app_closed.png || true
+            adb shell input keyevent KEYCODE_BACK || true
+            sleep 4
+            adb exec-out screencap -p > screenshots/zz_push_tap_then_back.png || true
+            adb shell am force-stop com.bbsynthetics.catalog_app || true
+            adb shell am start -n com.bbsynthetics.catalog_app/.MainActivity || true
+            sleep 30
+            adb exec-out screencap -p > screenshots/zz_plain_start.png || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
