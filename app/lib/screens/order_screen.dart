@@ -47,6 +47,21 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
   final _transport = TextEditingController();
   final _taxId = TextEditingController();
   final _note = TextEditingController();
+
+  /// Owner 21-Nov: designs that are not in the app (design over / old
+  /// designs) — the customer types number, pieces and colour choice by hand.
+  final List<_OldRow> _oldRows = [_OldRow()];
+  static const _kMaxOldRows = 12;
+
+  /// The rows that carry a design number.
+  List<OldDesign> _oldDesigns() => [
+        for (final r in _oldRows)
+          if (r.design.text.trim().isNotEmpty)
+            OldDesign(
+                design: r.design.text.trim().toUpperCase(),
+                qty: int.tryParse(r.qty.text.trim()) ?? 0,
+                colours: r.colours.text.trim()),
+      ];
   final _transportFocus = FocusNode();
   String _country = 'India';
   bool _usingSaved = false;
@@ -377,6 +392,9 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     ]) {
       c.dispose();
     }
+    for (final r in _oldRows) {
+      r.dispose();
+    }
     _transportFocus.dispose();
     super.dispose();
   }
@@ -501,6 +519,23 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
       ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(t('Reading your marks on the photos — one moment…', 'फ़ोटो पढ़ रहे हैं — एक पल…'))));
       return;
+    }
+    // Owner 21-Nov: an old design needs its number AND how many pieces.
+    for (final r in _oldRows) {
+      final d = r.design.text.trim(), q = int.tryParse(r.qty.text.trim()) ?? 0;
+      final other = r.qty.text.trim().isNotEmpty || r.colours.text.trim().isNotEmpty;
+      if (d.isEmpty && other) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(t('"Designs not in app": type the design number too.',
+                '"जो डिज़ाइन ऐप में नहीं": डिज़ाइन नंबर भी लिखें।'))));
+        return;
+      }
+      if (d.isNotEmpty && q <= 0) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+            content: Text(t('How many pieces of design ${d.toUpperCase()}? Type the quantity.',
+                'डिज़ाइन ${d.toUpperCase()} के कितने पीस चाहिए? संख्या लिखें।'))));
+        return;
+      }
     }
     if (_check(photos).below) {
       Stats.step('order_blocked'); // owner 27-Oct (3)
@@ -894,6 +929,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         },
         customer: customer,
         note: _note.text,
+        oldDesigns: _oldDesigns(),
         lockNote: _lockNote,
         onStep: (s) => step.value = s,
         // Owner 14-Oct: no 10% token any more — customers are verified at
@@ -1139,6 +1175,93 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                         label: Text(t('Select more designs', 'और डिज़ाइन चुनें')),
                       ),
                     ),
+                  const SizedBox(height: 14),
+                  // Owner 21-Nov: DESIGNS NOT IN APP — design over / old designs.
+                  Container(
+                    key: const ValueKey('old-designs-box'),
+                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFFFF8E7),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(color: const Color(0xFFE0C98A)),
+                    ),
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      UText(t('Designs not in app', 'जो डिज़ाइन ऐप में नहीं हैं'),
+                          style: const TextStyle(fontWeight: FontWeight.w800, letterSpacing: 0.8, fontSize: 13)),
+                      const SizedBox(height: 2),
+                      Text(
+                          t('Design over? Order from old designs here — type the design number, quantity and any choice of colours.',
+                              'डिज़ाइन ओवर? पुराने डिज़ाइन यहाँ से ऑर्डर करें — डिज़ाइन नंबर, कितने पीस और रंग की पसंद लिखें।'),
+                          style: const TextStyle(fontSize: 12.5, color: Colors.black87)),
+                      const SizedBox(height: 10),
+                      for (var i = 0; i < _oldRows.length; i++)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 8),
+                          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                            Expanded(
+                              flex: 9,
+                              child: TextField(
+                                key: ValueKey('old-design-$i'),
+                                controller: _oldRows[i].design,
+                                textCapitalization: TextCapitalization.characters,
+                                textInputAction: TextInputAction.next,
+                                inputFormatters: [LengthLimitingTextInputFormatter(24)],
+                                decoration: _dec(t('Design no.', 'डिज़ाइन नं.')),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              flex: 5,
+                              child: TextField(
+                                key: ValueKey('old-qty-$i'),
+                                controller: _oldRows[i].qty,
+                                keyboardType: TextInputType.number,
+                                textInputAction: TextInputAction.next,
+                                inputFormatters: [
+                                  FilteringTextInputFormatter.digitsOnly,
+                                  LengthLimitingTextInputFormatter(4),
+                                ],
+                                decoration: _dec(t('Qty', 'पीस')),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              flex: 11,
+                              child: TextField(
+                                key: ValueKey('old-colours-$i'),
+                                controller: _oldRows[i].colours,
+                                textCapitalization: TextCapitalization.sentences,
+                                inputFormatters: [LengthLimitingTextInputFormatter(60)],
+                                decoration: _dec(t('Colour choice', 'रंग की पसंद'), hint: t('any', 'कोई भी')),
+                              ),
+                            ),
+                            if (_oldRows.length > 1)
+                              SizedBox(
+                                width: 32,
+                                child: IconButton(
+                                  padding: EdgeInsets.zero,
+                                  tooltip: t('Remove', 'हटाएँ'),
+                                  icon: const Icon(Icons.close_rounded, size: 20),
+                                  onPressed: () {
+                                    final gone = _oldRows[i];
+                                    setState(() => _oldRows.removeAt(i));
+                                    WidgetsBinding.instance.addPostFrameCallback((_) => gone.dispose());
+                                  },
+                                ),
+                              ),
+                          ]),
+                        ),
+                      if (_oldRows.length < _kMaxOldRows)
+                        Align(
+                          alignment: Alignment.centerLeft,
+                          child: TextButton.icon(
+                            onPressed: () => setState(() => _oldRows.add(_OldRow())),
+                            icon: const Icon(Icons.add_rounded, size: 18),
+                            label: Text(t('Add another design', 'एक और डिज़ाइन')),
+                          ),
+                        ),
+                    ]),
+                  ),
                   const SizedBox(height: 22),
                   Row(children: [
                     Expanded(child: _SectionTitle(t('2 · Your details', '2 · आपकी जानकारी'))),
@@ -1480,6 +1603,18 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
               ),
             ),
     );
+  }
+}
+
+/// One typed row of the "Designs not in app" box.
+class _OldRow {
+  final design = TextEditingController();
+  final qty = TextEditingController();
+  final colours = TextEditingController();
+  void dispose() {
+    design.dispose();
+    qty.dispose();
+    colours.dispose();
   }
 }
 

@@ -87,6 +87,22 @@ void main() {
     appRouter.go('/favorites');
     await shot('07_cart', settle: 15);
 
+    // the order screen, scrolled to the "Designs not in app" box with one row filled in
+    // (nothing is sent: PLACE ORDER is never tapped)
+    appRouter.push('/order');
+    await wait(t, 10);
+    try {
+      final box = find.byKey(const ValueKey('old-designs-box'));
+      await t.scrollUntilVisible(box, 400, scrollable: find.byType(Scrollable).first, maxScrolls: 30);
+      await t.enterText(find.byKey(const ValueKey('old-design-0')), '5521');
+      await t.enterText(find.byKey(const ValueKey('old-qty-0')), '12');
+      await t.enterText(find.byKey(const ValueKey('old-colours-0')), 'Red, green');
+      await t.ensureVisible(box);
+    } catch (e) {
+      debugPrint('order screen shot: $e');
+    }
+    await shot('07b_order_old_designs', settle: 4);
+
     appRouter.go('/orders');
     await shot('08_orders', settle: 10);
 

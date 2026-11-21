@@ -609,6 +609,7 @@ class OrderService {
     Map<String, String> pickLabels = const {},
     required CustomerDetails customer,
     required String note,
+    List<OldDesign> oldDesigns = const [],
     String? lockNote,
     void Function(String step)? onStep,
     bool holdForAdvance = false,
@@ -640,6 +641,7 @@ class OrderService {
       ],
       customer: customer,
       note: note.trim(),
+      oldDesigns: oldDesigns,
       lockNote: lockNote,
     );
 
@@ -1252,6 +1254,16 @@ class OrderService {
     if (noPhoto.isNotEmpty) {
       b.writeln('⚠️ <b>Photo missing:</b> '
           '${_clipEsc(noPhoto.map((d) => d.isEmpty ? '?' : 'D.No $d').join(', '), 600)}');
+    }
+    // Owner 21-Nov: designs the customer typed by hand — not in the app
+    // (design over / old designs). No photo exists for these, so they are
+    // listed right at the top where the shop cannot miss them.
+    if (o.oldDesigns.isNotEmpty) {
+      b.writeln('🗂 <b>OLD DESIGNS — NOT IN APP (${o.oldDesigns.length})</b>');
+      for (final x in o.oldDesigns.take(12)) {
+        b.writeln('• D.No ${_clipEsc(x.design, 24)} — ${x.qty} pcs'
+            '${x.colours.isEmpty ? '' : ' — colours: ${_clipEsc(x.colours, 60)}'}');
+      }
     }
     // Tester 13-Oct: every free-text field is clipped (see _clipEsc), so the
     // details message always fits Telegram's 4096-character limit; the full

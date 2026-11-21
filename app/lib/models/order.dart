@@ -2,6 +2,21 @@
 /// send queue) and delivered to the shop's Telegram group by [OrderService].
 library;
 
+/// Owner 21-Nov-2026: a design that is NOT in the app any more (design over /
+/// an old design), typed by the customer on the order screen — number,
+/// pieces and any choice of colours. It has no photo and no price.
+class OldDesign {
+  final String design;
+  final int qty;
+  final String colours;
+  const OldDesign({required this.design, required this.qty, this.colours = ''});
+
+  Map<String, dynamic> toJson() => {'d': design, 'q': qty, if (colours.isNotEmpty) 'c': colours};
+
+  factory OldDesign.fromJson(Map<String, dynamic> j) => OldDesign(
+      design: '${j['d'] ?? ''}', qty: (j['q'] as num?)?.toInt() ?? 0, colours: '${j['c'] ?? ''}');
+}
+
 class OrderItem {
   final String photoId;
   final String? designNumber;
@@ -103,6 +118,9 @@ class Order {
   final CustomerDetails customer;
   final String note;
 
+  /// Designs typed by hand that are not in the app (see [OldDesign]).
+  final List<OldDesign> oldDesigns;
+
   /// Phone-lock warning for the shop ("NEW PHONE…", "2nd number…").
   final String? lockNote;
 
@@ -145,6 +163,7 @@ class Order {
     required this.items,
     required this.customer,
     this.note = '',
+    List<OldDesign>? oldDesigns,
     this.lockNote,
     this.addOnTo,
     this.serial,
@@ -161,7 +180,8 @@ class Order {
     List<int>? tgExtraIds,
     this.registered = false,
     this.lastError,
-  }) : tgExtraIds = tgExtraIds ?? [];
+  })  : tgExtraIds = tgExtraIds ?? [],
+        oldDesigns = oldDesigns ?? const [];
 
   int get totalPcs => items.fold(0, (s, i) => s + i.qty);
 
@@ -184,6 +204,7 @@ class Order {
         'items': items.map((e) => e.toJson()).toList(),
         'customer': customer.toJson(),
         'note': note,
+        if (oldDesigns.isNotEmpty) 'old': oldDesigns.map((e) => e.toJson()).toList(),
         if (lockNote != null) 'lock': lockNote,
         if (addOnTo != null) 'addOnTo': addOnTo,
         if (serial != null) 'serial': serial,
@@ -211,6 +232,10 @@ class Order {
         customer:
             CustomerDetails.fromJson(Map<String, dynamic>.from(j['customer'])),
         note: (j['note'] ?? '') as String,
+        oldDesigns: [
+          for (final e in (j['old'] as List? ?? const []))
+            if (e is Map) OldDesign.fromJson(Map<String, dynamic>.from(e)),
+        ],
         lockNote: j['lock'] as String?,
         addOnTo: j['addOnTo'] as String?,
         serial: j['serial'] as int?,

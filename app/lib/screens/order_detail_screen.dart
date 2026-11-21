@@ -76,6 +76,12 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
                   const SizedBox(height: 6),
                   Text('Note: ${o.note}', style: const TextStyle(fontStyle: FontStyle.italic)),
                 ],
+                if (o.oldDesigns.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  const Text('Designs not in app:', style: TextStyle(fontWeight: FontWeight.w700)),
+                  for (final x in o.oldDesigns)
+                    Text('• D.No ${x.design} — ${x.qty} pcs${x.colours.isEmpty ? '' : ' — ${x.colours}'}'),
+                ],
                 const Divider(height: 22),
                 Text('${o.items.length} DESIGNS · ${o.totalPcs} PCS'
                     '${o.approxTotal != null ? ' · APPROX ${OrderService.formatRupees(o.approxTotal!)} + 5% GST' : ''}',
