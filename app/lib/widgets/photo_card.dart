@@ -116,12 +116,17 @@ class PhotoCard extends ConsumerWidget {
                 key: const ValueKey('pre-order-stripe'),
                 color: const Color(0xF28A4B00),
                 padding: EdgeInsets.fromLTRB(8, 6, removeMode ? 50 : 8, 6),
-                child: Text(
-                  t('PRE ORDER · 2 TO 3 WEEKS', 'प्री ऑर्डर · 2 से 3 हफ़्ते'),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                      color: Colors.white, fontWeight: FontWeight.w800, fontSize: 11.5, letterSpacing: 0.5),
+                // the whole line always shows: it shrinks to fit beside the ✕
+                // (build 194 cut it to "2 TO 3 W…")
+                child: FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    t('PRE ORDER · 2 TO 3 WEEKS', 'प्री ऑर्डर · 2 से 3 हफ़्ते'),
+                    maxLines: 1,
+                    style: const TextStyle(
+                        color: Colors.white, fontWeight: FontWeight.w800, fontSize: 11.5, letterSpacing: 0.3),
+                  ),
                 ),
               ),
             ),
