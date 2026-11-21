@@ -787,7 +787,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     // Owner 14-Oct: one last "are you sure?" before the order goes.
     final pcs = photos.fold<int>(0, (s, p) => s + _qtyFor(p));
     final preN = photos.where((p) => DriveUrls.isOld(p.id)).length;
-    final preLine = preN == 0 ? '' : t('(incl. $preN pre order — not ready, approx 2 weeks)\n', '($preN प्री ऑर्डर — लगभग 2 हफ़्ते)\n');
+    final preLine = preN == 0 ? '' : t('(incl. $preN pre order — not ready, 2 to 3 weeks)\n', '($preN प्री ऑर्डर — 2 से 3 हफ़्ते)\n');
     final sure = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
@@ -1162,9 +1162,9 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         const SizedBox(height: 2),
         Text(
             t('That design is not ready right now. If you still want to order it, type its number here — '
-                    'the goods will be ready in approx 2 weeks.',
+                    'the goods will be ready in 2 to 3 weeks.',
                 'वह डिज़ाइन अभी तैयार नहीं है। फिर भी ऑर्डर देना चाहते हैं तो उसका नंबर यहाँ लिखें — '
-                    'माल लगभग 2 हफ़्ते में निकलेगा।'),
+                    'माल 2 से 3 हफ़्ते में निकलेगा।'),
             style: const TextStyle(fontSize: 12.5, color: Colors.black87)),
         const SizedBox(height: 10),
         Row(children: [
@@ -1509,14 +1509,14 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                         border: Border.all(color: const Color(0xFFE0C98A)),
                       ),
                       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                        UText(t('Not ready designs — approx 2 weeks', 'जो डिज़ाइन तैयार नहीं — लगभग 2 हफ़्ते'),
+                        UText(t('Not ready designs — 2 to 3 weeks', 'जो डिज़ाइन तैयार नहीं — 2 से 3 हफ़्ते'),
                             style: const TextStyle(fontWeight: FontWeight.w800, letterSpacing: 0.8, fontSize: 13)),
                         const SizedBox(height: 2),
                         Padding(
                           padding: const EdgeInsets.only(right: 10),
                           child: Text(
-                              t('Pre order: these goods are made for you and will be ready in approx 2 weeks.',
-                                  'प्री ऑर्डर: यह माल आपके लिए बनेगा, लगभग 2 हफ़्ते में तैयार होगा।'),
+                              t('Pre order: these goods are made for you and will be ready in 2 to 3 weeks.',
+                                  'प्री ऑर्डर: यह माल आपके लिए बनेगा, 2 से 3 हफ़्ते में तैयार होगा।'),
                               style: const TextStyle(fontSize: 12.5, color: Colors.black87)),
                         ),
                         const SizedBox(height: 6),
@@ -2005,7 +2005,7 @@ class _ItemRow extends StatelessWidget {
                   Text('₹${photo.price}',
                       style: TextStyle(color: scheme.onSurfaceVariant)),
                 if (preOrder)
-                  Text(t('Not ready · approx 2 weeks', 'तैयार नहीं · लगभग 2 हफ़्ते'),
+                  Text(t('Not ready · 2 to 3 weeks', 'तैयार नहीं · 2 से 3 हफ़्ते'),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: Theme.of(context).textTheme.bodySmall)

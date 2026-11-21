@@ -9,6 +9,7 @@ import 'package:go_router/go_router.dart';
 
 import '../models/photo.dart';
 import '../providers/providers.dart';
+import '../services/drive_urls.dart';
 import '../services/photo_freshness.dart';
 import '../services/picks_service.dart';
 import '../services/pieces_service.dart';
@@ -103,6 +104,27 @@ class PhotoCard extends ConsumerWidget {
                     ),
                   ),
           ),
+          // Owner 21-Nov: a design that is NOT READY (a pre order, picked in the
+          // order screen's "Design not in app?" box) carries a stripe across the
+          // top of its tile. Drawn before the ✕ / tick so those stay on top.
+          if (DriveUrls.isOld(photo.id))
+            Positioned(
+              left: 0,
+              right: 0,
+              top: 0,
+              child: Container(
+                key: const ValueKey('pre-order-stripe'),
+                color: const Color(0xF28A4B00),
+                padding: EdgeInsets.fromLTRB(8, 6, removeMode ? 50 : 8, 6),
+                child: Text(
+                  t('PRE ORDER · 2 TO 3 WEEKS', 'प्री ऑर्डर · 2 से 3 हफ़्ते'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.w800, fontSize: 11.5, letterSpacing: 0.5),
+                ),
+              ),
+            ),
           // Full selection text, readable, at the bottom of the photo.
           if (pickSummary != null)
             Positioned(

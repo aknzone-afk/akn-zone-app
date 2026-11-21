@@ -137,6 +137,16 @@ void main() {
       pos.jumpTo((pos.pixels - 520).clamp(0.0, pos.maxScrollExtent));
       debugPrint('old design: pre order block ${find.byKey(const ValueKey('pre-order-box')).evaluate().length}');
       await shot('07d_old_design_in_order', settle: 8);
+      // in the cart its tile carries the PRE ORDER stripe
+      appRouter.go('/favorites');
+      await wait(t, 6);
+      try {
+        await t.scrollUntilVisible(find.byKey(const ValueKey('pre-order-stripe')), 400,
+            scrollable: find.byType(Scrollable).first, maxScrolls: 20);
+      } catch (e) {
+        debugPrint('old design: stripe not reached: $e');
+      }
+      await shot('07e_cart_pre_order_stripe', settle: 6);
       await container.read(favoritesProvider.notifier).toggle(id0); // the cart as it was
       await wait(t, 2);
     } catch (e) {

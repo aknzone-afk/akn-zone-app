@@ -1259,14 +1259,14 @@ class OrderService {
     // not in the app, to be made. Their photos are in the album above.
     final notInApp = o.items.where((i) => DriveUrls.isOld(i.photoId)).toList();
     if (notInApp.isNotEmpty) {
-      b.writeln('🗂 <b>${notInApp.length} design${notInApp.length == 1 ? '' : 's'} PRE ORDER — NOT READY, to be made (approx 2 weeks):</b> '
+      b.writeln('🗂 <b>${notInApp.length} design${notInApp.length == 1 ? '' : 's'} PRE ORDER — NOT READY, to be made (2 to 3 weeks):</b> '
           '${_clipEsc(notInApp.map((i) => 'D.No ${i.designNumber ?? '?'}').join(', '), 300)}');
     }
     // Owner 21-Nov: designs the customer typed by hand — not in the app
     // (design over / old designs). No photo exists for these, so they are
     // listed right at the top where the shop cannot miss them.
     if (o.oldDesigns.isNotEmpty) {
-      b.writeln('🗂 <b>PRE ORDER, no photo — NOT READY, to be made (approx 2 weeks) (${o.oldDesigns.length})</b>');
+      b.writeln('🗂 <b>PRE ORDER, no photo — NOT READY, to be made (2 to 3 weeks) (${o.oldDesigns.length})</b>');
       for (final x in o.oldDesigns.take(12)) {
         b.writeln('• D.No ${_clipEsc(x.design, 24)} — ${_clipEsc(x.qty, 40)}'
             '${x.colours.isEmpty ? '' : ' — colours: ${_clipEsc(x.colours, 60)}'}');

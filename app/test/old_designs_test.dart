@@ -64,7 +64,7 @@ void main() {
       expect(lines[0], contains('1 design'));
       expect(lines[1], contains('PRE ORDER, no photo'));
       expect(lines[1], contains('NOT READY'));
-      expect(lines[1], contains('2 weeks'));
+      expect(lines[1], contains('2 to 3 weeks'));
       expect(lines[1], contains('(2)'));
       expect(lines[2], '• D.No 5521 — 2 set — colours: Red, green');
       expect(lines[3], '• D.No T10027 — 10 pcs');
@@ -191,6 +191,7 @@ void main() {
       expect(ph.price, isNull);
       expect(ph.folder, kOldDesignFolder);
       expect(kOldDesignFolder, contains('PRE ORDER'));
+      expect(kOldDesignFolder, contains('2 to 3 weeks'));
       expect(ph.ocrState, OcrState.done);
       expect(OldDesigns.designOf('rb-1444_aaaaaaaa'), '1444');
     });
@@ -217,7 +218,7 @@ void main() {
       final line = text.split('\n').firstWhere((l) => l.contains('PRE ORDER'));
       expect(line, contains('2 designs PRE ORDER'));
       expect(line, contains('NOT READY'));
-      expect(line, contains('2 weeks'));
+      expect(line, contains('2 to 3 weeks'));
       expect(line, contains('D.No N254, D.No 3549'));
       expect(text, isNot(contains('no photo')));
     });
