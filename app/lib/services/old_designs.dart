@@ -13,7 +13,11 @@ const String kOldDesignFolder = 'NOT IN APP (approx 2 weeks)';
 /// over) can still be ordered. The customer types the design number on the
 /// order screen and sees its photos from the shop's FULL photo set — the same
 /// one the Rate Bolo page shows (public files, an index `photos.json`:
-/// design key → photo hashes; a photo is `p/<KEY>_<hash>.jpg`). A picked
+/// design key → photo hashes; a photo is `p/<KEY>_<hash>.jpg`).
+///
+/// Owner 21-Nov-2026, after trying it: NOT the modelling photo (the one from
+/// the `12 X 18` folders) — only the others (`TOTAL PHOTOS`). The index names
+/// each design's modelling photo under `m`; it is left out here. A picked
 /// photo becomes a normal [Photo] with id `rb-<KEY>_<hash>`, so selecting
 /// colours / pieces and ordering work exactly as for a catalogue design.
 class OldDesigns {
@@ -68,12 +72,19 @@ class OldDesigns {
     final j = jsonDecode(body);
     final p = j is Map ? j['p'] : null;
     if (p is! Map) return const {};
+    // "m": design key → the hash of its modelling (12 X 18) photo — not shown.
+    final m = (j as Map)['m'];
+    final model = <String, String>{
+      if (m is Map)
+        for (final e in m.entries) keyOf('${e.key}'): '${e.value}',
+    };
+    final hash = RegExp(r'^[0-9a-f]{6,16}$');
     return {
       for (final e in p.entries)
         if (e.value is List)
           keyOf('${e.key}'): [
             for (final h in e.value as List)
-              if (RegExp(r'^[0-9a-f]{6,16}$').hasMatch('$h')) '$h',
+              if (hash.hasMatch('$h') && '$h' != model[keyOf('${e.key}')]) '$h',
           ],
     };
   }

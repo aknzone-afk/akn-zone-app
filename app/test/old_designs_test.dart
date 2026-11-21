@@ -25,6 +25,10 @@ Order _order(List<OldDesign> old, {List<OrderItem> more = const []}) => Order(
 
 const _index = '{"updated":"2026-11-21","p":{"1444":["aaaaaaaa","bbbbbbbb"],"N254":["5641ee46"],"t-77":["cccccccc","NOT A HASH"],"X1":[]}}';
 
+// the same, with each design's modelling (12 X 18) photo named under "m"
+const _indexM = '{"p":{"1444":["aaaaaaaa","bbbbbbbb","dddddddd"],"N254":["5641ee46"],"5021":["eeeeeeee"],"3549":["ffffffff","abcdef01"]},'
+    '"m":{"1444":"aaaaaaaa","5021":"eeeeeeee","n-254":"00000000","9999":"12345678"}}';
+
 void main() {
   group('typed rows (no photo)', () {
     test('old designs survive saving and loading the order', () {
@@ -121,6 +125,19 @@ void main() {
       expect(OldDesigns.idsIn(idx, '9999'), isEmpty);
       expect(OldDesigns.idsIn(idx, 'X1'), isEmpty); // listed, but no photo
       expect(OldDesigns.idsIn(idx, ''), isEmpty);
+    });
+
+    test('the modelling (12 X 18) photo is never offered — only the other photos', () {
+      final idx = OldDesigns.parseIndex(_indexM);
+      expect(OldDesigns.idsIn(idx, '1444'), ['rb-1444_bbbbbbbb', 'rb-1444_dddddddd']);
+      expect(OldDesigns.idsIn(idx, '3549'), ['rb-3549_ffffffff', 'rb-3549_abcdef01']); // no modelling photo: all of them
+      expect(OldDesigns.idsIn(idx, 'N254'), ['rb-N254_5641ee46']); // "m" names another photo: nothing dropped
+      expect(OldDesigns.idsIn(idx, '5021'), isEmpty); // ONLY a modelling photo = no photo (quantity is typed)
+    });
+
+    test('an index without "m" (an older file) still reads', () {
+      expect(OldDesigns.idsIn(OldDesigns.parseIndex(_index), '1444'), ['rb-1444_aaaaaaaa', 'rb-1444_bbbbbbbb']);
+      expect(OldDesigns.parseIndex('{"p":{"77":["aaaaaaaa"]},"m":[1,2]}')['77'], ['aaaaaaaa']);
     });
 
     test('a picked photo is a normal photo: design number, no price, its own folder name', () {
