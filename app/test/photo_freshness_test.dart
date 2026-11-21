@@ -167,8 +167,12 @@ void main() {
           PriceDisplay.updating);
     });
     test('offline / between rounds shows the stored price', () {
-      expect(priceDisplayFor(read(985, 'v7'), const PriceCheckState()),
+      // "offline / between rounds" is the trustCache state; before the first
+      // successful round (the default state) the price is still being checked.
+      expect(priceDisplayFor(read(985, 'v7'), const PriceCheckState(trustCache: true)),
           PriceDisplay.show);
+      expect(priceDisplayFor(read(985, 'v7'), const PriceCheckState()),
+          PriceDisplay.checking);
     });
     test('folder price always shows; no price shows nothing', () {
       final folder = Photo(
