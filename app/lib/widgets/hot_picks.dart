@@ -22,7 +22,7 @@ class HotPicksRow extends ConsumerWidget {
     if (hot.isEmpty) return const SizedBox.shrink();
     final inCart = ref.watch(favoritesProvider);
     final byDesign = <String, Photo>{};
-    for (final p in ref.watch(photosProvider)) {
+    for (final p in ref.watch(catalogPhotosProvider)) {
       final k = modelKey(p.designNumber);
       if (k.isEmpty || inCart.contains(p.id)) continue;
       byDesign.putIfAbsent(k, () => p);

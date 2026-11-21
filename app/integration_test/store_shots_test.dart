@@ -9,6 +9,7 @@ import 'package:catalog_app/main.dart' as app;
 import 'package:catalog_app/models/photo.dart';
 import 'package:catalog_app/providers/providers.dart';
 import 'package:catalog_app/screens/daily_feed_screen.dart' show dailyFeedProvider;
+import 'package:catalog_app/services/old_designs.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -94,15 +95,26 @@ void main() {
     try {
       final box = find.byKey(const ValueKey('old-designs-box'));
       await t.scrollUntilVisible(box, 400, scrollable: find.byType(Scrollable).first, maxScrolls: 30);
-      await t.enterText(find.byKey(const ValueKey('old-design-0')), '5521');
-      await t.enterText(find.byKey(const ValueKey('old-qty-0')), '2 set');
-      await t.enterText(find.byKey(const ValueKey('old-colours-0')), 'Red, green');
-      await t.pump(const Duration(milliseconds: 400)); // the next empty row opens by itself
+      // a design that is in the shop's full photo set but NOT in the app
+      final idx = await OldDesigns.index(container.read(dioProvider));
+      final inApp = {
+        for (final p in container.read(catalogPhotosProvider)) OldDesigns.catalogKey(p.designNumber ?? p.filename),
+      };
+      final key = idx.entries.where((e) => e.value.length >= 3 && !inApp.contains(e.key)).map((e) => e.key).firstOrNull ?? '3549';
+      await t.enterText(find.byKey(const ValueKey('old-find')), key);
+      await t.tap(find.byKey(const ValueKey('old-find-btn')));
+      await wait(t, 12); // the index, then the photos
       await t.ensureVisible(box);
+      await shot('07b_order_old_designs', settle: 6);
+      // tap the first photo -> the same select screen as any design
+      await t.tap(find.byKey(const ValueKey('old-photo-0')));
+      await shot('07c_old_design_select', settle: 12);
+      appRouter.pop();
+      await wait(t, 3);
     } catch (e) {
       debugPrint('order screen shot: $e');
+      await shot('07b_order_old_designs', settle: 4);
     }
-    await shot('07b_order_old_designs', settle: 4);
 
     appRouter.go('/orders');
     await shot('08_orders', settle: 10);

@@ -29,6 +29,10 @@ String? driveDirectUrl(String url) {
 List<String> photoFetchOrder(String url) {
   final direct = driveDirectUrl(url);
   if (direct != null) return [direct, url, direct];
+  // a design that is not in the app (shop's full photo set): GitHub Pages, then GitHub's raw host
+  if (url.startsWith(DriveUrls.oldBase)) {
+    return [url, 'https://raw.githubusercontent.com/aknzone-afk/rate-bolo/main/${url.substring(DriveUrls.oldBase.length)}', url];
+  }
   // The app's own files (the modelling photos live on GitHub Pages, which some
   // networks cannot reach): the address itself, then its backup copies.
   final u = Uri.tryParse(url);

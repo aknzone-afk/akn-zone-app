@@ -45,7 +45,7 @@ class SimilarRow extends ConsumerWidget {
     final key = _norm(photo.designNumber ?? '');
     final wanted = map[key] ?? const <String>[];
     if (wanted.isEmpty) return const SizedBox.shrink();
-    final photos = ref.watch(photosProvider);
+    final photos = ref.watch(catalogPhotosProvider);
     final picks = <Photo>[];
     for (final d in wanted) {
       final hit = photos.where((p) => _norm(p.designNumber ?? '') == d).firstOrNull;

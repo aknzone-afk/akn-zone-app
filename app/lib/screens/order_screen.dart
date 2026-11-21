@@ -13,6 +13,8 @@ import '../models/photo.dart';
 import '../providers/providers.dart';
 import '../services/account_service.dart';
 import '../services/order_service.dart';
+import '../services/drive_urls.dart';
+import '../services/old_designs.dart';
 import '../services/transport_info.dart';
 import '../services/phone_lock.dart';
 import '../services/photo_freshness.dart';
@@ -24,6 +26,7 @@ import '../services/stats_service.dart';
 import '../widgets/hot_picks.dart';
 import '../widgets/min_order_bar.dart';
 import '../widgets/pick_preview.dart';
+import 'pick_screen.dart' show pickNavIds;
 
 /// ORDER NOW: the cart's designs with a quantity each, then the customer's
 /// billing details, then one tap to send everything to the shop.
@@ -395,6 +398,8 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     for (final r in _oldRows) {
       r.dispose();
     }
+    _oldFind.dispose();
+    _oldTimer?.cancel();
     _transportFocus.dispose();
     super.dispose();
   }
@@ -1033,6 +1038,290 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     );
   }
 
+  // ─────────── designs that are NOT in the app (owner 21-Nov-2026) ───────────
+  // Type the design number -> its photos from the shop's full photo set ->
+  // tap one -> select colours / pieces like any design -> it joins this order.
+  final _oldFind = TextEditingController();
+  Timer? _oldTimer;
+  int _oldSeq = 0; // only the newest look-up may show its result
+  bool _oldBusy = false;
+  List<String> _oldIds = const []; // photos of the typed design (shop's full photo set)
+  List<String> _oldInAppIds = const []; // the typed design IS in the app: its photos there
+  String _oldKey = '';
+  String? _oldMsg;
+  bool _oldManual = false; // no photo: quantity is typed by hand (the rows below)
+
+  /// Typing the number shows the photo by itself (as on the shop's Rate Bolo
+  /// page); the button and the keyboard's search key do the same at once.
+  void _oldTyped(String v) {
+    _oldTimer?.cancel();
+    if (OldDesigns.keyOf(v).length < 3) return;
+    _oldTimer = Timer(const Duration(milliseconds: 900), () {
+      if (mounted) _findOld(typing: true);
+    });
+  }
+
+  Future<void> _findOld({bool typing = false}) async {
+    _oldTimer?.cancel();
+    if (!typing) FocusScope.of(context).unfocus();
+    final key = OldDesigns.keyOf(_oldFind.text);
+    if (key.isEmpty) return;
+    final seq = ++_oldSeq;
+    setState(() => _oldBusy = true);
+    // A design that IS in the app is ready goods — it is selected there, not here.
+    final base = OldDesigns.baseOf(key);
+    final inApp = [
+      for (final p in ref.read(catalogPhotosProvider))
+        if (OldDesigns.catalogKey(p.designNumber ?? p.filename) == base) p.id,
+    ];
+    var ids = const <String>[];
+    var failed = false;
+    if (inApp.isEmpty) {
+      try {
+        ids = await OldDesigns.idsFor(ref.read(dioProvider), key);
+      } catch (_) {
+        failed = true;
+      }
+    }
+    if (!mounted || seq != _oldSeq) return;
+    if (ids.isNotEmpty) ref.read(oldPhotosProvider.notifier).show(ids);
+    setState(() {
+      _oldBusy = false;
+      _oldKey = key;
+      _oldInAppIds = inApp;
+      _oldIds = ids;
+      if (inApp.isNotEmpty) {
+        _oldMsg = t('Design $key is in the app — it is ready. Tap OPEN and select it there.',
+            'डिज़ाइन $key ऐप में है — तैयार है। OPEN दबाकर वहीं से चुनें।');
+      } else if (ids.isNotEmpty) {
+        _oldMsg = t('Tap the photo, select colours / pieces and press DONE — it is added to this order.',
+            'फ़ोटो दबाएँ, रंग / पीस चुनें और DONE दबाएँ — इसी ऑर्डर में जुड़ जाएगा।');
+      } else if (failed) {
+        _oldMsg = t('Could not load the photo — check the internet and tap SHOW PHOTO.',
+            'फ़ोटो नहीं खुली — इंटरनेट देखें और SHOW PHOTO दबाएँ।');
+      } else if (typing) {
+        // still typing, perhaps: say it softly, change nothing
+        _oldMsg = t('No photo of design $key.', 'डिज़ाइन $key की फ़ोटो नहीं मिली।');
+      } else {
+        _oldMsg = t('No photo of design $key. Write how much you want below.',
+            'डिज़ाइन $key की फ़ोटो नहीं मिली। नीचे लिख दें कितना चाहिए।');
+        _oldManual = true;
+        if (!_oldRows.any((r) => OldDesigns.keyOf(r.design.text) == key)) {
+          final free = _oldRows.where((r) => r.design.text.trim().isEmpty).firstOrNull;
+          if (free != null) {
+            free.design.text = key;
+          } else if (_oldRows.length < _kMaxOldRows) {
+            _oldRows.add(_OldRow()..design.text = key);
+          }
+          if (_oldRows.last.design.text.trim().isNotEmpty && _oldRows.length < _kMaxOldRows) _oldRows.add(_OldRow());
+        }
+      }
+    });
+  }
+
+  void _pickOld(String id) {
+    ref.read(oldPhotosProvider.notifier).show(_oldIds);
+    pickNavIds = _oldIds; // ◀ / ▶ in the select screen walk this design's photos
+    context.push('/pick/${Uri.encodeComponent(id)}');
+  }
+
+  Widget _oldDesignBox() {
+    final inCart = ref.watch(favoritesProvider);
+    return Container(
+      key: const ValueKey('old-designs-box'),
+      padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+      decoration: BoxDecoration(
+        color: const Color(0xFFFFF8E7),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE0C98A)),
+      ),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        UText(t('Design not in app?', 'डिज़ाइन ऐप में नहीं है?'),
+            style: const TextStyle(fontWeight: FontWeight.w800, letterSpacing: 0.8, fontSize: 13)),
+        const SizedBox(height: 2),
+        Text(
+            t('That design is not ready right now. If you still want to order it, type its number here — '
+                    'the goods will be ready in approx 2 weeks.',
+                'वह डिज़ाइन अभी तैयार नहीं है। फिर भी ऑर्डर देना चाहते हैं तो उसका नंबर यहाँ लिखें — '
+                    'माल लगभग 2 हफ़्ते में निकलेगा।'),
+            style: const TextStyle(fontSize: 12.5, color: Colors.black87)),
+        const SizedBox(height: 10),
+        Row(children: [
+          Expanded(
+            child: TextField(
+              key: const ValueKey('old-find'),
+              controller: _oldFind,
+              textCapitalization: TextCapitalization.characters,
+              textInputAction: TextInputAction.search,
+              inputFormatters: [LengthLimitingTextInputFormatter(24)],
+              decoration: _dec(t('Design no.', 'डिज़ाइन नं.')),
+              onChanged: _oldTyped,
+              onSubmitted: (_) => _findOld(),
+            ),
+          ),
+          const SizedBox(width: 8),
+          SizedBox(
+            height: 48,
+            child: FilledButton(
+              key: const ValueKey('old-find-btn'),
+              onPressed: _oldBusy ? null : () => _findOld(),
+              child: _oldBusy
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2.2, color: Colors.white))
+                  : Text(t('SHOW PHOTO', 'फ़ोटो दिखाएँ'), style: const TextStyle(fontWeight: FontWeight.w800)),
+            ),
+          ),
+        ]),
+        if (_oldMsg != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: Text(_oldMsg!,
+                style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: _oldIds.isNotEmpty || _oldInAppIds.isNotEmpty ? const Color(0xFF1B5E20) : const Color(0xFF8A4B00))),
+          ),
+        if (_oldInAppIds.isNotEmpty)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton.icon(
+              key: const ValueKey('old-open'),
+              onPressed: () => context.push('/photo/${Uri.encodeComponent(_oldInAppIds.first)}', extra: _oldInAppIds),
+              icon: const Icon(Icons.open_in_new_rounded, size: 18),
+              label: Text(t('OPEN design $_oldKey', 'डिज़ाइन $_oldKey खोलें')),
+            ),
+          ),
+        if (_oldIds.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 8),
+            child: SizedBox(
+              height: 190,
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: _oldIds.length,
+                separatorBuilder: (_, __) => const SizedBox(width: 8),
+                itemBuilder: (_, i) {
+                  final id = _oldIds[i];
+                  final added = inCart.contains(id);
+                  return GestureDetector(
+                    key: ValueKey('old-photo-$i'),
+                    onTap: () => _pickOld(id),
+                    child: ClipRRect(
+                      borderRadius: BorderRadius.circular(10),
+                      child: SizedBox(
+                        width: 127,
+                        child: Stack(fit: StackFit.expand, children: [
+                          CachedNetworkImage(
+                            imageUrl: DriveUrls.thumbnail(id),
+                            cacheManager: photoCacheManager,
+                            fit: BoxFit.cover,
+                            placeholder: (_, __) => const ColoredBox(color: Color(0xFFEDE6D6)),
+                            errorWidget: (_, __, ___) =>
+                                const ColoredBox(color: Color(0xFFEDE6D6), child: Icon(Icons.broken_image_outlined)),
+                          ),
+                          Positioned(
+                            left: 0,
+                            right: 0,
+                            bottom: 0,
+                            child: Container(
+                              color: added ? const Color(0xFF1B8E3A) : Colors.black87,
+                              padding: const EdgeInsets.symmetric(vertical: 5),
+                              alignment: Alignment.center,
+                              child: Text(added ? t('✓ IN ORDER', '✓ ऑर्डर में') : t('SELECT', 'चुनें'),
+                                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 12)),
+                            ),
+                          ),
+                        ]),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        if (!_oldManual)
+          Align(
+            alignment: Alignment.centerLeft,
+            child: TextButton(
+              onPressed: () => setState(() => _oldManual = true),
+              child: Text(t('No photo? Write design no. + quantity', 'फ़ोटो नहीं? डिज़ाइन नं. + कितना चाहिए लिखें'),
+                  style: const TextStyle(fontSize: 12.5)),
+            ),
+          ),
+        if (_oldManual) ...[
+          const SizedBox(height: 10),
+          for (var i = 0; i < _oldRows.length; i++)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(
+                  flex: 9,
+                  child: TextField(
+                    key: ValueKey('old-design-$i'),
+                    controller: _oldRows[i].design,
+                    textCapitalization: TextCapitalization.characters,
+                    textInputAction: TextInputAction.next,
+                    inputFormatters: [LengthLimitingTextInputFormatter(24)],
+                    decoration: _dec(t('Design no.', 'डिज़ाइन नं.')),
+                    // typed in the last row -> the next empty row opens by itself
+                    onChanged: (v) {
+                      if (v.trim().isNotEmpty && i == _oldRows.length - 1 && _oldRows.length < _kMaxOldRows) {
+                        setState(() => _oldRows.add(_OldRow()));
+                      }
+                    },
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  flex: 9,
+                  child: TextField(
+                    key: ValueKey('old-qty-$i'),
+                    controller: _oldRows[i].qty,
+                    textInputAction: TextInputAction.next,
+                    inputFormatters: [LengthLimitingTextInputFormatter(40)],
+                    decoration: _dec(t('Quantity', 'कितना'), hint: t('1 set / 10 pcs', '1 सेट / 10 पीस')),
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  flex: 9,
+                  child: TextField(
+                    key: ValueKey('old-colours-$i'),
+                    controller: _oldRows[i].colours,
+                    textCapitalization: TextCapitalization.sentences,
+                    inputFormatters: [LengthLimitingTextInputFormatter(60)],
+                    decoration: _dec(t('Colours', 'रंग'), hint: t('any', 'कोई भी')),
+                  ),
+                ),
+                if (_oldRows.length > 1)
+                  SizedBox(
+                    width: 32,
+                    child: IconButton(
+                      padding: EdgeInsets.zero,
+                      tooltip: t('Remove', 'हटाएँ'),
+                      icon: const Icon(Icons.close_rounded, size: 20),
+                      onPressed: () {
+                        final gone = _oldRows[i];
+                        setState(() => _oldRows.removeAt(i));
+                        WidgetsBinding.instance.addPostFrameCallback((_) => gone.dispose());
+                      },
+                    ),
+                  ),
+              ]),
+            ),
+          if (_oldRows.length < _kMaxOldRows)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: TextButton.icon(
+                onPressed: () => setState(() => _oldRows.add(_OldRow())),
+                icon: const Icon(Icons.add_circle_outline_rounded, size: 20),
+                label: Text(t('Next design', 'अगला डिज़ाइन')),
+              ),
+            ),
+        ],
+      ]),
+    );
+  }
+
   InputDecoration _dec(String label,
           {String? hint,
           Widget? prefix,
@@ -1176,96 +1465,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                       ),
                     ),
                   const SizedBox(height: 14),
-                  // Owner 21-Nov: DESIGNS NOT IN APP — design over / old designs.
-                  Container(
-                    key: const ValueKey('old-designs-box'),
-                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFFFF8E7),
-                      borderRadius: BorderRadius.circular(14),
-                      border: Border.all(color: const Color(0xFFE0C98A)),
-                    ),
-                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      UText(t('Design not in app?', 'डिज़ाइन ऐप में नहीं है?'),
-                          style: const TextStyle(fontWeight: FontWeight.w800, letterSpacing: 0.8, fontSize: 13)),
-                      const SizedBox(height: 2),
-                      Text(
-                          t('That design is not ready right now. If you still want to order it, write it here — '
-                                  'the goods will be ready in approx 2 weeks.',
-                              'वह डिज़ाइन अभी तैयार नहीं है। फिर भी ऑर्डर देना चाहते हैं तो यहाँ लिख दें — '
-                                  'माल लगभग 2 हफ़्ते में निकलेगा।'),
-                          style: const TextStyle(fontSize: 12.5, color: Colors.black87)),
-                      const SizedBox(height: 10),
-                      for (var i = 0; i < _oldRows.length; i++)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            Expanded(
-                              flex: 9,
-                              child: TextField(
-                                key: ValueKey('old-design-$i'),
-                                controller: _oldRows[i].design,
-                                textCapitalization: TextCapitalization.characters,
-                                textInputAction: TextInputAction.next,
-                                inputFormatters: [LengthLimitingTextInputFormatter(24)],
-                                decoration: _dec(t('Design no.', 'डिज़ाइन नं.')),
-                                // typed in the last row -> the next empty row opens by itself
-                                onChanged: (v) {
-                                  if (v.trim().isNotEmpty && i == _oldRows.length - 1 && _oldRows.length < _kMaxOldRows) {
-                                    setState(() => _oldRows.add(_OldRow()));
-                                  }
-                                },
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              flex: 9,
-                              child: TextField(
-                                key: ValueKey('old-qty-$i'),
-                                controller: _oldRows[i].qty,
-                                textInputAction: TextInputAction.next,
-                                inputFormatters: [LengthLimitingTextInputFormatter(40)],
-                                decoration: _dec(t('Quantity', 'कितना'), hint: t('1 set / 10 pcs', '1 सेट / 10 पीस')),
-                              ),
-                            ),
-                            const SizedBox(width: 6),
-                            Expanded(
-                              flex: 9,
-                              child: TextField(
-                                key: ValueKey('old-colours-$i'),
-                                controller: _oldRows[i].colours,
-                                textCapitalization: TextCapitalization.sentences,
-                                inputFormatters: [LengthLimitingTextInputFormatter(60)],
-                                decoration: _dec(t('Colours', 'रंग'), hint: t('any', 'कोई भी')),
-                              ),
-                            ),
-                            if (_oldRows.length > 1)
-                              SizedBox(
-                                width: 32,
-                                child: IconButton(
-                                  padding: EdgeInsets.zero,
-                                  tooltip: t('Remove', 'हटाएँ'),
-                                  icon: const Icon(Icons.close_rounded, size: 20),
-                                  onPressed: () {
-                                    final gone = _oldRows[i];
-                                    setState(() => _oldRows.removeAt(i));
-                                    WidgetsBinding.instance.addPostFrameCallback((_) => gone.dispose());
-                                  },
-                                ),
-                              ),
-                          ]),
-                        ),
-                      if (_oldRows.length < _kMaxOldRows)
-                        Align(
-                          alignment: Alignment.centerLeft,
-                          child: TextButton.icon(
-                            onPressed: () => setState(() => _oldRows.add(_OldRow())),
-                            icon: const Icon(Icons.add_circle_outline_rounded, size: 20),
-                            label: Text(t('Next design', 'अगला डिज़ाइन')),
-                          ),
-                        ),
-                    ]),
-                  ),
+                  _oldDesignBox(),
                   const SizedBox(height: 22),
                   Row(children: [
                     Expanded(child: _SectionTitle(t('2 · Your details', '2 · आपकी जानकारी'))),

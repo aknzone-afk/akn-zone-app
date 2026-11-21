@@ -19,6 +19,7 @@ import 'background_refresh.dart' show BackgroundRefresh;
 import '../models/photo.dart';
 import 'drive_urls.dart';
 import 'edit_service.dart';
+import 'old_designs.dart' show kOldDesignFolder;
 import 'photo_freshness.dart' show photoCacheManager, photoFetchOrder;
 import 'picks_service.dart';
 
@@ -1255,11 +1256,18 @@ class OrderService {
       b.writeln('⚠️ <b>Photo missing:</b> '
           '${_clipEsc(noPhoto.map((d) => d.isEmpty ? '?' : 'D.No $d').join(', '), 600)}');
     }
+    // Owner 21-Nov: designs picked WITH a photo from the shop's full photo set —
+    // not in the app, to be made. Their photos are in the album above.
+    final notInApp = o.items.where((i) => i.folder == kOldDesignFolder).toList();
+    if (notInApp.isNotEmpty) {
+      b.writeln('🗂 <b>${notInApp.length} design${notInApp.length == 1 ? '' : 's'} NOT IN APP — to be made, approx 2 weeks:</b> '
+          '${_clipEsc(notInApp.map((i) => 'D.No ${i.designNumber ?? '?'}').join(', '), 300)}');
+    }
     // Owner 21-Nov: designs the customer typed by hand — not in the app
     // (design over / old designs). No photo exists for these, so they are
     // listed right at the top where the shop cannot miss them.
     if (o.oldDesigns.isNotEmpty) {
-      b.writeln('🗂 <b>DESIGNS NOT IN APP — to be made, approx 2 weeks (${o.oldDesigns.length})</b>');
+      b.writeln('🗂 <b>NOT IN APP, no photo — to be made, approx 2 weeks (${o.oldDesigns.length})</b>');
       for (final x in o.oldDesigns.take(12)) {
         b.writeln('• D.No ${_clipEsc(x.design, 24)} — ${_clipEsc(x.qty, 40)}'
             '${x.colours.isEmpty ? '' : ' — colours: ${_clipEsc(x.colours, 60)}'}');

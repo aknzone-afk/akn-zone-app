@@ -174,7 +174,7 @@ class _FoldersView extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final folders = ref.watch(topLevelFoldersProvider);
-    final photos = ref.watch(photosProvider);
+    final photos = ref.watch(catalogPhotosProvider);
 
     return CustomScrollView(
       slivers: [

@@ -53,7 +53,7 @@ class _DesignLinkScreenState extends ConsumerState<DesignLinkScreen> {
         .map(_norm)
         .where((s) => s.isNotEmpty)
         .toList();
-    final photos = ref.watch(photosProvider);
+    final photos = ref.watch(catalogPhotosProvider);
     final catalog = ref.watch(catalogProvider);
     final loaded = catalog.hasValue || _gaveUp;
 
@@ -116,7 +116,7 @@ class FolderLinkScreen extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final photos = ref.watch(photosProvider);
+    final photos = ref.watch(catalogPhotosProvider);
     final catalog = ref.watch(catalogProvider);
     final want = _norm(name);
     final paths = <String>{};

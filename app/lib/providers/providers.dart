@@ -16,6 +16,7 @@ import '../services/catalog_service.dart';
 import '../services/stats_service.dart';
 import '../services/drive_scraper.dart';
 import '../services/drive_urls.dart';
+import '../services/old_designs.dart';
 import '../services/favorites_service.dart';
 import '../services/edit_service.dart';
 import '../services/local_cache.dart';
@@ -1091,8 +1092,40 @@ Future<void> _silentForegroundResync(Ref ref) {
 /// select screen / cart / order find it — tapping it said "Photo not found".
 final feedPhotosProvider = StateProvider<Map<String, Photo>>((_) => const {});
 
-/// Flat photo list (catalogue first, then DAILY UPDATE photos it lacks).
+/// Owner 21-Nov-2026: designs that are NOT in the app (not ready / design
+/// over) can be ordered from the order screen with a photo from the shop's
+/// full photo set, see [OldDesigns]. This holds the photos the customer is
+/// looking at there right now; the ones already in the cart are remembered by
+/// the cart itself (a photo is rebuilt from its id alone).
+class OldPhotosNotifier extends StateNotifier<Set<String>> {
+  OldPhotosNotifier() : super(const {});
+
+  void show(Iterable<String> ids) {
+    final next = {...state, ...ids.where(DriveUrls.isOld)};
+    if (next.length != state.length) state = next;
+  }
+}
+
+final oldPhotosProvider =
+    StateNotifierProvider<OldPhotosNotifier, Set<String>>((ref) => OldPhotosNotifier());
+
+/// Every photo the app can work with: the catalogue plus the not-in-app
+/// designs this customer picked or is looking at. Look-ups by id (cart,
+/// select screen, order) use this; what the customer BROWSES is
+/// [catalogPhotosProvider].
 final photosProvider = Provider<List<Photo>>((ref) {
+  final cat = ref.watch(catalogPhotosProvider);
+  final inCart = ref.watch(favoritesProvider
+      .select((s) => (s.where(DriveUrls.isOld).toList()..sort()).join(' ')));
+  final shown = ref.watch(oldPhotosProvider);
+  if (inCart.isEmpty && shown.isEmpty) return cat;
+  final ids = <String>{...inCart.split(' ').where((x) => x.isNotEmpty), ...shown};
+  return [...cat, for (final id in ids) OldDesigns.photoOf(id)];
+});
+
+/// Flat photo list (catalogue first, then DAILY UPDATE photos it lacks) —
+/// what the customer BROWSES: folders, search, sort, covers, NEW badges.
+final catalogPhotosProvider = Provider<List<Photo>>((ref) {
   final cat = ref.watch(catalogProvider).maybeWhen(
         data: (d) => d.photos,
         orElse: () => const <Photo>[],
@@ -1121,7 +1154,7 @@ bool _coversWarmed = false;
 /// background, so opening any folder shows its sub-folder pictures at once.
 Future<void> warmAllFolderCovers(WidgetRef ref) async {
   if (_coversWarmed) return;
-  final photos = ref.read(photosProvider);
+  final photos = ref.read(catalogPhotosProvider);
   if (photos.isEmpty) return;
   _coversWarmed = true;
   final seed = ref.read(coverSeedProvider);
@@ -1172,7 +1205,7 @@ Map<String, List<String>> _pickPreviewStack(
 /// Top-level folders with photo counts (transitive) and cover thumbs.
 /// Used by the Home screen.
 final topLevelFoldersProvider = Provider<List<CatalogFolder>>((ref) {
-  final photos = ref.watch(photosProvider);
+  final photos = ref.watch(catalogPhotosProvider);
   final seed = ref.watch(coverSeedProvider);
   final counts = <String, int>{};
   final byTop = <String, List<String>>{};
@@ -1215,7 +1248,7 @@ int folderShuffleSeed(String path) => (_launchShuffleSeed ^ path.hashCode) & 0x7
 /// folder (same order as the folder screen). The start-up screen waits for it
 /// at most 5 s; the rest keeps loading in the background.
 final firstScreensWarmProvider = FutureProvider<void>((ref) async {
-  final photos = ref.read(photosProvider);
+  final photos = ref.read(catalogPhotosProvider);
   if (photos.isEmpty) return;
   const perFolder = 6;
   final byFolder = <String, List<Photo>>{};
@@ -1251,7 +1284,7 @@ final firstScreensWarmProvider = FutureProvider<void>((ref) async {
 final folderContentsProvider = Provider.family<
     ({List<CatalogFolder> subFolders, List<Photo> directPhotos}),
     String>((ref, parentPath) {
-  final photos = ref.watch(photosProvider);
+  final photos = ref.watch(catalogPhotosProvider);
   final seed = ref.watch(coverSeedProvider);
 
   // 1. Direct photos: photos whose folder == parentPath exactly.
@@ -1396,14 +1429,17 @@ class FavoritesNotifier extends StateNotifier<Set<String>> {
     if (validIds.isEmpty) return;
     // Use the persisted set if the notifier hasn't hydrated yet.
     final current = state.isEmpty ? await _service.load() : state;
-    final stale = current.where((id) => !validIds.contains(id)).toList();
+    // 21-Nov: a design that is NOT in the app (picked on the order screen from
+    // the shop's full photo set) is never in the catalogue — it stays.
+    bool keep(String id) => validIds.contains(id) || DriveUrls.isOld(id);
+    final stale = current.where((id) => !keep(id)).toList();
     if (stale.isEmpty) return;
     final editsNotifier = _ref.read(editsProvider.notifier);
     for (final id in stale) {
       await _service.setStarred(id, false);
       await editsNotifier.markRemoved(id);
     }
-    state = current.where(validIds.contains).toSet();
+    state = current.where(keep).toSet();
   }
 }
 
@@ -1442,7 +1478,7 @@ final filterProvider = StateNotifierProvider<FilterNotifier, FilterState>(
 
 /// Filtered + sorted photos.
 final filteredPhotosProvider = Provider<List<Photo>>((ref) {
-  final photos = ref.watch(photosProvider);
+  final photos = ref.watch(catalogPhotosProvider);
   final filter = ref.watch(filterProvider);
   final favs = ref.watch(favoritesProvider);
 
@@ -1554,7 +1590,7 @@ final filteredPhotosProvider = Provider<List<Photo>>((ref) {
 /// design arrives the oldest of the 50 drops out.
 const int kNewBadgeCount = 50;
 final newDesignIdsProvider = Provider<Set<String>>((ref) {
-  final photos = [...ref.watch(photosProvider)];
+  final photos = [...ref.watch(catalogPhotosProvider)];
   photos.sort((a, b) => (b.driveModified ?? b.lastSeen)
       .compareTo(a.driveModified ?? a.lastSeen));
   return photos.take(kNewBadgeCount).map((p) => p.id).toSet();
@@ -1584,7 +1620,7 @@ final selectionProvider = StateNotifierProvider<SelectionNotifier, Set<String>>(
 
 /// Min/max price bounds for the price slider.
 final priceBoundsProvider = Provider<({double min, double max})>((ref) {
-  final photos = ref.watch(photosProvider);
+  final photos = ref.watch(catalogPhotosProvider);
   if (photos.isEmpty) return (min: 0, max: 5000);
   int lo = 1 << 30, hi = 0;
   for (final p in photos) {
