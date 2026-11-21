@@ -1050,6 +1050,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
   String _oldKey = '';
   String? _oldMsg;
   bool _oldManual = false; // no photo: quantity is typed by hand (the rows below)
+  final _oldResultKey = GlobalKey(); // the photos (or the OPEN button) — brought into view above the keyboard
 
   /// Typing the number shows the photo by itself (as on the shop's Rate Bolo
   /// page); the button and the keyboard's search key do the same at once.
@@ -1117,6 +1118,18 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
         }
       }
     });
+    // The photos open below the field — with the keyboard up they would sit
+    // behind it. Scroll just enough to show them (never when already seen).
+    if (ids.isNotEmpty || inApp.isNotEmpty) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        final c = _oldResultKey.currentContext;
+        if (!mounted || c == null) return;
+        // ignore: discarded_futures
+        Scrollable.ensureVisible(c,
+            duration: const Duration(milliseconds: 250),
+            alignmentPolicy: ScrollPositionAlignmentPolicy.keepVisibleAtEnd);
+      });
+    }
   }
 
   void _pickOld(String id) {
@@ -1182,6 +1195,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
           ),
         if (_oldInAppIds.isNotEmpty)
           Align(
+            key: _oldResultKey,
             alignment: Alignment.centerLeft,
             child: TextButton.icon(
               key: const ValueKey('old-open'),
@@ -1192,6 +1206,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
           ),
         if (_oldIds.isNotEmpty)
           Padding(
+            key: _oldResultKey,
             padding: const EdgeInsets.only(top: 8),
             child: SizedBox(
               height: 190,
