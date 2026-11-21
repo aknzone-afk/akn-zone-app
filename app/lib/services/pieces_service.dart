@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
 import '../models/photo.dart';
 import '../providers/providers.dart';
+import 'drive_urls.dart';
 
 /// How many sarees each catalog photo shows (the open one + every folded
 /// colour). Counted once per photo on the shop PC by Gemini
@@ -15,6 +16,7 @@ import '../providers/providers.dart';
 /// design default to this count, which drives the ₹30,000 minimum.
 class PiecesNotifier extends StateNotifier<Map<String, int>> {
   PiecesNotifier(this._prefs, this._dio) : super(_load(_prefs)) {
+    _applyOld();
     refresh();
   }
 
@@ -162,10 +164,85 @@ class PiecesNotifier extends StateNotifier<Map<String, int>> {
   }
   static const _kAtKey = 'pieces_at_v1';
 
+  // ───────── designs that are NOT in the app (owner 21-Nov-2026) ─────────
+  // Their photos (id "rb-<KEY>_<hash>", the shop's full photo set) are not in
+  // pieces.json, so SET could not put its numbers on the sarees "like on
+  // normal photos". The cloud reads such a photo the first time a customer
+  // looks it up — same rules as the shop PC — and the phone keeps it for good.
+  static const _kOldKey = 'pieces_old_v1';
+  late final Map<String, dynamic> _old = _loadOld(_prefs); // id → {n, b, pt}
+  final Set<String> _oldAsking = {};
+  final Map<String, int> _oldTried = {}; // id → when the last try ended (ms)
+
+  static Map<String, dynamic> _loadOld(SharedPreferences prefs) {
+    try {
+      return Map<String, dynamic>.from(jsonDecode(prefs.getString(_kOldKey) ?? '{}') as Map);
+    } catch (_) {
+      return {};
+    }
+  }
+
+  /// The layouts of not-in-app photos join the same look-ups (key = the id).
+  void _applyOld() {
+    if (_old.isEmpty) return;
+    final boxes = <String, dynamic>{}, points = <String, dynamic>{}, counts = <String, dynamic>{};
+    _old.forEach((id, v) {
+      if (v is! Map) return;
+      final k = id.toLowerCase();
+      boxes[k] = v['b'];
+      final pt = v['pt'];
+      if (pt is List && pt.isNotEmpty) points[k] = pt;
+      counts[k] = v['n'];
+    });
+    _boxes = {..._boxes, ..._indexBoxes(boxes)};
+    _points = {..._points, ..._indexPoints(points)};
+    if (mounted) state = {...state, ..._index(counts)};
+  }
+
+  /// True while the cloud is reading this photo (the select screen waits).
+  bool oldPending(String id) => _oldAsking.contains(id);
+
+  /// Asks the cloud for a not-in-app photo's layout, once; a no-op when the
+  /// phone has it, for any other photo, and right after a failed try.
+  Future<void> ensureOld(String id) async {
+    if (!DriveUrls.isOld(id) || _old.containsKey(id) || _oldAsking.contains(id)) return;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - (_oldTried[id] ?? 0) < 120000) return;
+    _oldAsking.add(id);
+    if (mounted) state = Map.of(state);
+    try {
+      final r = await _dio.post<dynamic>('https://asia-south2-akn-chat-a7dd8.cloudfunctions.net/detectSarees',
+          data: {'old': id},
+          options: Options(
+              headers: {'x-app-key': 'akn-zone-app-v3'},
+              responseType: ResponseType.plain,
+              receiveTimeout: const Duration(seconds: 115)));
+      final j = jsonDecode('${r.data}') as Map<String, dynamic>;
+      final b = j['boxes'];
+      if (j['ok'] == true && b is List && b.isNotEmpty) {
+        _old[id] = {'n': j['n'] ?? b.length, 'b': b, 'pt': j['points'] ?? const []};
+        while (_old.length > 400) {
+          _old.remove(_old.keys.first);
+        }
+        await _prefs.setString(_kOldKey, jsonEncode(_old));
+      }
+    } catch (_) {
+      // weak network / photo not readable — it still takes free taps
+    } finally {
+      _oldAsking.remove(id);
+      _oldTried[id] = DateTime.now().millisecondsSinceEpoch;
+      if (mounted) {
+        _applyOld();
+        state = Map.of(state);
+      }
+    }
+  }
+
   static String _noExt(String s) => s.replaceFirst(RegExp(r'\.[a-z0-9]{2,5}$'), '');
 
-  static String keyFor(Photo p) =>
-      (p.folder.isEmpty ? p.filename : '${p.folder}/${p.filename}').toLowerCase();
+  static String keyFor(Photo p) => DriveUrls.isOld(p.id)
+      ? p.id.toLowerCase() // a not-in-app photo: several photos share one design's file name
+      : (p.folder.isEmpty ? p.filename : '${p.folder}/${p.filename}').toLowerCase();
 
   static Map<String, int> _index(Map<String, dynamic> raw) {
     final out = <String, int>{};
@@ -250,7 +327,10 @@ class PiecesNotifier extends StateNotifier<Map<String, int>> {
       _merged = j['merged'] == 1;
       await _prefs.setBool(_kMergedKey, _merged);
       await _prefs.setInt(_kAtKey, DateTime.now().millisecondsSinceEpoch);
-      if (mounted) state = _index(pieces);
+      if (mounted) {
+        state = _index(pieces);
+        _applyOld(); // the fresh maps above do not carry the not-in-app photos
+      }
     } catch (_) {
       // Offline / not published yet — keep what we have.
     }

@@ -1088,6 +1088,12 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     }
     if (!mounted || seq != _oldSeq) return;
     if (ids.isNotEmpty) ref.read(oldPhotosProvider.notifier).show(ids);
+    // their saree layouts are read now (cloud, once per photo), so SET works
+    // on the photo the moment one of them is opened
+    for (final id in ids.take(4)) {
+      // ignore: unawaited_futures
+      ref.read(piecesProvider.notifier).ensureOld(id);
+    }
     setState(() {
       _oldBusy = false;
       _oldKey = key;

@@ -117,6 +117,15 @@ void main() {
       // the first photo -> the same select screen as any design
       t.widget<GestureDetector>(photo0).onTap!();
       await shot('07c_old_design_select', settle: 12);
+      // SET on such a photo numbers every saree, like on a catalogue photo (the cloud reads the photo once)
+      final plus = find.byKey(const ValueKey('set-plus'));
+      for (var i = 0; i < 20 && find.byKey(const ValueKey('old-layout-wait')).evaluate().isNotEmpty; i++) {
+        await wait(t, 5);
+      }
+      t.widget<IconButton>(plus).onPressed!();
+      await shot('07c2_old_design_one_set', settle: 4);
+      t.widget<IconButton>(plus).onPressed!();
+      await shot('07c3_old_design_two_sets', settle: 4);
       appRouter.pop();
       await wait(t, 3);
       // selected: it is one of the order's designs, with its photo

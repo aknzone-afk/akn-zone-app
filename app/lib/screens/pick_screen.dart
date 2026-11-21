@@ -14,6 +14,7 @@ import '../config.dart' show kModelFlashMs;
 import '../widgets/bar_button.dart';
 import '../widgets/model_pic.dart';
 import '../widgets/pick_preview.dart';
+import '../services/drive_urls.dart';
 import '../services/model_pics.dart';
 import '../services/photo_freshness.dart';
 import '../services/picks_service.dart';
@@ -45,6 +46,10 @@ class _PickScreenState extends ConsumerState<PickScreen> {
     super.initState();
     _s = ref.read(picksProvider)[widget.photoId] ?? const PickState();
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // a not-in-app design's photo: its saree layout comes from the cloud
+      // (usually asked for already when the photo was looked up)
+      // ignore: unawaited_futures
+      ref.read(piecesProvider.notifier).ensureOld(widget.photoId);
       await _guideOnce();
       await _flashModel();
     });
@@ -463,6 +468,38 @@ class _PickScreenState extends ConsumerState<PickScreen> {
   void _setTo(int target) {
     target = math.max(0, target);
     final boxes = _boxesNow;
+    // Owner 21-Nov: on a not-ready design's photo SET must number the sarees
+    // exactly as on any photo. Its layout is being read right now -> wait for
+    // it (a few seconds) instead of taking a SET the photo cannot show.
+    if ((boxes == null || boxes.isEmpty) && ref.read(piecesProvider.notifier).oldPending(widget.photoId)) {
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(SnackBar(
+            duration: const Duration(milliseconds: 1800),
+            content: Text(t('Reading the sarees in this photo — one moment, then press SET again.',
+                'इस फ़ोटो की साड़ियाँ पढ़ रहे हैं — एक पल, फिर SET दबाएँ।'))));
+      return;
+    }
+    // SETs taken on such a photo BEFORE it was read: put them on the sarees now.
+    if (boxes != null && boxes.isNotEmpty && _s.sets > 0 && DriveUrls.isOld(widget.photoId)) {
+      final had = _s.sets;
+      final marks = <PickMark>[];
+      final done = <int>{};
+      for (final m in _s.marks) {
+        final b = m.box;
+        if (m.n < 0 || b == null || !done.add(b)) {
+          marks.add(m); // ✕ / a number outside every saree stays as it is
+        } else {
+          marks.add(m.withN(m.n + had));
+        }
+      }
+      for (var b = 0; b < boxes.length; b++) {
+        if (_s.marks.any((m) => m.box == b)) continue;
+        final spot = _labelSpot(b, boxes, _points);
+        marks.add(PickMark(spot.dx, spot.dy, had, b));
+      }
+      _s = PickState(marks: marks, shown: had);
+    }
     if (boxes == null || boxes.isEmpty || _s.sets > 0) {
       _push(_s.copy(sets: target)); // layout unknown / old cart item
       return;
@@ -692,6 +729,16 @@ class _PickScreenState extends ConsumerState<PickScreen> {
         ),
         body: Column(
           children: [
+            if ((boxes == null || boxes.isEmpty) && pc.oldPending(photo.id))
+              Container(
+                key: const ValueKey('old-layout-wait'),
+                width: double.infinity,
+                color: const Color(0xFF8A4B00),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+                child: Text(t('Reading the sarees in this photo — one moment…', 'इस फ़ोटो की साड़ियाँ पढ़ रहे हैं — एक पल…'),
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 13)),
+              ),
             if (_setOnly)
               Container(
                 width: double.infinity,
@@ -776,6 +823,7 @@ class _PickScreenState extends ConsumerState<PickScreen> {
                       ),
                     ),
                     IconButton(
+                      key: const ValueKey('set-plus'),
                       tooltip: t('One set more', 'एक सेट ज़्यादा'),
                       visualDensity: VisualDensity.compact,
                       color: Colors.white,

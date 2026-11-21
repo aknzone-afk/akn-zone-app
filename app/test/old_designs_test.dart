@@ -3,13 +3,18 @@
 //    on it like any design and it joins the order WITH its photo;
 //  - no photo of that design: design number / quantity / colour choice are typed, and travel with the order —
 //    saved on the phone and written at the top of the shop's details message.
+import 'dart:convert';
+
 import 'package:catalog_app/models/order.dart';
 import 'package:catalog_app/models/photo.dart';
 import 'package:catalog_app/services/drive_urls.dart';
 import 'package:catalog_app/services/old_designs.dart';
 import 'package:catalog_app/services/order_service.dart';
 import 'package:catalog_app/services/photo_freshness.dart' show photoFetchOrder;
+import 'package:catalog_app/services/pieces_service.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 Order _order(List<OldDesign> old, {List<OrderItem> more = const []}) => Order(
       number: 'AKN-2111-1100-ABC',
@@ -140,6 +145,43 @@ void main() {
     test('an index without "m" (an older file) still reads', () {
       expect(OldDesigns.idsIn(OldDesigns.parseIndex(_index), '1444'), ['rb-1444_aaaaaaaa', 'rb-1444_bbbbbbbb']);
       expect(OldDesigns.parseIndex('{"p":{"77":["aaaaaaaa"]},"m":[1,2]}')['77'], ['aaaaaaaa']);
+    });
+
+    test('its saree layout (read once by the cloud, kept on the phone) is found like any photo\'s — per PHOTO', () async {
+      // Owner 21-Nov: SET must number every saree on these photos too. That needs each photo's own layout.
+      SharedPreferences.setMockInitialValues({
+        'pieces_old_v1': jsonEncode({
+          'rb-5258_ab12cd34': {
+            'n': 3,
+            'b': [[10, 10, 300, 900], [400, 10, 600, 400], [400, 500, 600, 900]],
+            'pt': [[100, 400], [500, 200], [500, 700]],
+          },
+          'rb-5258_00ff00ff': {
+            'n': 2,
+            'b': [[10, 10, 500, 900], [600, 10, 900, 900]],
+            'pt': <dynamic>[],
+          },
+        }),
+      });
+      final prefs = await SharedPreferences.getInstance();
+      // no network in this test: every request is refused at once
+      final dio = Dio()..interceptors.add(InterceptorsWrapper(onRequest: (o, h) => h.reject(DioException(requestOptions: o))));
+      final n = PiecesNotifier(prefs, dio);
+      final a = OldDesigns.photoOf('rb-5258_ab12cd34'), b = OldDesigns.photoOf('rb-5258_00ff00ff');
+      expect(PiecesNotifier.keyFor(a), isNot(PiecesNotifier.keyFor(b))); // same design, same file name, two photos
+      expect(n.boxesFor(a), hasLength(3));
+      expect(n.pointsFor(a), hasLength(3));
+      expect(n.piecesFor(a), 3);
+      expect(n.boxesFor(b), hasLength(2));
+      expect(n.pointsFor(b), isNull); // no label points: the grid spot is used
+      expect(n.piecesFor(b), 2);
+      final c = OldDesigns.photoOf('rb-5258_12345678'); // not read yet
+      expect(n.boxesFor(c), isNull);
+      expect(n.piecesFor(c), isNull);
+      expect(n.oldPending('rb-5258_12345678'), isFalse);
+      await n.ensureOld('rb-5258_12345678'); // refused (no network): nothing kept, nothing thrown
+      expect(n.boxesFor(c), isNull);
+      await n.ensureOld('1AbCdEfGhIjKlMnOpQrStUv'); // a catalogue photo is never asked for
     });
 
     test('a picked photo is a normal photo: design number, no price, its own folder name', () {
