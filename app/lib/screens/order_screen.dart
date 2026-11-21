@@ -786,16 +786,18 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
   Future<void> _send(List<Photo> photos, CustomerDetails customer) async {
     // Owner 14-Oct: one last "are you sure?" before the order goes.
     final pcs = photos.fold<int>(0, (s, p) => s + _qtyFor(p));
+    final preN = photos.where((p) => DriveUrls.isOld(p.id)).length;
+    final preLine = preN == 0 ? '' : t('(incl. $preN pre order — not ready, approx 2 weeks)\n', '($preN प्री ऑर्डर — लगभग 2 हफ़्ते)\n');
     final sure = await showDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         title: Text(t('Place this order?', 'यह ऑर्डर भेजें?')),
         content: Text(t(
-            '${photos.length} design${photos.length == 1 ? '' : 's'} · $pcs pcs\n'
+            '${photos.length} design${photos.length == 1 ? '' : 's'} · $pcs pcs\n$preLine'
                 'Bill name: ${customer.billName}\n\n'
                 'Your order will be placed. Tap YES only if everything is right.',
-            '${photos.length} डिज़ाइन · $pcs पीस\n'
+            '${photos.length} डिज़ाइन · $pcs पीस\n$preLine'
                 'बिल नाम: ${customer.billName}\n\n'
                 'आपका ऑर्डर लग जाएगा। सब सही हो तभी YES दबाएँ।')),
         actions: [
@@ -1366,6 +1368,12 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     _readMarks(photos, edits);
     final pcs = photos.fold<int>(0, (s, p) => s + _qtyFor(p));
     final value = _check(photos);
+    // Owner 21-Nov: a design that is not ready (picked in the "Design not in
+    // app?" box) is a PRE ORDER — listed under the amount in its own block,
+    // not among "Your designs".
+    final ready = [for (final p in photos) if (!DriveUrls.isOld(p.id)) p];
+    final pre = [for (final p in photos) if (DriveUrls.isOld(p.id)) p];
+    final prePcs = pre.fold<int>(0, (s, p) => s + _qtyFor(p));
 
     // Booking place helper under the field.
     String? placeHelper;
@@ -1395,6 +1403,38 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     }
     final kind = OrderService.taxIdKind(_taxId.text);
 
+    Widget rowFor(Photo p, {bool preOrder = false}) =>
+      _ItemRow(
+        photo: p,
+        preOrder: preOrder,
+        qty: _qtyFor(p),
+        edited: edits.containsKey(p.id),
+        reading: ref.read(marksProvider.notifier).isReading(p.id),
+        fromMarks:
+            !_qty.containsKey(p.id) && marks.containsKey(p.id),
+        pick: picks[p.id],
+        sareeCount: ref.read(piecesProvider.notifier).piecesFor(p),
+        pickLabel: _qty.containsKey(p.id)
+            ? null
+            : picks[p.id]?.label(
+                ref.read(piecesProvider.notifier).piecesFor(p)),
+        onOpenPick: () =>
+            context.push('/pick/${Uri.encodeComponent(p.id)}'),
+        onQty: (v) => setState(() {
+          // Owner 12-Oct: below ₹310 = SET TO SET only — + / − move
+          // by a whole set.
+          final set = ref.read(piecesProvider.notifier).piecesFor(p);
+          if (isSetOnly(p.price) && set != null && set > 0) {
+            final cur = _qtyFor(p);
+            final sets = (cur / set).round().clamp(1, 999);
+            _qty[p.id] = (v > cur ? sets + 1 : (sets - 1).clamp(1, 999)) * set;
+          } else {
+            _qty[p.id] = v;
+          }
+        }),
+        onRemove: () => setState(() => _excluded.add(p.id)),
+      );
+
     return Scaffold(
       appBar: AppBar(
           title: UText(t('Place order', 'ऑर्डर करें'))),
@@ -1406,42 +1446,13 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
               child: ListView(
                 padding: const EdgeInsets.fromLTRB(14, 12, 14, 24),
                 children: [
-                  _SectionTitle(t('1 · Your designs (${photos.length})', '1 · आपके डिज़ाइन (${photos.length})')),
+                  _SectionTitle(t('1 · Your designs (${ready.length})', '1 · आपके डिज़ाइन (${ready.length})')),
                   const SizedBox(height: 4),
                   Text(
                       t('Pieces = sarees in the photo. Change with + / − if you want more or less.', 'पीस = फ़ोटो में जितनी साड़ियाँ। कम-ज़्यादा के लिए + / − दबाएँ।'),
                       style: Theme.of(context).textTheme.bodySmall),
                   const SizedBox(height: 8),
-                  for (final p in photos)
-                    _ItemRow(
-                      photo: p,
-                      qty: _qtyFor(p),
-                      edited: edits.containsKey(p.id),
-                      reading: ref.read(marksProvider.notifier).isReading(p.id),
-                      fromMarks:
-                          !_qty.containsKey(p.id) && marks.containsKey(p.id),
-                      pick: picks[p.id],
-                      sareeCount: ref.read(piecesProvider.notifier).piecesFor(p),
-                      pickLabel: _qty.containsKey(p.id)
-                          ? null
-                          : picks[p.id]?.label(
-                              ref.read(piecesProvider.notifier).piecesFor(p)),
-                      onOpenPick: () =>
-                          context.push('/pick/${Uri.encodeComponent(p.id)}'),
-                      onQty: (v) => setState(() {
-                        // Owner 12-Oct: below ₹310 = SET TO SET only — + / − move
-                        // by a whole set.
-                        final set = ref.read(piecesProvider.notifier).piecesFor(p);
-                        if (isSetOnly(p.price) && set != null && set > 0) {
-                          final cur = _qtyFor(p);
-                          final sets = (cur / set).round().clamp(1, 999);
-                          _qty[p.id] = (v > cur ? sets + 1 : (sets - 1).clamp(1, 999)) * set;
-                        } else {
-                          _qty[p.id] = v;
-                        }
-                      }),
-                      onRemove: () => setState(() => _excluded.add(p.id)),
-                    ),
+                  for (final p in ready) rowFor(p),
                   if (_excluded.isNotEmpty)
                     Align(
                       alignment: Alignment.centerLeft,
@@ -1453,7 +1464,9 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                     ),
                   Padding(
                     padding: const EdgeInsets.only(top: 6, bottom: 8),
-                    child: Text(t('${photos.length} design${photos.length == 1 ? '' : 's'} · $pcs pcs', '${photos.length} डिज़ाइन · $pcs पीस'),
+                    child: Text(
+                        t('${ready.length} design${ready.length == 1 ? '' : 's'} · ${pcs - prePcs} pcs',
+                            '${ready.length} डिज़ाइन · ${pcs - prePcs} पीस'),
                         style: const TextStyle(fontWeight: FontWeight.w700)),
                   ),
                   Builder(builder: (_) {
@@ -1479,6 +1492,39 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                         label: Text(t('Select more designs', 'और डिज़ाइन चुनें')),
                       ),
                     ),
+                  if (pre.isNotEmpty) ...[
+                    const SizedBox(height: 14),
+                    Container(
+                      key: const ValueKey('pre-order-box'),
+                      padding: const EdgeInsets.fromLTRB(12, 12, 2, 8),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFF8E7),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: const Color(0xFFE0C98A)),
+                      ),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        UText(t('Not ready designs — approx 2 weeks', 'जो डिज़ाइन तैयार नहीं — लगभग 2 हफ़्ते'),
+                            style: const TextStyle(fontWeight: FontWeight.w800, letterSpacing: 0.8, fontSize: 13)),
+                        const SizedBox(height: 2),
+                        Padding(
+                          padding: const EdgeInsets.only(right: 10),
+                          child: Text(
+                              t('Pre order: these goods are made for you and will be ready in approx 2 weeks.',
+                                  'प्री ऑर्डर: यह माल आपके लिए बनेगा, लगभग 2 हफ़्ते में तैयार होगा।'),
+                              style: const TextStyle(fontSize: 12.5, color: Colors.black87)),
+                        ),
+                        const SizedBox(height: 6),
+                        for (final p in pre) rowFor(p, preOrder: true),
+                        Padding(
+                          padding: const EdgeInsets.only(top: 4, bottom: 2),
+                          child: Text(
+                              t('${pre.length} pre order design${pre.length == 1 ? '' : 's'} · $prePcs pcs',
+                                  '${pre.length} प्री ऑर्डर डिज़ाइन · $prePcs पीस'),
+                              style: const TextStyle(fontWeight: FontWeight.w700)),
+                        ),
+                      ]),
+                    ),
+                  ],
                   const SizedBox(height: 14),
                   _oldDesignBox(),
                   const SizedBox(height: 22),
@@ -1858,8 +1904,12 @@ class _ItemRow extends StatelessWidget {
   final VoidCallback? onOpenPick;
   final ValueChanged<int> onQty;
   final VoidCallback onRemove;
+
+  /// A design that is not ready (ordered from the shop's full photo set).
+  final bool preOrder;
   const _ItemRow({
     required this.photo,
+    this.preOrder = false,
     required this.qty,
     required this.edited,
     this.reading = false,
@@ -1922,18 +1972,38 @@ class _ItemRow extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(
-                  photo.designNumber != null
-                      ? 'D.No ${photo.designNumber}'
-                      : photo.filename,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
+                Row(children: [
+                  Flexible(
+                    child: Text(
+                      photo.designNumber != null
+                          ? 'D.No ${photo.designNumber}'
+                          : photo.filename,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                  ),
+                  if (preOrder) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                          color: const Color(0xFF8A4B00), borderRadius: BorderRadius.circular(6)),
+                      child: const Text('PRE ORDER',
+                          style: TextStyle(
+                              color: Colors.white, fontSize: 10, fontWeight: FontWeight.w800, letterSpacing: 0.6)),
+                    ),
+                  ],
+                ]),
                 if (photo.price != null)
                   Text('₹${photo.price}',
                       style: TextStyle(color: scheme.onSurfaceVariant)),
-                if (folder.isNotEmpty)
+                if (preOrder)
+                  Text(t('Not ready · approx 2 weeks', 'तैयार नहीं · लगभग 2 हफ़्ते'),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: Theme.of(context).textTheme.bodySmall)
+                else if (folder.isNotEmpty)
                   Text(folder,
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,

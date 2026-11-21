@@ -123,8 +123,10 @@ void main() {
       final id0 = container.read(oldPhotosProvider).first;
       await container.read(favoritesProvider.notifier).add(id0);
       await wait(t, 3);
+      // it is listed as a PRE ORDER in its own block under the amount, not among "Your designs"
       final pos = Scrollable.of(t.element(box)).position;
-      pos.jumpTo((pos.pixels - 650).clamp(0.0, pos.maxScrollExtent));
+      pos.jumpTo((pos.pixels - 520).clamp(0.0, pos.maxScrollExtent));
+      debugPrint('old design: pre order block ${find.byKey(const ValueKey('pre-order-box')).evaluate().length}');
       await shot('07d_old_design_in_order', settle: 8);
       await container.read(favoritesProvider.notifier).toggle(id0); // the cart as it was
       await wait(t, 2);

@@ -5,9 +5,10 @@ import 'package:dio/dio.dart';
 import '../models/photo.dart';
 import 'drive_urls.dart';
 
-/// Folder name shown for a design that is not in the app (cart, order
-/// screen, the photo's caption in the shop's group).
-const String kOldDesignFolder = 'NOT IN APP (approx 2 weeks)';
+/// Folder name shown for a design that is not in the app (cart, the photo's
+/// caption in the shop's group). Owner 21-Nov: it is a PRE ORDER of a design
+/// that is NOT READY.
+const String kOldDesignFolder = 'PRE ORDER - NOT READY (approx 2 weeks)';
 
 /// Owner 21-Nov-2026: designs that are NOT in the app (not ready / design
 /// over) can still be ordered. The customer types the design number on the

@@ -57,7 +57,8 @@ void main() {
       ]));
       final lines = text.split('\n');
       expect(lines[0], contains('1 design'));
-      expect(lines[1], contains('NOT IN APP, no photo'));
+      expect(lines[1], contains('PRE ORDER, no photo'));
+      expect(lines[1], contains('NOT READY'));
       expect(lines[1], contains('2 weeks'));
       expect(lines[1], contains('(2)'));
       expect(lines[2], '• D.No 5521 — 2 set — colours: Red, green');
@@ -76,7 +77,8 @@ void main() {
 
     test('no old designs = the message is exactly as before', () async {
       final text = await OrderService.detailsText(_order(const []));
-      expect(text, isNot(contains('NOT IN APP')));
+      expect(text, isNot(contains('PRE ORDER')));
+      expect(text, isNot(contains('NOT READY')));
     });
 
     test('odd characters typed by the customer cannot break the message', () async {
@@ -146,6 +148,7 @@ void main() {
       expect(ph.designNumber, 'N254');
       expect(ph.price, isNull);
       expect(ph.folder, kOldDesignFolder);
+      expect(kOldDesignFolder, contains('PRE ORDER'));
       expect(ph.ocrState, OcrState.done);
       expect(OldDesigns.designOf('rb-1444_aaaaaaaa'), '1444');
     });
@@ -169,15 +172,16 @@ void main() {
         OrderItem(photoId: 'rb-N254_5641ee46', designNumber: 'N254', folder: kOldDesignFolder, price: null, qty: 12, pick: '12 pcs'),
         OrderItem(photoId: 'rb-3549_aaaaaaaa', designNumber: '3549', folder: kOldDesignFolder, price: null, qty: 6),
       ]));
-      final line = text.split('\n').firstWhere((l) => l.contains('NOT IN APP'));
-      expect(line, contains('2 designs NOT IN APP'));
+      final line = text.split('\n').firstWhere((l) => l.contains('PRE ORDER'));
+      expect(line, contains('2 designs PRE ORDER'));
+      expect(line, contains('NOT READY'));
       expect(line, contains('2 weeks'));
       expect(line, contains('D.No N254, D.No 3549'));
       expect(text, isNot(contains('no photo')));
     });
 
     test('an order with only catalogue designs says nothing about it', () async {
-      expect(await OrderService.detailsText(_order(const [])), isNot(contains('NOT IN APP')));
+      expect(await OrderService.detailsText(_order(const [])), isNot(contains('PRE ORDER')));
     });
   });
 }
