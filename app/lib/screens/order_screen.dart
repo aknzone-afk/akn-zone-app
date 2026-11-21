@@ -59,7 +59,7 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
           if (r.design.text.trim().isNotEmpty)
             OldDesign(
                 design: r.design.text.trim().toUpperCase(),
-                qty: int.tryParse(r.qty.text.trim()) ?? 0,
+                qty: r.qty.text.trim(),
                 colours: r.colours.text.trim()),
       ];
   final _transportFocus = FocusNode();
@@ -522,18 +522,18 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
     }
     // Owner 21-Nov: an old design needs its number AND how many pieces.
     for (final r in _oldRows) {
-      final d = r.design.text.trim(), q = int.tryParse(r.qty.text.trim()) ?? 0;
-      final other = r.qty.text.trim().isNotEmpty || r.colours.text.trim().isNotEmpty;
+      final d = r.design.text.trim(), q = r.qty.text.trim();
+      final other = q.isNotEmpty || r.colours.text.trim().isNotEmpty;
       if (d.isEmpty && other) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(t('"Designs not in app": type the design number too.',
+            content: Text(t('"Design not in app": type the design number too.',
                 '"जो डिज़ाइन ऐप में नहीं": डिज़ाइन नंबर भी लिखें।'))));
         return;
       }
-      if (d.isNotEmpty && q <= 0) {
+      if (d.isNotEmpty && q.isEmpty) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-            content: Text(t('How many pieces of design ${d.toUpperCase()}? Type the quantity.',
-                'डिज़ाइन ${d.toUpperCase()} के कितने पीस चाहिए? संख्या लिखें।'))));
+            content: Text(t('How much of design ${d.toUpperCase()}? Write the quantity — 1 set, 10 pcs…',
+                'डिज़ाइन ${d.toUpperCase()} कितना चाहिए? लिखें — 1 सेट, 10 पीस…'))));
         return;
       }
     }
@@ -1186,12 +1186,14 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                       border: Border.all(color: const Color(0xFFE0C98A)),
                     ),
                     child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      UText(t('Designs not in app', 'जो डिज़ाइन ऐप में नहीं हैं'),
+                      UText(t('Design not in app?', 'डिज़ाइन ऐप में नहीं है?'),
                           style: const TextStyle(fontWeight: FontWeight.w800, letterSpacing: 0.8, fontSize: 13)),
                       const SizedBox(height: 2),
                       Text(
-                          t('Design over? Order from old designs here — type the design number, quantity and any choice of colours.',
-                              'डिज़ाइन ओवर? पुराने डिज़ाइन यहाँ से ऑर्डर करें — डिज़ाइन नंबर, कितने पीस और रंग की पसंद लिखें।'),
+                          t('That design is not ready right now. If you still want to order it, write it here — '
+                                  'the goods will be ready in approx 2 weeks.',
+                              'वह डिज़ाइन अभी तैयार नहीं है। फिर भी ऑर्डर देना चाहते हैं तो यहाँ लिख दें — '
+                                  'माल लगभग 2 हफ़्ते में निकलेगा।'),
                           style: const TextStyle(fontSize: 12.5, color: Colors.black87)),
                       const SizedBox(height: 10),
                       for (var i = 0; i < _oldRows.length; i++)
@@ -1207,32 +1209,34 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                                 textInputAction: TextInputAction.next,
                                 inputFormatters: [LengthLimitingTextInputFormatter(24)],
                                 decoration: _dec(t('Design no.', 'डिज़ाइन नं.')),
+                                // typed in the last row -> the next empty row opens by itself
+                                onChanged: (v) {
+                                  if (v.trim().isNotEmpty && i == _oldRows.length - 1 && _oldRows.length < _kMaxOldRows) {
+                                    setState(() => _oldRows.add(_OldRow()));
+                                  }
+                                },
                               ),
                             ),
                             const SizedBox(width: 6),
                             Expanded(
-                              flex: 5,
+                              flex: 9,
                               child: TextField(
                                 key: ValueKey('old-qty-$i'),
                                 controller: _oldRows[i].qty,
-                                keyboardType: TextInputType.number,
                                 textInputAction: TextInputAction.next,
-                                inputFormatters: [
-                                  FilteringTextInputFormatter.digitsOnly,
-                                  LengthLimitingTextInputFormatter(4),
-                                ],
-                                decoration: _dec(t('Qty', 'पीस')),
+                                inputFormatters: [LengthLimitingTextInputFormatter(40)],
+                                decoration: _dec(t('Quantity', 'कितना'), hint: t('1 set / 10 pcs', '1 सेट / 10 पीस')),
                               ),
                             ),
                             const SizedBox(width: 6),
                             Expanded(
-                              flex: 11,
+                              flex: 9,
                               child: TextField(
                                 key: ValueKey('old-colours-$i'),
                                 controller: _oldRows[i].colours,
                                 textCapitalization: TextCapitalization.sentences,
                                 inputFormatters: [LengthLimitingTextInputFormatter(60)],
-                                decoration: _dec(t('Colour choice', 'रंग की पसंद'), hint: t('any', 'कोई भी')),
+                                decoration: _dec(t('Colours', 'रंग'), hint: t('any', 'कोई भी')),
                               ),
                             ),
                             if (_oldRows.length > 1)
@@ -1256,8 +1260,8 @@ class _OrderScreenState extends ConsumerState<OrderScreen> {
                           alignment: Alignment.centerLeft,
                           child: TextButton.icon(
                             onPressed: () => setState(() => _oldRows.add(_OldRow())),
-                            icon: const Icon(Icons.add_rounded, size: 18),
-                            label: Text(t('Add another design', 'एक और डिज़ाइन')),
+                            icon: const Icon(Icons.add_circle_outline_rounded, size: 20),
+                            label: Text(t('Next design', 'अगला डिज़ाइन')),
                           ),
                         ),
                     ]),

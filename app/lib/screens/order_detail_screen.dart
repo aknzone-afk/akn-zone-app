@@ -80,7 +80,7 @@ class _OrderDetailScreenState extends ConsumerState<OrderDetailScreen> {
                   const SizedBox(height: 8),
                   const Text('Designs not in app:', style: TextStyle(fontWeight: FontWeight.w700)),
                   for (final x in o.oldDesigns)
-                    Text('• D.No ${x.design} — ${x.qty} pcs${x.colours.isEmpty ? '' : ' — ${x.colours}'}'),
+                    Text('• D.No ${x.design} — ${x.qty}${x.colours.isEmpty ? '' : ' — ${x.colours}'}'),
                 ],
                 const Divider(height: 22),
                 Text('${o.items.length} DESIGNS · ${o.totalPcs} PCS'

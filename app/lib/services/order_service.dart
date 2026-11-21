@@ -1259,9 +1259,9 @@ class OrderService {
     // (design over / old designs). No photo exists for these, so they are
     // listed right at the top where the shop cannot miss them.
     if (o.oldDesigns.isNotEmpty) {
-      b.writeln('🗂 <b>OLD DESIGNS — NOT IN APP (${o.oldDesigns.length})</b>');
+      b.writeln('🗂 <b>DESIGNS NOT IN APP — to be made, approx 2 weeks (${o.oldDesigns.length})</b>');
       for (final x in o.oldDesigns.take(12)) {
-        b.writeln('• D.No ${_clipEsc(x.design, 24)} — ${x.qty} pcs'
+        b.writeln('• D.No ${_clipEsc(x.design, 24)} — ${_clipEsc(x.qty, 40)}'
             '${x.colours.isEmpty ? '' : ' — colours: ${_clipEsc(x.colours, 60)}'}');
       }
     }

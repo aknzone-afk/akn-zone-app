@@ -95,8 +95,9 @@ void main() {
       final box = find.byKey(const ValueKey('old-designs-box'));
       await t.scrollUntilVisible(box, 400, scrollable: find.byType(Scrollable).first, maxScrolls: 30);
       await t.enterText(find.byKey(const ValueKey('old-design-0')), '5521');
-      await t.enterText(find.byKey(const ValueKey('old-qty-0')), '12');
+      await t.enterText(find.byKey(const ValueKey('old-qty-0')), '2 set');
       await t.enterText(find.byKey(const ValueKey('old-colours-0')), 'Red, green');
+      await t.pump(const Duration(milliseconds: 400)); // the next empty row opens by itself
       await t.ensureVisible(box);
     } catch (e) {
       debugPrint('order screen shot: $e');

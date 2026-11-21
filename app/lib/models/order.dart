@@ -2,19 +2,21 @@
 /// send queue) and delivered to the shop's Telegram group by [OrderService].
 library;
 
-/// Owner 21-Nov-2026: a design that is NOT in the app any more (design over /
-/// an old design), typed by the customer on the order screen — number,
-/// pieces and any choice of colours. It has no photo and no price.
+/// Owner 21-Nov-2026: a design that is NOT in the app (not ready / design
+/// over / an old design), typed by the customer on the order screen — its
+/// number, how much they want in their own words ("1 set", "2 set",
+/// "10 pcs") and any choice of colours. It has no photo and no price; the
+/// shop makes it in about two weeks.
 class OldDesign {
   final String design;
-  final int qty;
+  final String qty;
   final String colours;
   const OldDesign({required this.design, required this.qty, this.colours = ''});
 
   Map<String, dynamic> toJson() => {'d': design, 'q': qty, if (colours.isNotEmpty) 'c': colours};
 
-  factory OldDesign.fromJson(Map<String, dynamic> j) => OldDesign(
-      design: '${j['d'] ?? ''}', qty: (j['q'] as num?)?.toInt() ?? 0, colours: '${j['c'] ?? ''}');
+  factory OldDesign.fromJson(Map<String, dynamic> j) =>
+      OldDesign(design: '${j['d'] ?? ''}', qty: '${j['q'] ?? ''}', colours: '${j['c'] ?? ''}');
 }
 
 class OrderItem {
