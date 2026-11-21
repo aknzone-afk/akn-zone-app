@@ -101,19 +101,36 @@ void main() {
         for (final p in container.read(catalogPhotosProvider)) OldDesigns.catalogKey(p.designNumber ?? p.filename),
       };
       final key = idx.entries.where((e) => e.value.length >= 3 && !inApp.contains(e.key)).map((e) => e.key).firstOrNull ?? '3549';
-      await t.enterText(find.byKey(const ValueKey('old-find')), key);
-      await t.tap(find.byKey(const ValueKey('old-find-btn')));
-      await wait(t, 12); // the index, then the photos
+      debugPrint('old design: trying $key (index ${idx.length} designs, ${inApp.length} in the app)');
+      // straight into the field and the button's own action: the emulator's
+      // keyboard is not connected, typed text does not stay in the field
+      final field = t.widget<TextField>(find.byKey(const ValueKey('old-find')));
+      field.controller!.text = key;
+      await t.pump(const Duration(milliseconds: 300));
+      t.widget<FilledButton>(find.byKey(const ValueKey('old-find-btn'))).onPressed!();
+      await wait(t, 12); // the photos
+      final photo0 = find.byKey(const ValueKey('old-photo-0'));
+      debugPrint('old design: field "${field.controller!.text}", photo tiles ${photo0.evaluate().length}, '
+          'looked at ${container.read(oldPhotosProvider).length}');
       await t.ensureVisible(box);
       await shot('07b_order_old_designs', settle: 6);
-      // tap the first photo -> the same select screen as any design
-      await t.tap(find.byKey(const ValueKey('old-photo-0')));
+      // the first photo -> the same select screen as any design
+      t.widget<GestureDetector>(photo0).onTap!();
       await shot('07c_old_design_select', settle: 12);
       appRouter.pop();
       await wait(t, 3);
+      // selected: it is one of the order's designs, with its photo
+      final id0 = container.read(oldPhotosProvider).first;
+      await container.read(favoritesProvider.notifier).add(id0);
+      await wait(t, 3);
+      final pos = Scrollable.of(t.element(box)).position;
+      pos.jumpTo((pos.pixels - 650).clamp(0.0, pos.maxScrollExtent));
+      await shot('07d_old_design_in_order', settle: 8);
+      await container.read(favoritesProvider.notifier).toggle(id0); // the cart as it was
+      await wait(t, 2);
     } catch (e) {
       debugPrint('order screen shot: $e');
-      await shot('07b_order_old_designs', settle: 4);
+      await shot('07x_order_old_designs_failed', settle: 4);
     }
 
     appRouter.go('/orders');
